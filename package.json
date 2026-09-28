@@ -1,0 +1,47 @@
+{
+  "name": "gawa-admin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GAWA Admin Portal - monolithic full-stack admin platform",
+  "scripts": {
+    "dev": "concurrently -n sv,cl -c yellow,cyan \"node --watch server/server.js\" \"vite\"",
+    "dev:server": "node --watch server/server.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "NODE_ENV=production node server/server.js",
+    "test": "vitest run && jest",
+    "test:server": "jest",
+    "test:client": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
+    "concurrently": "^9.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-async-errors": "^3.1.1",
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^7.1.0",
+    "lucide-react": "^1.17.0",
+    "morgan": "^1.10.0",
+    "pg": "^8.22.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0",
+    "recharts": "^2.12.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jest": "^30.4.2",
+    "jsdom": "^29.1.1",
+    "supertest": "^7.2.2",
+    "vite": "^5.4.0",
+    "vitest": "^4.1.9"
+  }
+}

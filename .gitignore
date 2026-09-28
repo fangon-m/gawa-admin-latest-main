@@ -1,0 +1,11 @@
+node_modules/
+dist/
+client/dist/
+*.log
+.agents/
+
+# Environment files
+.env
+.env.local
+.env.production
+accesstoken
