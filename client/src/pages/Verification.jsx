@@ -45,7 +45,7 @@ export default function Verification() {
       data = data.filter((v) => v.userName?.toLowerCase().includes(q));
     }
     return data;
-  }, [tab, search, verifications]);
+  }, [tab, search, verifications]); 
 
   const columns = [
     { key: 'userName', label: 'User', width: '40%', render: (row) => <span className="font-medium">{row.userName}</span> },
