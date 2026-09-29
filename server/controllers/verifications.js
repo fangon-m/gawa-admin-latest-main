@@ -45,7 +45,7 @@ async function enrichVerifications(verifications) {
         email: v.email,
       }) || v.user_id,
       userRole: userMap[v.user_id]?.role || null,
-      reviewerName: userMap[v.reviewed_by]?.fullName || null,
+      reviewerName: userMap[v.reviewed_by]?.fullName || (v.status !== 'pending' && !v.reviewed_by ? 'GAWA Admin' : null),
     };
 
     for (const field of ['frontImageUrl', 'backImageUrl', 'selfieImageUrl']) {
@@ -89,41 +89,73 @@ async function getVerificationById(req, res) {
 
 async function approveVerification(req, res) {
   const { remarks } = req.body;
-
-  const { data, error } = await supabase
-    .from('id_verifications')
-    .update({
-      status: 'approved',
-      reviewed_by: req.user?.id || null,
-      rejection_reason: remarks || '',
-    })
-    .eq('verification_id', req.params.id)
-    .select()
-    .single();
-
-  if (error || !data) return res.status(404).json({ error: 'Verification not found' });
-  const enriched = await enrichVerifications([data]);
-  res.json({ data: enriched[0], message: 'Verification approved' });
+  return reviewVerification(req, res, {
+    status: 'approved',
+    isVerified: true,
+    remarks: remarks || null,
+    message: 'Verification approved',
+  });
 }
 
 async function rejectVerification(req, res) {
   const { remarks } = req.body;
-  if (!remarks) return res.status(400).json({ error: 'Remarks are required when rejecting' });
+
+  return reviewVerification(req, res, {
+    status: 'rejected',
+    isVerified: false,
+    remarks,
+    message: 'Verification rejected',
+  });
+}
+
+async function reviewVerification(req, res, { status, isVerified, remarks, message }) {
+  const reviewerId = req.user?.id && req.user.id !== 'local-admin' ? req.user.id : null;
+
+  const { data: verification, error: verificationError } = await supabase
+    .from('id_verifications')
+    .select('verification_id, user_id')
+    .eq('verification_id', req.params.id)
+    .single();
+
+  if (verificationError || !verification) return res.status(404).json({ error: 'Verification not found' });
+
+  const { data: user, error: userLookupError } = await supabase
+    .from('users_table')
+    .select('is_verified')
+    .eq('id', verification.user_id)
+    .single();
+
+  if (userLookupError || !user) return res.status(404).json({ error: 'User not found' });
+
+  const { error: userUpdateError } = await supabase
+    .from('users_table')
+    .update({ is_verified: isVerified })
+    .eq('id', verification.user_id);
+
+  if (userUpdateError) return res.status(500).json({ error: userUpdateError.message });
 
   const { data, error } = await supabase
     .from('id_verifications')
     .update({
-      status: 'rejected',
-      reviewed_by: req.user?.id || null,
+      status,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: reviewerId,
       rejection_reason: remarks,
     })
     .eq('verification_id', req.params.id)
     .select()
     .single();
 
-  if (error || !data) return res.status(404).json({ error: 'Verification not found' });
+  if (error || !data) {
+    await supabase
+      .from('users_table')
+      .update({ is_verified: user.is_verified })
+      .eq('id', verification.user_id);
+    return res.status(error ? 500 : 404).json({ error: error?.message || 'Verification not found' });
+  }
+
   const enriched = await enrichVerifications([data]);
-  res.json({ data: enriched[0], message: 'Verification rejected' });
+  res.json({ data: enriched[0], message });
 }
 
 module.exports = { listVerifications, getVerificationById, approveVerification, rejectVerification };

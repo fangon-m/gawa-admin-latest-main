@@ -58,24 +58,31 @@ export default function Verification() {
   const handleApprove = async (v) => {
     try {
       await doApprove(v.id);
+      setSelected(null);
       addNotification('verification_approved', 'Verification Approved', `Verification approved for ${v.userName}`, `/users/${v.userId}`);
       refetch();
     } catch (err) { console.error('Approve verification failed:', err); }
   };
 
   const handleReject = (v) => {
+    setSelected(null);
     setRejectDialog(v);
   };
 
   const confirmReject = async () => {
-    if (!rejectDialog || !rejectReason.trim()) return;
+    if (!rejectDialog) return;
     try {
-      await doReject(rejectDialog.id, { remarks: rejectReason.trim() });
-      addNotification('verification_rejected', 'Verification Rejected', `Verification rejected for ${rejectDialog.userName}: ${rejectReason}`, `/users/${rejectDialog.userId}`);
+      const remarks = rejectReason.trim() || null;
+      await doReject(rejectDialog.id, { remarks });
+      addNotification('verification_rejected', 'Verification Rejected', `Verification rejected for ${rejectDialog.userName}${remarks ? `: ${remarks}` : ''}`, `/users/${rejectDialog.userId}`);
       setRejectDialog(null);
+      setSelected(null);
       setRejectReason('');
       refetch();
-    } catch (err) { console.error('Reject verification failed:', err); }
+    } catch (err) {
+      console.error('Reject verification failed:', err);
+      addNotification('verification_error', 'Rejection Failed', err?.error || err?.message || 'Unable to reject verification');
+    }
   };
 
   return (
@@ -118,6 +125,7 @@ export default function Verification() {
               <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(selected.userRole)}</div></div>
               <div className="detail-field"><div className="detail-label">Submitted</div><div className="detail-value">{formatDateTime(selected.submittedAt)}</div></div>
               <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selected.status} /></div></div>
+              {selected.reviewerName && <div className="detail-field"><div className="detail-label">Reviewed By</div><div className="detail-value">{selected.reviewerName}</div></div>}
             </div>
             <div className="detail-panel-section">
               <h4>Documents</h4>
@@ -179,7 +187,7 @@ export default function Verification() {
             </div>
             <div className="modal-footer">
               <button className="btn btn-outline" onClick={() => { setRejectDialog(null); setRejectReason(''); }}>Cancel</button>
-              <button className="btn btn-danger" onClick={confirmReject} disabled={!rejectReason.trim()}>Reject</button>
+              <button className="btn btn-danger" onClick={confirmReject}>Reject</button>
             </div>
           </div>
         </div>

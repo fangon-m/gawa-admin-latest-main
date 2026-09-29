@@ -74,7 +74,7 @@ const schemas = {
   }),
 
   rejectVerification: z.object({
-    remarks: z.string().min(1, 'Remarks are required when rejecting'),
+    remarks: z.string().optional().nullable(),
   }),
 
   // Disputes
