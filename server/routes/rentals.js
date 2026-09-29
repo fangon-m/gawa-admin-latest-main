@@ -6,9 +6,7 @@ const { authorize, ROLES } = require('../middleware/roles');
 
 router.get('/', authenticate, ctrl.listRentals);
 router.get('/:id', authenticate, ctrl.getRentalById);
-router.post('/:id/release-deposit', authenticate, authorize(ROLES.ADMIN), ctrl.releaseDeposit);
-router.post('/:id/deduct-deposit', authenticate, authorize(ROLES.ADMIN), ctrl.deductDeposit);
-router.post('/:id/receive', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.receiveEquipment);
-router.post('/:id/return', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.returnEquipment);
+router.post('/:id/flag', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.flagRental);
+router.post('/:id/remove', authenticate, authorize(ROLES.ADMIN), ctrl.removeRental);
 
 module.exports = router;

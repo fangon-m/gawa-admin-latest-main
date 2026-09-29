@@ -130,8 +130,8 @@ export default function ListingDetail() {
           <DataTable
             columns={[
               { key: 'renterName', label: 'Renter' },
-              { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-              { key: 'totalAmount', label: 'Amount', render: (row) => formatCurrency(row.totalAmount) },
+              { key: 'rentalStatus', label: 'Status', render: (row) => <StatusBadge status={row.rentalStatus} /> },
+              { key: 'totalPrice', label: 'Amount', render: (row) => formatCurrency(row.totalPrice) },
               { key: 'startDate', label: 'Start', render: (row) => formatDate(row.startDate) },
               { key: 'endDate', label: 'End', render: (row) => formatDate(row.endDate) },
             ]}

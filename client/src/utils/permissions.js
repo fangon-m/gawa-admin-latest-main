@@ -24,6 +24,8 @@ const PERMISSIONS = {
 
   viewRentals: { admin: true, customer_support: true },
   viewRentalDetail: { admin: true, customer_support: true },
+  flagRental: { admin: true, customer_support: true },
+  removeRental: { admin: true, customer_support: false },
 
   inviteUser: { admin: true, customer_support: false },
   releaseEscrow: { admin: true, customer_support: false },
@@ -45,7 +47,6 @@ const PERMISSIONS = {
   resolveDispute: { admin: true, customer_support: true },
   escalateDispute: { admin: true, customer_support: true },
   dismissDispute: { admin: true, customer_support: true },
-  moderateReview: { admin: true, customer_support: true },
   moderateReport: { admin: true, customer_support: true },
   sendMessage: { admin: true, customer_support: true },
   issuePoints: { admin: true, customer_support: false },

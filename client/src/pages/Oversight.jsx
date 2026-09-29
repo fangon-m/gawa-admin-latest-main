@@ -26,7 +26,7 @@ import { ShieldAlert, CheckCircle, XCircle, User, Briefcase, ExternalLink, FileT
 
 const oversightTabs = [
   { key: 'disputes', label: 'Disputes & Reports' },
-  { key: 'moderation', label: 'Moderation' },
+  { key: 'reviews', label: 'Reviews' },
   { key: 'appeals', label: 'Appeals' },
   { key: 'job-review-queue', label: 'Job Review Queue' },
   { key: 'escalations', label: 'Account Escalations' },
@@ -93,15 +93,14 @@ const unifiedColumns = [
 const reviewColumns = [
   { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.id}</span> },
   { key: 'reviewerName', label: 'Reviewer' },
-  { key: 'targetName', label: 'Target' },
+  { key: 'revieweeName', label: 'Reviewee' },
   { key: 'rating', label: 'Rating', render: (row) => (
     <div className="flex items-center gap-0" style={{ whiteSpace: 'nowrap' }}>
       {Array.from({length: row.rating || 0}, (_, i) => <Star key={`f-${i}`} size={13} fill="var(--color-warning)" color="var(--color-warning)" />)}
       {Array.from({length: 5 - (row.rating || 0)}, (_, i) => <Star key={`e-${i}`} size={13} color="var(--color-border)" />)}
     </div>
   )},
-  { key: 'text', label: 'Content', render: (row) => <span className="truncate" style={{ maxWidth: 250, display: 'inline-block' }}>{row.text}</span> },
-  { key: 'flags', label: 'Flags', render: (row) => row.flags > 0 ? <StatusBadge status="flagged" label={row.flags} /> : '-' },
+  { key: 'comment', label: 'Content', render: (row) => <span className="truncate" style={{ maxWidth: 250, display: 'inline-block' }}>{row.comment}</span> },
   { key: 'createdAt', label: 'Date', render: (row) => formatDate(row.createdAt) },
 ];
 
@@ -440,8 +439,6 @@ export default function Oversight() {
   const expiredList = queueData.expiredSuspensions || [];
   const escalatedList = queueData.escalatedToDeletion || [];
 
-  const flaggedReviews = useMemo(() => (reviews || []).filter((r) => r.status === 'flagged' || r.status === 'hidden' || r.flags > 0), [reviews]);
-
   const unifiedData = useMemo(() => {
     const d = (disputes || []).map(r => ({ ...r, _source: 'dispute' }));
     const r = (allReports || [])
@@ -466,47 +463,27 @@ export default function Oversight() {
     return data;
   }, [aFil, appeals]);
 
-  const [actionPrompt, setActionPrompt] = useState(null);
-  const [actionReason, setActionReason] = useState('');
-
-  const handleModDecision = async (decision) => {
-    const item = selectedReview;
-    if (!item) return;
-    setActionPrompt({
-      title: `Enter notes for "${decision}" decision`,
-      onConfirm: async (reason) => {
-        try {
-          await post(`/reviews/${item.id}/moderate`, { action: decision });
-          refetchReviews();
-          addNotification('moderation_decision', 'Moderation Decision', `Decision: ${decision} on ${item.id} - ${reason}`, '/oversight');
-          setSelectedReview(null);
-        } catch (err) { console.error('Moderation decision failed:', err); }
-      },
-    });
-  };
-
-  const renderModeration = () => (
+  const renderReviews = () => (
     <div className="card">
       <div className="card-body p-0">
         <DataTable
           columns={reviewColumns}
-          data={flaggedReviews}
+          data={reviews || []}
           onRowClick={(row) => setSelectedReview(row)}
           pageSize={10}
-          emptyMessage="No flagged reviews."
+          emptyMessage="No reviews found."
         />
       </div>
-      <DetailPanel open={!!selectedReview} onClose={() => setSelectedReview(null)} title="Moderation Decision">
+      <DetailPanel open={!!selectedReview} onClose={() => setSelectedReview(null)} title="Review Details">
         {selectedReview && (
           <div>
             <div className="detail-panel-section">
               <h4>Details</h4>
               <div className="detail-field"><div className="detail-label">ID</div><div className="detail-value">{selectedReview.id}</div></div>
               {selectedReview.reviewerName && <div className="detail-field"><div className="detail-label">Reviewer</div><div className="detail-value">{selectedReview.reviewerName}</div></div>}
-              {selectedReview.targetName && <div className="detail-field"><div className="detail-label">Target</div><div className="detail-value">{selectedReview.targetName}</div></div>}
-              {selectedReview.title && <div className="detail-field"><div className="detail-label">Title</div><div className="detail-value">{selectedReview.title}</div></div>}
-              {selectedReview.text && <div className="detail-field"><div className="detail-label">Content</div><div className="detail-value">{selectedReview.text}</div></div>}
-              {selectedReview.description && <div className="detail-field"><div className="detail-label">Description</div><div className="detail-value">{selectedReview.description}</div></div>}
+              {selectedReview.revieweeName && <div className="detail-field"><div className="detail-label">Reviewee</div><div className="detail-value">{selectedReview.revieweeName}</div></div>}
+              {selectedReview.jobCompletionId && <div className="detail-field"><div className="detail-label">Job Completion</div><div className="detail-value">{selectedReview.jobCompletionId}</div></div>}
+              {selectedReview.comment && <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReview.comment}</div></div>}
               {selectedReview.rating && (
                 <div className="detail-field">
                   <div className="detail-label">Rating</div>
@@ -516,24 +493,8 @@ export default function Oversight() {
                   </div>
                 </div>
               )}
-              <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedReview.status} /></div></div>
+              {selectedReview.createdAt && <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDateTime(selectedReview.createdAt)}</div></div>}
             </div>
-            <div className="detail-panel-section">
-              <h4>Actions</h4>
-              <div className="flex flex-col gap-2">
-                <button className="btn btn-success" onClick={() => handleModDecision('keep')}>Keep (No Action)</button>
-                <button className="btn btn-warning" onClick={() => handleModDecision('warn')}>Warn User</button>
-                <button className="btn btn-outline" onClick={() => handleModDecision('hide')}>Hide Content</button>
-                {can('moderateReview') && <button className="btn btn-danger" onClick={() => handleModDecision('remove')}>Remove Content</button>}
-              </div>
-            </div>
-            {selectedReview.decision && (
-              <div className="detail-panel-section">
-                <h4>Previous Decision</h4>
-                <div className="detail-field"><div className="detail-label">Decision</div><div className="detail-value">{selectedReview.decision}</div></div>
-                {selectedReview.decisionNotes && <div className="detail-field"><div className="detail-label">Notes</div><div className="detail-value">{selectedReview.decisionNotes}</div></div>}
-              </div>
-            )}
           </div>
         )}
       </DetailPanel>
@@ -611,7 +572,7 @@ export default function Oversight() {
             </DetailPanel>
           </div>
         )}
-        {tab === 'moderation' && renderModeration()}
+        {tab === 'reviews' && renderReviews()}
         {tab === 'appeals' && (
           <div className="card">
             <div className="card-header">

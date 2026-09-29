@@ -2,12 +2,18 @@ const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
 
 async function getStats(req, res) {
+  // Ensure connection is alive before running queries
+  await supabase.ensureConnection();
+  
   const now = new Date();
   // Use a fixed early start date to include seed data and all historical transactions
   const chartStartDate = '2024-01-01T00:00:00Z';
 
   async function safeQuery(promise) {
-    try { return await promise; } catch { return { data: null, count: 0, error: null }; }
+    try { return await promise; } catch (err) { 
+      console.error('[Dashboard] Query error:', err.message);
+      return { data: null, count: 0, error: err }; 
+    }
   }
 
   // Run all aggregation queries in parallel
@@ -33,9 +39,9 @@ async function getStats(req, res) {
     openDisputesListData,
   ] = await Promise.all([
     safeQuery(supabase.from('users_table').select('*', { count: 'exact', head: true }).not('role', 'in', '("admin","customer_support")')),
-    safeQuery(supabase.from('id_verifications').select('user_id', { count: 'exact', head: true }).eq('status', 'approved')),
-    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).eq('job_status', 'active')),
-    safeQuery(supabase.from('rentals').select('*', { count: 'exact', head: true }).eq('status', 'active')),
+    safeQuery(supabase.from('users_table').select('*', { count: 'exact', head: true }).eq('is_verified', true).not('role', 'in', '("admin","customer_support")')),
+    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).in('job_status', ['open', 'in_progress'])),
+    safeQuery(supabase.from('equipment_rentals').select('*', { count: 'exact', head: true }).eq('rental_status', 'active')),
     safeQuery(supabase.from('disputes').select('id', { count: 'exact', head: true }).not('status', 'in', '("resolved","dismissed")')),
     safeQuery(supabase.from('entity_flags').select('flag_id', { count: 'exact', head: true }).eq('entity_type', 'job_post')),
     safeQuery(supabase.from('entity_flags').select('flag_id', { count: 'exact', head: true }).eq('entity_type', 'equipment_listing')),
@@ -74,11 +80,17 @@ async function getStats(req, res) {
     if (users) users.forEach(u => { nameMap[u.id] = { ...u, fullName: getFullName(u) }; });
   }
 
-  const pendingVerificationsList = (pendingVerificationsListData.data || []).map(v => ({
-    ...toCamelCase(v),
-    userName: nameMap[v.user_id]?.fullName || v.user_id,
-    userRole: nameMap[v.user_id]?.role || null,
-  }));
+  const pendingVerificationsList = (pendingVerificationsListData.data || []).map(v => {
+    const user = nameMap[v.user_id];
+    const fullName = user?.fullName || `${v.first_name || ''} ${v.middle_name ? v.middle_name + ' ' : ''}${v.last_name || ''}`.trim();
+    return {
+      ...toCamelCase(v),
+      userName: fullName || v.user_id,
+      userRole: user?.role || v.role || 'Client',
+      userEmail: v.email,
+      idType: v.government_id_type,
+    };
+  });
 
   const openDisputesList = (openDisputesListData.data || []).map(d => ({
     ...toCamelCase(d),
@@ -138,8 +150,8 @@ async function getStats(req, res) {
   ] = await Promise.all([
     safeQuery(supabase.from('users_table').select('*', { count: 'exact', head: true }).not('role', 'in', '("admin","customer_support")').gte('created_at', currentMonthStart)),
     safeQuery(supabase.from('users_table').select('*', { count: 'exact', head: true }).not('role', 'in', '("admin","customer_support")').lt('created_at', currentMonthStart).gte('created_at', prevMonthStart)),
-    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).gte('created_at', currentMonthStart)),
-    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).lt('created_at', currentMonthStart).gte('created_at', prevMonthStart)),
+    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).in('job_status', ['open', 'in_progress']).gte('created_at', currentMonthStart)),
+    safeQuery(supabase.from('job_posts').select('*', { count: 'exact', head: true }).in('job_status', ['open', 'in_progress']).lt('created_at', currentMonthStart).gte('created_at', prevMonthStart)),
     safeQuery(supabase.from('transactions').select('*', { count: 'exact', head: true }).gte('created_at', currentMonthStart)),
     safeQuery(supabase.from('transactions').select('*', { count: 'exact', head: true }).lt('created_at', currentMonthStart).gte('created_at', prevMonthStart)),
     safeQuery(supabase.from('disputes').select('*', { count: 'exact', head: true }).gte('created_at', currentMonthStart)),
@@ -153,13 +165,21 @@ async function getStats(req, res) {
 
   const result = {
     totalUsers: totalUsers || 0,
+    totalUsersGrowth: calcGrowth(currentUsers, prevUsers),
     verifiedUsers: verifiedUsers || 0,
+    verifiedUsersGrowth: 0, // no direct query for this, could compute if needed
     activeJobs: activeJobs || 0,
+    activeJobsGrowth: calcGrowth(currentJobs, prevJobs),
     activeRentals: activeRentals || 0,
+    activeRentalsGrowth: 0,
     pendingDisputes: pendingDisputesData.count || 0,
+    pendingDisputesGrowth: calcGrowth(currentDisputes, prevDisputes),
     flaggedContent,
+    flaggedContentGrowth: 0,
     totalTransactions: totalTransactions || 0,
+    totalTransactionsGrowth: calcGrowth(currentTxns, prevTxns),
     pendingVerifications: pendingVerifications || 0,
+    pendingVerificationsGrowth: 0,
     pendingAppeals: pendingAppeals || 0,
     totalGalawPointsPurchased,
     totalGalawPointsConsumed,

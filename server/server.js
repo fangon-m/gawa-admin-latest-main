@@ -76,6 +76,9 @@ const supabase = require('./db/supabase');
 const REVIEW_DAYS = 3;
 async function autoProcessExpiredReviews() {
   try {
+    // Ensure database connection is alive
+    await supabase.ensureConnection();
+    
     const now = new Date().toISOString();
     const cutoff = new Date(Date.now() - REVIEW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const { data: expired } = await supabase

@@ -39,8 +39,16 @@ router.use('/assessments-tests', require('./assessmentsTests'));
 router.use('/wallets', require('./wallets'));
 router.use('/flags', require('./flags'));
 
-router.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'GAWA Admin API', version: '1.0.0', timestamp: new Date().toISOString() });
+router.get('/health', async (req, res) => {
+  const supabase = require('../db/supabase');
+  const dbConnected = await supabase.testConnection();
+  res.json({ 
+    status: dbConnected ? 'ok' : 'degraded', 
+    service: 'GAWA Admin API', 
+    version: '1.0.0', 
+    timestamp: new Date().toISOString(),
+    database: dbConnected ? 'connected' : 'disconnected'
+  });
 });
 
 module.exports = router;

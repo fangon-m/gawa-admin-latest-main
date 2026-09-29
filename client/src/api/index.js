@@ -24,3 +24,4 @@ export * as entityNotes from './entityNotes';
 export * as escalatedJobs from './escalatedJobs';
 export * as entitySkills from './entitySkills';
 export * as proposals from './proposals';
+export * as wallets from './wallets';

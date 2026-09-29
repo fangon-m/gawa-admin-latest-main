@@ -4,7 +4,7 @@
   "private": true,
   "description": "GAWA Admin Portal - monolithic full-stack admin platform",
   "scripts": {
-    "dev": "concurrently -n sv,cl -c yellow,cyan \"node --watch server/server.js\" \"vite\"",
+    "dev": "concurrently -n sv,cl -c yellow,cyan \"node --watch server/server.js\" \"vite --config vite.config.js\"",
     "dev:server": "node --watch server/server.js",
     "dev:client": "vite",
     "build": "vite build",

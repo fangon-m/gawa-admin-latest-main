@@ -51,14 +51,14 @@ export default function Dashboard() {
   const verificationPct = stats.totalUsers > 0 ? Math.round((stats.verifiedUsers / stats.totalUsers) * 100) : 0;
 
   const summaryCards = [
-    { label: 'Total Users', value: formatNumber(stats.totalUsers), icon: <Users size={20} />, color: 'var(--color-blue)' },
-    { label: 'Verified Users', value: formatNumber(stats.verifiedUsers), icon: <UserRoundCheck size={20} />, color: 'var(--color-success)' },
-    { label: 'Active Jobs', value: formatNumber(stats.activeJobs), icon: <Briefcase size={20} />, color: 'var(--color-text)' },
-    { label: 'Active Rentals', value: formatNumber(stats.activeRentals), icon: <Building2 size={20} />, color: 'var(--color-accent)' },
-    { label: 'Pending Disputes', value: formatNumber(stats.pendingDisputes), icon: <ShieldAlertIcon size={20} />, color: 'var(--color-warning)' },
-    { label: 'Flagged Content', value: formatNumber(stats.flaggedContent), icon: <AlertTriangle size={20} />, color: 'var(--color-error)' },
-    { label: 'Total Transactions', value: formatNumber(stats.totalTransactions), icon: <ArrowLeftRightIcon size={20} />, color: 'var(--color-success)' },
-    { label: 'Pending Verifications', value: formatNumber(stats.pendingVerifications), icon: <UserRoundCheck size={20} />, color: 'var(--color-text-muted)' },
+    { label: 'Total Users', value: formatNumber(stats.totalUsers), icon: <Users size={20} />, color: 'var(--color-blue)', trend: dashStats.totalUsersGrowth, path: '/users' },
+    { label: 'Verified Users', value: formatNumber(stats.verifiedUsers), icon: <UserRoundCheck size={20} />, color: 'var(--color-success)', trend: undefined, path: '/users' },
+    { label: 'Active Jobs', value: formatNumber(stats.activeJobs), icon: <Briefcase size={20} />, color: 'var(--color-text)', trend: dashStats.activeJobsGrowth, path: '/jobs' },
+    { label: 'Active Rentals', value: formatNumber(stats.activeRentals), icon: <Building2 size={20} />, color: 'var(--color-accent)', trend: undefined, path: '/rentals' },
+    { label: 'Pending Disputes', value: formatNumber(stats.pendingDisputes), icon: <ShieldAlertIcon size={20} />, color: 'var(--color-warning)', trend: dashStats.pendingDisputesGrowth, path: '/oversight' },
+    { label: 'Flagged Content', value: formatNumber(stats.flaggedContent), icon: <AlertTriangle size={20} />, color: 'var(--color-error)', trend: undefined, path: '/oversight' },
+    { label: 'Total Transactions', value: formatNumber(stats.totalTransactions), icon: <ArrowLeftRightIcon size={20} />, color: 'var(--color-success)', trend: dashStats.totalTransactionsGrowth, path: '/transactions' },
+    { label: 'Pending Verifications', value: formatNumber(stats.pendingVerifications), icon: <UserRoundCheck size={20} />, color: 'var(--color-text-muted)', trend: undefined, path: '/verifications' },
   ];
 
   const quickActions = [
@@ -86,7 +86,13 @@ export default function Dashboard() {
       <Header title="Dashboard" />
       <div className="kpi-row">
         {summaryCards.map((card, idx) => (
-          <StatCard key={idx} {...card} />
+          <StatCard
+            key={idx}
+            {...card}
+            change={card.trend}
+            changeLabel="vs last month"
+            onClick={() => navigate(card.path)}
+          />
         ))}
       </div>
 
@@ -185,10 +191,14 @@ export default function Dashboard() {
                   </div>
                 ) : (
                   pendingV.map((v) => (
-                    <div key={v.id} className="recent-item clickable" onClick={() => navigate('/verifications')}>
+                    <div key={v.id || v.verificationId} className="recent-item clickable" onClick={() => navigate('/verifications')}>
                       <div className="recent-item-info">
                         <div className="recent-item-title">{v.userName || v.name || 'Unknown'}</div>
-                        <div className="recent-item-sub">{v.userRole || v.role} - {formatDate(v.submittedAt || v.createdAt)}</div>
+                        <div className="recent-item-sub">
+                          {v.idType || v.governmentIdType ? `${v.idType || v.governmentIdType} · ` : ''}
+                          {v.userEmail || v.email}
+                        </div>
+                        <div className="recent-item-sub">{formatDate(v.submittedAt || v.createdAt)}</div>
                       </div>
                       <StatusBadge status="pending" />
                     </div>

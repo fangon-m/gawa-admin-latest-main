@@ -370,7 +370,7 @@ async function fetchEntitySkills(entityIds, entityType = 'profile') {
       fkColumn = 'job_post_id';
       break;
     case 'listing':
-      table = 'equipment_listing_skill';
+      table = 'equipment_listing_skills';
       fkColumn = 'listing_id';
       break;
     default:

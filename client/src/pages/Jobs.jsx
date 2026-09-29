@@ -107,10 +107,12 @@ export default function Jobs() {
       { value: 'contractor_based', label: 'Contractor-Based' },
     ]},
     { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-      { value: 'active', label: 'Active' },
+      { value: 'open', label: 'Open' },
+      { value: 'in_progress', label: 'In Progress' },
+      { value: 'completed', label: 'Completed' },
       { value: 'finished', label: 'Finished' },
       { value: 'flagged', label: 'Flagged' },
-      { value: 'cancelled', label: 'Cancelled' },
+      { value: 'escalated', label: 'Escalated' },
     ]},
   ], []);
 

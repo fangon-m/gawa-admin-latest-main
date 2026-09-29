@@ -9,7 +9,7 @@ async function enrichEquipmentListings(listings) {
 
   const [userRes, skillsRes] = await Promise.all([
     userIds.size > 0 ? supabase.from('users_table').select('id, first_name, last_name').in('id', [...userIds]) : { data: [] },
-    listingIds.length > 0 ? supabase.from('equipment_listing_skill').select('listing_id, skills(skill_name)').in('listing_id', listingIds) : { data: [] },
+    listingIds.length > 0 ? supabase.from('equipment_listing_skills').select('listing_id, skills(skill_name)').in('listing_id', listingIds) : { data: [] },
   ]);
 
   const userMap = {};

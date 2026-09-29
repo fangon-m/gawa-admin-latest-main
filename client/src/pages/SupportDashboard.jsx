@@ -39,14 +39,13 @@ export default function SupportDashboard() {
   const pendingVerifications = useMemo(() => verifications.filter((v) => v.status === 'pending'), [verifications]);
   const openDisputes = useMemo(() => disputes.filter((d) => d.status !== 'resolved' && d.status !== 'dismissed'), [disputes]);
   const pendingAppeals = useMemo(() => appeals.filter((a) => a.status === 'pending'), [appeals]);
-  const flaggedReviews = useMemo(() => (reviews || []).filter((r) => r.status === 'flagged' || r.status === 'hidden' || r.flags > 0), [reviews]);
   const pendingReports = useMemo(() => reports.filter((r) => r.status === 'pending' || r.status === 'under-review'), [reports]);
 
   const stats = [
     { label: 'Pending Verifications', value: formatNumber(pendingVerifications.length), icon: <Check size={20} />, color: 'var(--color-blue)' },
     { label: 'Open Disputes', value: formatNumber(openDisputes.length), icon: <Scale size={20} />, color: 'var(--color-warning)' },
     { label: 'Pending Appeals', value: formatNumber(pendingAppeals.length), icon: <RotateCcw size={20} />, color: 'var(--color-accent)' },
-    { label: 'Flagged Reviews', value: formatNumber(flaggedReviews.length), icon: <Sword size={20} />, color: 'var(--color-error)' },
+    { label: 'Recent Reviews', value: formatNumber(reviews?.length || 0), icon: <Star size={20} />, color: 'var(--color-warning)' },
   ];
 
   return (
@@ -133,19 +132,19 @@ export default function SupportDashboard() {
         </div>
 
         <div className="card">
-          <div className="card-header"><h3>Flagged Content</h3></div>
+          <div className="card-header"><h3>Recent Reviews</h3></div>
           <div className="card-body">
-            {flaggedReviews.length === 0 && pendingReports.length === 0 ? (
-              <div className="empty-state" style={{ padding: '1rem' }}><div className="empty-state-text">No flagged content</div></div>
+            {(reviews || []).length === 0 && pendingReports.length === 0 ? (
+              <div className="empty-state" style={{ padding: '1rem' }}><div className="empty-state-text">No reviews or reports</div></div>
             ) : (
               <>
-                {flaggedReviews.slice(0, 3).map((r) => (
+                {(reviews || []).slice(0, 3).map((r) => (
                   <div key={r.id} className="recent-item" style={{ cursor: 'pointer' }} onClick={() => navigate('/oversight')}>
                     <div className="recent-item-info">
-                      <div className="recent-item-title">Flagged Review by {r.reviewerName}</div>
+                      <div className="recent-item-title">Review by {r.reviewerName}</div>
                       <div className="recent-item-sub">Rating: {r.rating}/5 - {timeAgo(r.createdAt)}</div>
                     </div>
-                    <StatusBadge status="flagged" />
+                    <StatusBadge status={r.rating >= 4 ? 'positive' : r.rating >= 3 ? 'neutral' : 'negative'} />
                   </div>
                 ))}
                 {pendingReports.slice(0, 2).map((r) => (

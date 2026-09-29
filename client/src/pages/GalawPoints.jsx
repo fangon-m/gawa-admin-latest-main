@@ -6,6 +6,7 @@ import { useApiData, useMutation } from '../utils/useApiData';
 import * as galawPointsApi from '../api/galawPoints';
 import * as feeConfigApi from '../api/feeConfig';
 import * as usersApi from '../api/users';
+import * as walletsApi from '../api/wallets';
 import { formatDate, formatCurrency, formatNumber } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
@@ -60,6 +61,9 @@ export default function GalawPoints() {
   const { data: allUsers } = useApiData(() => usersApi.list({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
+  const { data: wallets, refetch: refetchWallets } = useApiData(() => walletsApi.list({ limit: 100 }), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
+  });
 
   // === Mutations ===
   const [doCreatePack] = useMutation(galawPointsApi.createPack);
@@ -71,6 +75,7 @@ export default function GalawPoints() {
   const [doUpdateFee] = useMutation(feeConfigApi.update);
   const [doDeleteFee] = useMutation(feeConfigApi.remove);
   const [doSetActiveFee] = useMutation(feeConfigApi.setActive);
+  const [doAdjustWallet] = useMutation(walletsApi.adjustBalance);
 
   // === Derived stats ===
   const dashStats = useMemo(() => {
@@ -103,6 +108,8 @@ export default function GalawPoints() {
   const [feeEditForm, setFeeEditForm] = useState({ ...emptyFeeForm });
   const [deletingFee, setDeletingFee] = useState(null);
   const [activatingFee, setActivatingFee] = useState(null);
+  const [adjustingWallet, setAdjustingWallet] = useState(null);
+  const [adjustForm, setAdjustForm] = useState({ amount: '', description: '' });
 
   const showMsg = (text, type = 'success') => {
     setMessage({ text, type });
@@ -259,6 +266,23 @@ export default function GalawPoints() {
     } catch (err) { console.error('Set active fee failed:', err); }
   };
 
+  const openAdjustWallet = (wallet) => {
+    setAdjustingWallet(wallet);
+    setAdjustForm({ amount: '', description: '' });
+  };
+
+  const handleAdjustWallet = async (e) => {
+    e.preventDefault();
+    const amount = parseFloat(adjustForm.amount);
+    if (!amount || !adjustForm.description.trim()) return;
+    try {
+      await doAdjustWallet(adjustingWallet.walletId, { amount, description: adjustForm.description.trim() });
+      setAdjustingWallet(null);
+      refetchWallets();
+      showMsg(`Wallet balance adjusted by ${amount > 0 ? '+' : ''}${amount}`);
+    } catch (err) { showMsg(err?.error || 'Failed to adjust balance', 'error'); }
+  };
+
   const openEditFee = (cfg) => {
     setEditingFee(cfg);
     setFeeEditForm({
@@ -330,9 +354,24 @@ export default function GalawPoints() {
     }] : []),
   ];
 
+  const walletCols = [
+    { key: 'userName', label: 'User' },
+    { key: 'balance', label: 'Balance', render: (row) => <strong>{formatCurrency(row.balance)}</strong> },
+    { key: 'updatedAt', label: 'Last Updated', render: (row) => formatDate(row.updatedAt) },
+    { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt) },
+    ...(can('viewFinance') ? [{
+      key: 'actions', label: 'Actions', render: (row) => (
+        <div className="table-actions">
+          <button className="btn btn-sm btn-outline" onClick={() => openAdjustWallet(row)}>Adjust Balance</button>
+        </div>
+      ),
+    }] : []),
+  ];
+
   const tabs = [
     { key: 'packs', label: 'Points Packs' },
     { key: 'transactions', label: 'Transaction History' },
+    { key: 'wallets', label: 'Wallets' },
     { key: 'fee-config', label: 'Fee Configuration' },
     { key: 'metrics', label: 'Platform Metrics' },
   ];
@@ -421,6 +460,14 @@ export default function GalawPoints() {
           <div className="card">
             <div className="card-body" style={{ padding: 0 }}>
               <DataTable columns={txnCols} data={transactions} pageSize={10} onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)} emptyMessage="No transactions found." />
+            </div>
+          </div>
+        )}
+
+        {tab === 'wallets' && (
+          <div className="card">
+            <div className="card-body" style={{ padding: 0 }}>
+              <DataTable columns={walletCols} data={wallets} pageSize={10} onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)} emptyMessage="No wallets found." />
             </div>
           </div>
         )}
@@ -660,6 +707,33 @@ export default function GalawPoints() {
         confirmLabel={togglingPack?.isActive ? 'Deactivate' : 'Activate'}
         variant={togglingPack?.isActive ? 'warning' : 'success'}
         onConfirm={handleTogglePack} onCancel={() => setTogglingPack(null)} />
+
+      {adjustingWallet && (
+        <div style={modalStyles.overlay} onClick={() => setAdjustingWallet(null)}>
+          <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={modalStyles.title}>Adjust Wallet Balance</div>
+            <div className="detail-field" style={{ marginBottom: '1rem' }}>
+              <div className="detail-label">{adjustingWallet.userName}</div>
+              <div className="detail-value">{formatCurrency(adjustingWallet.balance)}</div>
+            </div>
+            <form onSubmit={handleAdjustWallet}>
+              <div className="form-group">
+                <label className="form-label">Amount</label>
+                <input className="form-input" type="number" step="0.01" placeholder="e.g. 100 or -50" value={adjustForm.amount} onChange={(e) => setAdjustForm((p) => ({ ...p, amount: e.target.value }))} required />
+                <div className="form-hint">Use a negative number to deduct from the balance</div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <input className="form-input" placeholder="e.g. Correction for duplicate charge" value={adjustForm.description} onChange={(e) => setAdjustForm((p) => ({ ...p, description: e.target.value }))} required />
+              </div>
+              <div style={modalStyles.actions}>
+                <button type="button" className="btn btn-outline" onClick={() => setAdjustingWallet(null)}>Cancel</button>
+                <button type="submit" className="btn btn-accent">Apply Adjustment</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

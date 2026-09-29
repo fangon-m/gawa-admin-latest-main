@@ -201,7 +201,7 @@ create table if not exists public.user_skills (
   unique (user_id, skill_id)
 );
 
-create table if not exists public.equipment_listing_skill (
+create table if not exists public.equipment_listing_skills (
   listing_id uuid not null references public.equipment_listings(listing_id) on delete cascade,
   skill_id   uuid not null references public.skills(skill_id),
   created_at timestamptz not null default now(),
@@ -729,7 +729,7 @@ create index if not exists idx_check_ins_match on public.check_ins(job_match_id)
 create index if not exists idx_check_ins_user on public.check_ins(user_id);
 create index if not exists idx_job_skills_job on public.job_skills(job_post_id);
 create index if not exists idx_user_skills_user on public.user_skills(user_id);
-create index if not exists idx_equipment_listing_skill_listing on public.equipment_listing_skill(listing_id);
+create index if not exists idx_equipment_listing_skills_listing on public.equipment_listing_skills(listing_id);
 create index if not exists idx_transactions_user on public.transactions(user_id);
 create index if not exists idx_transactions_type on public.transactions(type);
 create index if not exists idx_transactions_status on public.transactions(status);
@@ -1159,12 +1159,12 @@ create policy "Staff can manage user_skills"
   on public.user_skills for all
   using (public.is_staff());
 
-alter table public.equipment_listing_skill enable row level security;
-create policy "Staff can read all equipment_listing_skill"
-  on public.equipment_listing_skill for select
+alter table public.equipment_listing_skills enable row level security;
+create policy "Staff can read all equipment_listing_skills"
+  on public.equipment_listing_skills for select
   using (public.is_staff());
-create policy "Staff can manage equipment_listing_skill"
-  on public.equipment_listing_skill for all
+create policy "Staff can manage equipment_listing_skills"
+  on public.equipment_listing_skills for all
   using (public.is_staff());
 
 alter table public.entity_flags enable row level security;

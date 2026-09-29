@@ -60,7 +60,7 @@ async function listEntitySkills(req, res) {
       fkColumn = 'user_id';
       break;
     case 'listing':
-      table = 'equipment_listing_skill';
+      table = 'equipment_listing_skills';
       fkColumn = 'listing_id';
       break;
     default:
@@ -98,7 +98,7 @@ async function assignEntitySkill(req, res) {
       insertData = { user_id: entityId, skill_id: skillId };
       break;
     case 'listing':
-      table = 'equipment_listing_skill';
+      table = 'equipment_listing_skills';
       insertData = { listing_id: entityId, skill_id: skillId };
       break;
     default:
@@ -133,7 +133,7 @@ async function removeEntitySkill(req, res) {
       filterKey = 'user_id';
       break;
     case 'listing':
-      table = 'equipment_listing_skill';
+      table = 'equipment_listing_skills';
       filterKey = 'listing_id';
       break;
     default:
