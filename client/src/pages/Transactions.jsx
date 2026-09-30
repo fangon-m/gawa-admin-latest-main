@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listTransactions } from '../api/transactions';
-import { formatDate, formatCurrency, formatEntityId } from '../utils/helpers';
+import { formatDate, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -50,7 +50,7 @@ export default function Transactions() {
   }, [fil, dateFrom, dateTo, transactions]);
 
   const columns = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityId(row.id, 'TXN-')}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
     { key: 'userName', label: 'User' },
     { key: 'relatedTitle', label: 'Related', render: (row) => <span className="text-xs text-muted">{row.relatedTitle || '—'}</span> },

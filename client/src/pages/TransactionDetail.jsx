@@ -4,7 +4,7 @@ import { getById as getTransactionById, releaseEscrow, processRefund, approvePay
 import { useApiData } from '../utils/useApiData';
 import { usePermissions } from '../utils/permissions';
 import { useAuth } from '../context/AuthContext';
-import { formatDateTime, formatCurrency, formatEntityId } from '../utils/helpers';
+import { formatDateTime, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
@@ -69,11 +69,11 @@ export default function TransactionDetail() {
 
   return (
     <div>
-      <Header title={`Transaction ${formatEntityId(txn.id, 'TXN-')}`} />
+      <Header title={`Transaction ${formatEntityIdNumeric(txn.id, 'TXN-')}`} />
       <div className="card mb-4">
         <div className="card-body">
           <div className="detail-grid">
-            <div className="detail-field"><div className="detail-label">Transaction ID</div><div className="detail-value font-mono">{formatEntityId(txn.id, 'TXN-')}</div></div>
+            <div className="detail-field"><div className="detail-label">Transaction ID</div><div className="detail-value font-mono">{formatEntityIdNumeric(txn.id, 'TXN-')}</div></div>
             <div className="detail-field"><div className="detail-label">Type</div><div className="detail-value"><StatusBadge status={txn.type} /></div></div>
             <div className="detail-field"><div className="detail-label">Direction</div><div className="detail-value"><StatusBadge status={txn.direction === 'in' ? 'in' : 'out'} /></div></div>
             <div className="detail-field"><div className="detail-label">Amount</div><div className="detail-value">{formatCurrency(txn.amount)}</div></div>

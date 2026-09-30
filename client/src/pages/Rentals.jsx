@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listRentals } from '../api/rentals';
-import { formatDate, formatCurrency } from '../utils/helpers';
+import { formatDate, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -44,7 +44,7 @@ export default function Rentals() {
 
   const columns = [
     { key: 'listingTitle', label: 'Equipment', render: (row) => <span className="cell-link" onClick={(e) => { e.stopPropagation(); if (row.listingId) navigate(`/listings/${row.listingId}`); }}>{row.listingTitle || row.equipmentName || 'N/A'}</span> },
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.rentalId?.slice(0, 8) || row.id?.slice(0, 8)}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.rentalId || row.id, 'RNT-')}</span> },
     { key: 'renterName', label: 'Renter' },
     { key: 'ownerName', label: 'Owner' },
     { key: 'totalPrice', label: 'Amount', render: (row) => formatCurrency(row.totalPrice) },

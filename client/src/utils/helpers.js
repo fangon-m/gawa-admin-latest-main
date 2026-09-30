@@ -112,6 +112,24 @@ export function formatEntityId(id, prefix = '') {
   return `${prefix}${id.slice(0, 8)}`.toUpperCase();
 }
 
+/**
+ * Generate a consistent short numeric ID from a UUID string.
+ * Uses FNV-1a hash for consistent, unique-ish numbers.
+ */
+export function formatEntityIdNumeric(id, prefix = '') {
+  if (!id) return '';
+  // FNV-1a 32-bit hash
+  let hash = 0x811c9dc5;
+  const str = id.replace(/-/g, '');
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  // Format as 6-digit number with prefix
+  const num = (hash % 1000000).toString().padStart(6, '0');
+  return `${prefix}${num}`;
+}
+
 export function toQueryString(params) {
   const cleaned = {};
   if (params) {
