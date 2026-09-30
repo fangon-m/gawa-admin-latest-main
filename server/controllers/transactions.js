@@ -4,7 +4,15 @@ const { toCamelCase, getFullName } = require('../utilities/helpers');
 async function enrichTransactions(txns) {
   if (!txns || txns.length === 0) return [];
   const userIds = new Set();
-  txns.forEach(t => { if (t.user_id) userIds.add(t.user_id); });
+  const relatedJobIds = new Set();
+  const relatedRentalIds = new Set();
+  const counterpartyIds = new Set();
+
+  txns.forEach(t => {
+    if (t.user_id) userIds.add(t.user_id);
+    if (t.related_type === 'job_post' && t.related_id) relatedJobIds.add(t.related_id);
+    if (t.related_type === 'equipment_rental' && t.related_id) relatedRentalIds.add(t.related_id);
+  });
 
   let userMap = {};
   if (userIds.size > 0) {
@@ -12,22 +20,82 @@ async function enrichTransactions(txns) {
     if (users) users.forEach(u => { userMap[u.id] = getFullName(u); });
   }
 
-  return txns.map(t => ({
-    ...toCamelCase(t),
-    userName: userMap[t.user_id] || t.user_id,
-  }));
+  let jobMap = {};
+  if (relatedJobIds.size > 0) {
+    const { data: jobs } = await supabase.from('job_posts').select('job_post_id, job_title, client_id, talent_id').in('job_post_id', [...relatedJobIds]);
+    if (jobs) jobs.forEach(j => { jobMap[j.job_post_id] = j; });
+  }
+
+  let rentalMap = {};
+  if (relatedRentalIds.size > 0) {
+    const { data: rentals } = await supabase.from('equipment_rentals').select('rental_id, listing_id').in('rental_id', [...relatedRentalIds]);
+    if (rentals) rentals.forEach(r => { rentalMap[r.rental_id] = r; });
+  }
+
+  const listingIds = new Set();
+  Object.values(rentalMap).forEach(r => { if (r.listing_id) listingIds.add(r.listing_id); });
+  let listingMap = {};
+  if (listingIds.size > 0) {
+    const { data: listings } = await supabase.from('equipment_listings').select('listing_id, equipment_name, owner_id').in('listing_id', [...listingIds]);
+    if (listings) listings.forEach(l => { listingMap[l.listing_id] = l; });
+  }
+
+  Object.values(jobMap).forEach(j => {
+    if (j.client_id) counterpartyIds.add(j.client_id);
+    if (j.talent_id) counterpartyIds.add(j.talent_id);
+  });
+  Object.values(listingMap).forEach(l => {
+    if (l.owner_id) counterpartyIds.add(l.owner_id);
+  });
+
+  let counterpartyMap = {};
+  if (counterpartyIds.size > 0) {
+    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name').in('id', [...counterpartyIds]);
+    if (users) users.forEach(u => { counterpartyMap[u.id] = getFullName(u); });
+  }
+
+  return txns.map(t => {
+    let relatedTitle = null;
+    let counterpartyName = null;
+
+    if (t.related_type === 'job_post' && t.related_id) {
+      const job = jobMap[t.related_id];
+      if (job) {
+        relatedTitle = job.job_title;
+        const counterpartyId = t.type === 'payout' ? job.talent_id : job.client_id;
+        counterpartyName = counterpartyId ? counterpartyMap[counterpartyId] : null;
+      }
+    } else if (t.related_type === 'equipment_rental' && t.related_id) {
+      const rental = rentalMap[t.related_id];
+      if (rental && rental.listing_id) {
+        const listing = listingMap[rental.listing_id];
+        if (listing) {
+          relatedTitle = listing.equipment_name;
+          counterpartyName = listing.owner_id ? counterpartyMap[listing.owner_id] : null;
+        }
+      }
+    }
+
+    return {
+      ...toCamelCase(t),
+      userName: userMap[t.user_id] || t.user_id,
+      relatedTitle,
+      counterpartyName,
+    };
+  });
 }
 
 async function listTransactions(req, res) {
-  const { page = 1, limit = 20, type, status, userId, startDate, endDate } = req.query;
+  const { page = 1, limit = 20, type, status, userId, startDate, endDate, paymentMethod } = req.query;
   const offset = (Math.max(1, +page) - 1) * +limit;
 
-  let query = supabase.from('transactions').select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type', { count: 'exact' });
+  let query = supabase.from('transactions').select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type, direction', { count: 'exact' });
   if (type) query = query.eq('type', type);
   if (status) query = query.eq('status', status);
   if (userId) query = query.eq('user_id', userId);
   if (startDate) query = query.gte('created_at', startDate);
   if (endDate) query = query.lte('created_at', endDate);
+  if (paymentMethod) query = query.eq('payment_method', paymentMethod);
 
   const { data, error, count } = await query
     .order('created_at', { ascending: false })
@@ -43,7 +111,7 @@ async function listTransactions(req, res) {
 async function getTransactionById(req, res) {
   const { data: txn, error } = await supabase
     .from('transactions')
-    .select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type')
+    .select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type, direction')
     .eq('id', req.params.id)
     .single();
 

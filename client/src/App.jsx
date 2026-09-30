@@ -18,7 +18,7 @@ const Transactions = lazy(() => import('./pages/Transactions'));
 const TransactionDetail = lazy(() => import('./pages/TransactionDetail'));
 const Oversight = lazy(() => import('./pages/Oversight'));
 const DisputeDetail = lazy(() => import('./pages/DisputeDetail'));
-const GalawPoints = lazy(() => import('./pages/GalawPoints'));
+const GawaPoints = lazy(() => import('./pages/GawaPoints'));
 const AppealDetail = lazy(() => import('./pages/AppealDetail'));
 const Messages = lazy(() => import('./pages/Messages'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -83,7 +83,7 @@ export default function App() {
           <Route path="/oversight" element={<ProtectedRoute requiredPermission="viewDisputes"><Oversight /></ProtectedRoute>} />
           <Route path="/job-review-queue" element={<ProtectedRoute requiredPermission="viewDisputes"><JobReviewQueue /></ProtectedRoute>} />
           <Route path="/disputes/:id" element={<ProtectedRoute requiredPermission="viewDisputeDetail"><DisputeDetail /></ProtectedRoute>} />
-          {can('viewGalawPoints') && <Route path="/galaw-points" element={<GalawPoints />} />}
+          {can('viewGawaPoints') && <Route path="/gawa-points" element={<GawaPoints />} />}
           <Route path="/appeals/:id" element={<ProtectedRoute requiredPermission="viewAppealDetail"><AppealDetail /></ProtectedRoute>} />
           <Route path="/messages" element={<ProtectedRoute requiredPermission="viewMessages"><Messages /></ProtectedRoute>} />
           <Route path="/assessments" element={<ProtectedRoute requiredPermission="viewAssessments"><Assessments /></ProtectedRoute>} />

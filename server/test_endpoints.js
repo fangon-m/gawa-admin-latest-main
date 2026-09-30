@@ -47,7 +47,7 @@ async function main() {
     { name: 'MESSAGES', path: '/messages' },
     { name: 'CATEGORIES', path: '/categories' },
     { name: 'MODERATION', path: '/moderation' },
-    { name: 'GALAW POINTS PACKS', path: '/galaw-points/packs' },
+    { name: 'GAWA POINTS PACKS', path: '/gawa-points/packs' },
     { name: 'FEE CONFIG', path: '/fee-config' },
     { name: 'QUESTIONS', path: '/questions' },
     { name: 'ASSESSMENTS', path: '/assessments' },

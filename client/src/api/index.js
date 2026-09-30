@@ -12,7 +12,7 @@ export * as moderation from './moderation';
 export * as messages from './messages';
 export * as appeals from './appeals';
 export * as incidents from './incidents';
-export * as galawPoints from './galawPoints';
+export * as gawaPoints from './gawaPoints';
 export * as feeConfig from './feeConfig';
 export * as categories from './categories';
 export * as assessments from './assessments';

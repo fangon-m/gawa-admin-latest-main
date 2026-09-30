@@ -15,7 +15,6 @@ const filters = [
     { value: 'deposit', label: 'Deposit' },
     { value: 'refund', label: 'Refund' },
     { value: 'payout', label: 'Payout' },
-    { value: 'galaw_purchase', label: 'Galaw Purchase' },
   ]},
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
     { value: 'completed', label: 'Completed' },
@@ -24,10 +23,8 @@ const filters = [
     { value: 'held', label: 'Held' },
   ]},
   { key: 'paymentMethod', label: 'Payment', placeholder: 'All Methods', options: [
+    { value: 'cash', label: 'Cash' },
     { value: 'gcash', label: 'GCash' },
-    { value: 'bank_transfer', label: 'Bank Transfer' },
-    { value: 'card', label: 'Card' },
-    { value: 'wallet', label: 'Wallet' },
   ]},
 ];
 
@@ -56,7 +53,8 @@ export default function Transactions() {
     { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityId(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
     { key: 'userName', label: 'User' },
-    { key: 'amount', label: 'Amount', render: (row) => formatCurrency(row.amount) },
+    { key: 'relatedTitle', label: 'Related', render: (row) => <span className="text-xs text-muted">{row.relatedTitle || '—'}</span> },
+    { key: 'amount', label: 'Amount', render: (row) => <span className={row.direction === 'out' ? 'text-danger' : 'text-success'}>{(row.direction === 'out' ? '-' : '+')} {formatCurrency(row.amount)}</span> },
     { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
     { key: 'paymentMethod', label: 'Payment' },
     { key: 'reference', label: 'Reference', render: (row) => <span className="text-xs text-muted font-mono">{row.reference}</span> },

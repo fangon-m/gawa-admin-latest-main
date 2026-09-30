@@ -14,9 +14,7 @@ import EvidenceGallery from '../components/common/EvidenceGallery';
 import NotesPanel from '../components/common/NotesPanel';
 
 const statusTabs = [
-  { key: 'all', label: 'All' },
   { key: 'pending', label: 'Pending' },
-  { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
 ];
 
@@ -24,7 +22,7 @@ export default function Verification() {
   const { user: currentUser } = useAuth();
   const { can } = usePermissions(currentUser?.role);
   const { addNotification } = useNotifications();
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useState('pending');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [rejectDialog, setRejectDialog] = useState(null);

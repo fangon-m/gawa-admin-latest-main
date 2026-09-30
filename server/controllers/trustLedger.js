@@ -186,7 +186,7 @@ async function releaseHeldFunds(req, res) {
 
 async function backfillTrustLedger(req, res) {
   // Replicates the 001_backfill_trust_ledger.sql migration logic in JS
-  const MAPPED_TYPES = ['job_payment', 'rental_payment', 'deposit', 'galaw_purchase', 'payout', 'refund', 'fee'];
+  const MAPPED_TYPES = ['job_payment', 'rental_payment', 'deposit', 'gawa_purchase', 'payout', 'refund', 'fee'];
   const SKIP_STATUSES = ['cancelled', 'failed'];
 
   // Fetch all eligible transactions (status not cancelled/failed, type in mapped set)
@@ -222,7 +222,7 @@ async function backfillTrustLedger(req, res) {
     if (['job_payment', 'rental_payment'].includes(txn.type)) {
       trustType = 'payment_in';
       trustAmount = Math.abs(Number(txn.amount));
-    } else if (['deposit', 'galaw_purchase'].includes(txn.type)) {
+    } else if (['deposit', 'gawa_purchase'].includes(txn.type)) {
       trustType = 'deposit';
       trustAmount = Math.abs(Number(txn.amount));
     } else if (txn.type === 'payout') {

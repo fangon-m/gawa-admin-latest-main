@@ -16,7 +16,7 @@ router.use('/appeals', require('./appeals'));
 router.use('/incidents', require('./incidents'));
 router.use('/reviews', require('./reviews'));
 router.use('/user-incidents', require('./userIncidents'));
-router.use('/galaw-points', require('./galawPoints'));
+router.use('/gawa-points', require('./gawaPoints'));
 router.use('/fee-config', require('./feeConfig'));
 router.use('/categories', require('./categories'));
 router.use('/questions', require('./questions'));
