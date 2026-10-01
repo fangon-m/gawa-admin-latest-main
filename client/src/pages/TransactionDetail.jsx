@@ -4,7 +4,7 @@ import { getById as getTransactionById, releaseEscrow, processRefund, approvePay
 import { useApiData } from '../utils/useApiData';
 import { usePermissions } from '../utils/permissions';
 import { useAuth } from '../context/AuthContext';
-import { formatDateTime, formatCurrency } from '../utils/helpers';
+import { formatDateTime, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
@@ -69,12 +69,13 @@ export default function TransactionDetail() {
 
   return (
     <div>
-      <Header title={`Transaction ${txn.id}`} />
+      <Header title={`Transaction ${formatEntityIdNumeric(txn.id, 'TXN-')}`} />
       <div className="card mb-4">
         <div className="card-body">
           <div className="detail-grid">
-            <div className="detail-field"><div className="detail-label">Transaction ID</div><div className="detail-value">{txn.id}</div></div>
+            <div className="detail-field"><div className="detail-label">Transaction ID</div><div className="detail-value font-mono">{formatEntityIdNumeric(txn.id, 'TXN-')}</div></div>
             <div className="detail-field"><div className="detail-label">Type</div><div className="detail-value"><StatusBadge status={txn.type} /></div></div>
+            <div className="detail-field"><div className="detail-label">Direction</div><div className="detail-value"><StatusBadge status={txn.direction === 'in' ? 'in' : 'out'} /></div></div>
             <div className="detail-field"><div className="detail-label">Amount</div><div className="detail-value">{formatCurrency(txn.amount)}</div></div>
             <div className="detail-field"><div className="detail-label">Fee</div><div className="detail-value">{formatCurrency(txn.fee || 0)}</div></div>
             <div className="detail-field"><div className="detail-label">Net Amount</div><div className="detail-value">{formatCurrency(txn.netAmount || txn.amount)}</div></div>
@@ -82,6 +83,16 @@ export default function TransactionDetail() {
             <div className="detail-field"><div className="detail-label">Payment Method</div><div className="detail-value">{txn.paymentMethod || 'N/A'}</div></div>
             <div className="detail-field"><div className="detail-label">Reference</div><div className="detail-value" style={{ fontSize: 13 }}>{txn.reference || 'N/A'}</div></div>
             <div className="detail-field"><div className="detail-label">User</div><div className="detail-value"><span className="cell-link" onClick={() => navigate(`/users/${txn.userId}`)}>{txn.userName || txn.userId}</span></div></div>
+            <div className="detail-field"><div className="detail-label">Counterparty</div><div className="detail-value">{txn.counterpartyName || '—'}</div></div>
+            <div className="detail-field"><div className="detail-label">Related</div><div className="detail-value">
+              {txn.relatedTitle && txn.relatedId && txn.relatedType && (
+                <span className="cell-link" onClick={() => {
+                  if (txn.relatedType === 'job_post') navigate(`/jobs/${txn.relatedId}`);
+                  else if (txn.relatedType === 'equipment_rental') navigate(`/rentals/${txn.relatedId}`);
+                }}>{txn.relatedTitle}</span>
+              )}
+              {!txn.relatedTitle && '—'}
+            </div></div>
             <div className="detail-field"><div className="detail-label">Date</div><div className="detail-value">{formatDateTime(txn.createdAt)}</div></div>
             <div className="detail-field"><div className="detail-label">Description</div><div className="detail-value" style={{ gridColumn: 'span 2' }}>{txn.description || 'N/A'}</div></div>
           </div>

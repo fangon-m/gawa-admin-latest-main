@@ -49,8 +49,8 @@ async function getStats(req, res) {
     safeQuery(supabase.from('transactions').select('*', { count: 'exact', head: true })),
     safeQuery(supabase.from('id_verifications').select('*', { count: 'exact', head: true }).eq('status', 'pending')),
     safeQuery(supabase.from('appeals').select('*', { count: 'exact', head: true }).eq('status', 'pending')),
-    safeQuery(supabase.from('galaw_points_transactions').select('points').in('type', ['purchase', 'issued'])),
-    safeQuery(supabase.from('galaw_points_transactions').select('points').in('type', ['consumed', 'deducted'])),
+    safeQuery(supabase.from('gawa_points_transactions').select('points').in('type', ['purchase', 'issued'])),
+    safeQuery(supabase.from('gawa_points_transactions').select('points').in('type', ['consumed', 'deducted'])),
     safeQuery(supabase.from('incident_logs').select('*', { count: 'exact', head: true })
       .gte('created_at', new Date(now.getFullYear(), now.getMonth(), 1).toISOString())),
     safeQuery(supabase.from('transactions').select('amount, created_at')
@@ -99,10 +99,10 @@ async function getStats(req, res) {
     assignedName: nameMap[d.assigned_to]?.fullName || null,
   }));
 
-  // Compute galaw points totals
-  const totalGalawPointsPurchased = (purchasedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
-  const totalGalawPointsConsumed = (consumedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
-  const outstandingGalawPoints = totalGalawPointsPurchased - totalGalawPointsConsumed;
+  // Compute gawa points totals
+  const totalGawaPointsPurchased = (purchasedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
+  const totalGawaPointsConsumed = (consumedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
+  const outstandingGawaPoints = totalGawaPointsPurchased - totalGawaPointsConsumed;
 
   // Count flagged content
   const flaggedContent = (flaggedJobsData.count || 0) + (flaggedListingsData.count || 0) + (flaggedReviewsData.count || 0);
@@ -181,9 +181,9 @@ async function getStats(req, res) {
     pendingVerifications: pendingVerifications || 0,
     pendingVerificationsGrowth: 0,
     pendingAppeals: pendingAppeals || 0,
-    totalGalawPointsPurchased,
-    totalGalawPointsConsumed,
-    outstandingGalawPoints,
+    totalGawaPointsPurchased,
+    totalGawaPointsConsumed,
+    outstandingGawaPoints,
     incidentsThisMonth: incidentsThisMonthData.count || 0,
     monthlyTransactions,
     userRoleDistribution,

@@ -6,7 +6,7 @@ import { useApiData } from '../utils/useApiData';
 import { list as listJobs } from '../api/jobs';
 import * as categoriesApi from '../api/categories';
 import * as assessmentsApi from '../api/assessments';
-import { formatDate, formatCurrency, capitalizeWords } from '../utils/helpers';
+import { formatDate, formatCurrency, capitalizeWords, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
 import FilterBar from '../components/common/FilterBar';
@@ -140,7 +140,7 @@ export default function Jobs() {
             </div>
           ),
         },
-        { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.jobPostId?.slice(0, 8)}</span> },
+{ key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityId(row.jobPostId, 'JOB-')}</span> },
         { key: 'contractorName', label: 'Contractor', render: (row) => row.contractorName || <span className="text-muted">Unassigned</span> },
         { key: 'clientName', label: 'Client' },
         {
@@ -154,7 +154,7 @@ export default function Jobs() {
 
     return [
       { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { if (row.jobPostId) navigate(`/jobs/${row.jobPostId}`); }}>{row.jobTitle}</span> },
-      { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.jobPostId?.slice(0, 8)}</span> },
+{ key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.jobPostId, 'JOB-')}</span> },
       { key: 'hiringOption', label: 'Type', render: (row) => <StatusBadge status={row.hiringOption} /> },
       { key: 'clientName', label: 'Client' },
       { key: 'jobStatus', label: 'Status', render: (row) => <StatusBadge status={row.jobStatus} /> },

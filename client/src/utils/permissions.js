@@ -15,7 +15,7 @@ const PERMISSIONS = {
   viewDisputeDetail: { admin: true, customer_support: true },
   viewModeration: { admin: true, customer_support: true },
   viewIncidents: { admin: true, customer_support: false },
-  viewGalawPoints: { admin: true, customer_support: false },
+  viewGawaPoints: { admin: true, customer_support: false },
   viewAppeals: { admin: true, customer_support: true },
   viewAppealDetail: { admin: true, customer_support: true },
   viewMessages: { admin: true, customer_support: true },

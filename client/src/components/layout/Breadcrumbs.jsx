@@ -9,7 +9,7 @@ const pageNames = {
   '/listings': 'Listings',
   '/transactions': 'Transactions',
   '/oversight': 'Oversight',
-  '/galaw-points': 'Galaw Points',
+  '/gawa-points': 'Gawa Points',
   '/messages': 'Messages',
   '/settings': 'Settings',
   '/support': 'Support Dashboard',

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import * as galawPointsApi from '../api/galawPoints';
+import * as gawaPointsApi from '../api/gawaPoints';
 import * as feeConfigApi from '../api/feeConfig';
 import * as usersApi from '../api/users';
 import * as walletsApi from '../api/wallets';
@@ -38,7 +38,7 @@ const modalStyles = {
   actions: { display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' },
 };
 
-export default function GalawPoints() {
+export default function GawaPoints() {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const { can } = usePermissions(currentUser?.role);
@@ -46,10 +46,10 @@ export default function GalawPoints() {
   const [message, setMessage] = useState('');
 
   // === Data fetching ===
-  const { data: allPacks, refetch: refetchPacks } = useApiData(() => galawPointsApi.listPacks(), [], {
+  const { data: allPacks, refetch: refetchPacks } = useApiData(() => gawaPointsApi.listPacks(), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
-  const { data: transactions, refetch: refetchTxns } = useApiData(() => galawPointsApi.listTransactions({ limit: 100 }), [], {
+  const { data: transactions, refetch: refetchTxns } = useApiData(() => gawaPointsApi.listTransactions({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
   const { data: feeConfigs, refetch: refetchFees } = useApiData(() => feeConfigApi.list(), [], {
@@ -66,11 +66,11 @@ export default function GalawPoints() {
   });
 
   // === Mutations ===
-  const [doCreatePack] = useMutation(galawPointsApi.createPack);
-  const [doUpdatePack] = useMutation(galawPointsApi.updatePack);
-  const [doDeletePack] = useMutation(galawPointsApi.deletePack);
-  const [doIssuePoints] = useMutation(galawPointsApi.issuePoints);
-  const [doDeductPoints] = useMutation(galawPointsApi.deductPoints);
+  const [doCreatePack] = useMutation(gawaPointsApi.createPack);
+  const [doUpdatePack] = useMutation(gawaPointsApi.updatePack);
+  const [doDeletePack] = useMutation(gawaPointsApi.deletePack);
+  const [doIssuePoints] = useMutation(gawaPointsApi.issuePoints);
+  const [doDeductPoints] = useMutation(gawaPointsApi.deductPoints);
   const [doCreateFee] = useMutation(feeConfigApi.create);
   const [doUpdateFee] = useMutation(feeConfigApi.update);
   const [doDeleteFee] = useMutation(feeConfigApi.remove);
@@ -82,10 +82,10 @@ export default function GalawPoints() {
     const purchased = transactions.filter(t => t.type === 'purchase' || t.type === 'issued').reduce((s, t) => s + Math.abs(t.points || 0), 0);
     const consumed = transactions.filter(t => t.type === 'consumed' || t.type === 'deducted').reduce((s, t) => s + Math.abs(t.points || 0), 0);
     return {
-      totalGalawPointsPurchased: purchased,
-      totalGalawPointsConsumed: consumed,
-      totalGalawPointsRefunded: 0,
-      outstandingGalawPoints: purchased - consumed,
+      totalGawaPointsPurchased: purchased,
+      totalGawaPointsConsumed: consumed,
+      totalGawaPointsRefunded: 0,
+      outstandingGawaPoints: purchased - consumed,
     };
   }, [transactions]);
 
@@ -388,7 +388,7 @@ export default function GalawPoints() {
           <div className="form-group">
             <label className="form-label">GP Cost per Proposal</label>
             <input className="form-input" type="number" min="0" value={form.proposalGpCost} onChange={set('proposalGpCost')} />
-            <div className="form-hint">Galaw Points deducted per job proposal</div>
+            <div className="form-hint">Gawa Points deducted per job proposal</div>
           </div>
           <div className="form-group">
             <label className="form-label">Platform Fee (%)</label>
@@ -400,7 +400,7 @@ export default function GalawPoints() {
           <div className="form-group">
             <label className="form-label">GP Conversion Rate (PHP/GP)</label>
             <input className="form-input" type="number" min="0" step="0.01" value={form.gpConversionRate} onChange={set('gpConversionRate')} />
-            <div className="form-hint">1 Galaw Point = X PHP</div>
+            <div className="form-hint">1 Gawa Point = X PHP</div>
           </div>
           <div className="form-group">
             <label className="form-label">Listing Fee (GP)</label>
@@ -417,7 +417,7 @@ export default function GalawPoints() {
 
   return (
     <div>
-      <Header title="Galaw Points Management" />
+      <Header title="Gawa Points Management" />
       {message && (
         <div style={{
           padding: '0.625rem 1rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem',
@@ -430,10 +430,10 @@ export default function GalawPoints() {
       )}
 
       <div className="kpi-row">
-        <StatCard label="Total Purchased" value={formatNumber(dashStats.totalGalawPointsPurchased)} icon={<Star size={20} />} color="var(--color-success)" />
-        <StatCard label="Total Consumed" value={formatNumber(dashStats.totalGalawPointsConsumed)} icon={<ArrowRight size={20} />} color="var(--color-warning)" />
-        <StatCard label="Total Refunded" value={formatNumber(dashStats.totalGalawPointsRefunded)} icon={<RotateCcw size={20} />} color="var(--color-blue)" />
-        <StatCard label="Outstanding Balance" value={formatNumber(dashStats.outstandingGalawPoints)} icon={<PhilippinePeso size={20} />} color="var(--color-text)" />
+        <StatCard label="Total Purchased" value={formatNumber(dashStats.totalGawaPointsPurchased)} icon={<Star size={20} />} color="var(--color-success)" />
+        <StatCard label="Total Consumed" value={formatNumber(dashStats.totalGawaPointsConsumed)} icon={<ArrowRight size={20} />} color="var(--color-warning)" />
+        <StatCard label="Total Refunded" value={formatNumber(dashStats.totalGawaPointsRefunded)} icon={<RotateCcw size={20} />} color="var(--color-blue)" />
+        <StatCard label="Outstanding Balance" value={formatNumber(dashStats.outstandingGawaPoints)} icon={<PhilippinePeso size={20} />} color="var(--color-text)" />
       </div>
 
       <Tabs tabs={tabs} activeTab={tab} onChange={setTab} />
@@ -514,10 +514,10 @@ export default function GalawPoints() {
           <div className="card">
             <div className="card-body">
               <div className="detail-grid">
-                <div className="detail-field"><div className="detail-label">Total Purchased</div><div className="detail-value">{formatNumber(dashStats.totalGalawPointsPurchased)} GP</div></div>
-                <div className="detail-field"><div className="detail-label">Total Consumed</div><div className="detail-value">{formatNumber(dashStats.totalGalawPointsConsumed)} GP</div></div>
-                <div className="detail-field"><div className="detail-label">Total Refunded</div><div className="detail-value">{formatNumber(dashStats.totalGalawPointsRefunded)} GP</div></div>
-                <div className="detail-field"><div className="detail-label">Outstanding Balances</div><div className="detail-value">{formatNumber(dashStats.outstandingGalawPoints)} GP</div></div>
+                <div className="detail-field"><div className="detail-label">Total Purchased</div><div className="detail-value">{formatNumber(dashStats.totalGawaPointsPurchased)} GP</div></div>
+                <div className="detail-field"><div className="detail-label">Total Consumed</div><div className="detail-value">{formatNumber(dashStats.totalGawaPointsConsumed)} GP</div></div>
+                <div className="detail-field"><div className="detail-label">Total Refunded</div><div className="detail-value">{formatNumber(dashStats.totalGawaPointsRefunded)} GP</div></div>
+                <div className="detail-field"><div className="detail-label">Outstanding Balances</div><div className="detail-value">{formatNumber(dashStats.outstandingGawaPoints)} GP</div></div>
               </div>
             </div>
           </div>

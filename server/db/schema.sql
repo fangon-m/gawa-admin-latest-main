@@ -320,7 +320,7 @@ create table if not exists public.wallets (
 -- ---------------------------------------------------------------------------
 create table if not exists public.transactions (
   id               uuid primary key default uuid_generate_v4(),
-  type             text not null check (type in ('job_payment','rental_payment','deposit','refund','payout','galaw_purchase','fee')),
+  type             text not null check (type in ('job_payment','rental_payment','deposit','refund','payout','gawa_purchase','fee')),
   amount           numeric(10,2) not null,
   status           text not null check (status in ('pending','completed','failed','escrow','held','cancelled')),
   payment_method   text check (payment_method in ('gcash','bank_transfer','card','wallet')),
@@ -328,7 +328,7 @@ create table if not exists public.transactions (
   user_id          uuid not null references public.users_table(id),
   wallet_id        uuid references public.wallets(wallet_id),
   related_id       uuid,
-  related_type     text check (related_type in ('job', 'rental', 'galaw_pack')),
+  related_type     text check (related_type in ('job', 'rental', 'gawa_pack')),
   direction        text,
   reference_id     uuid,
   reference_type   text,
@@ -389,9 +389,9 @@ create table if not exists public.app_settings (
 );
 
 -- ---------------------------------------------------------------------------
--- 23. Galaw Points Packs
+-- 23. Gawa Points Packs
 -- ---------------------------------------------------------------------------
-create table if not exists public.galaw_points_packs (
+create table if not exists public.gawa_points_packs (
   id          uuid primary key default uuid_generate_v4(),
   name        text not null,
   points      integer not null,
@@ -403,16 +403,16 @@ create table if not exists public.galaw_points_packs (
 );
 
 -- ---------------------------------------------------------------------------
--- 24. Galaw Points Transactions
+-- 24. Gawa Points Transactions
 -- ---------------------------------------------------------------------------
-create table if not exists public.galaw_points_transactions (
+create table if not exists public.gawa_points_transactions (
   id          uuid primary key default uuid_generate_v4(),
   display_id  text,
   user_id     uuid not null references public.users_table(id),
   type        text not null check (type in ('purchase','consumed','issued','deducted')),
   points      integer not null,
   amount      numeric(10,2),
-  pack_id     uuid references public.galaw_points_packs(id),
+  pack_id     uuid references public.gawa_points_packs(id),
   job_id      uuid references public.jobs(id),
   admin_id    uuid references public.users_table(id),
   description text,
@@ -748,8 +748,8 @@ create index if not exists idx_assessments_category on public.assessments(catego
 create index if not exists idx_assessments_status on public.assessments(status);
 create index if not exists idx_questions_category on public.questions(category_id);
 create index if not exists idx_questions_test on public.questions(test_id);
-create index if not exists idx_galaw_txns_user on public.galaw_points_transactions(user_id);
-create index if not exists idx_galaw_txns_type on public.galaw_points_transactions(type);
+create index if not exists idx_gawa_txns_user on public.gawa_points_transactions(user_id);
+create index if not exists idx_gawa_txns_type on public.gawa_points_transactions(type);
 create index if not exists idx_incident_logs_agent on public.incident_logs(agent_id);
 create index if not exists idx_incident_logs_module on public.incident_logs(module);
 create index if not exists idx_incident_logs_action on public.incident_logs(action);
@@ -931,7 +931,7 @@ begin
   if new.type in ('job_payment', 'rental_payment') then
     trust_type := 'payment_in';
     trust_amount := abs(new.amount);
-  elsif new.type in ('deposit', 'galaw_purchase') then
+  elsif new.type in ('deposit', 'gawa_purchase') then
     trust_type := 'deposit';
     trust_amount := abs(new.amount);
   elsif new.type = 'payout' then
@@ -1234,20 +1234,20 @@ create policy "Staff can manage wallets"
   on public.wallets for all
   using (public.is_staff());
 
-alter table public.galaw_points_packs enable row level security;
+alter table public.gawa_points_packs enable row level security;
 create policy "Staff can manage packs"
-  on public.galaw_points_packs for all
+  on public.gawa_points_packs for all
   using (public.is_staff());
 create policy "Anyone can read active packs"
-  on public.galaw_points_packs for select
+  on public.gawa_points_packs for select
   using (true);
 
-alter table public.galaw_points_transactions enable row level security;
-create policy "Staff can read galaw txns"
-  on public.galaw_points_transactions for select
+alter table public.gawa_points_transactions enable row level security;
+create policy "Staff can read gawa txns"
+  on public.gawa_points_transactions for select
   using (public.is_staff());
-create policy "Staff can insert galaw txns"
-  on public.galaw_points_transactions for insert
+create policy "Staff can insert gawa txns"
+  on public.gawa_points_transactions for insert
   with check (public.is_staff());
 
 alter table public.disputes enable row level security;

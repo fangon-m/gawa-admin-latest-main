@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listUsers } from '../api/users';
-import { formatDate, formatEntityId, getInitials } from '../utils/helpers';
+import { formatDate, formatEntityIdNumeric, getInitials } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
 import FilterBar from '../components/common/FilterBar';
@@ -60,7 +60,7 @@ export default function Users() {
         </div>
       </div>
     )},
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityId(row.id, 'USR-')}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'USR-')}</span> },
     { key: 'role', label: 'Role', render: (row) => <StatusBadge status={row.role} /> },
     { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
     { key: 'location', label: 'Location' },

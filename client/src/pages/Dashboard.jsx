@@ -67,7 +67,7 @@ export default function Dashboard() {
     { label: 'Moderate Content', icon: <Sword size={18} />, path: '/oversight', permission: 'viewDisputes' },
     { label: 'Check Appeals', icon: <RotateCcw size={18} />, path: '/oversight', permission: 'viewDisputes' },
     { label: 'Monitor Transactions', icon: <ArrowLeftRightIcon size={18} />, path: '/transactions', permission: 'viewTransactions' },
-    { label: 'Manage Galaw Points', icon: <Star size={18} />, path: '/galaw-points', permission: 'viewGalawPoints' },
+    { label: 'Manage Gawa Points', icon: <Star size={18} />, path: '/gawa-points', permission: 'viewGawaPoints' },
   ];
 
   if (loading) {
@@ -144,16 +144,16 @@ export default function Dashboard() {
             <ChartCard title="Platform Overview">
               <div className={styles.overviewGrid}>
                 <div className={styles.overviewItem}>
-                  <div className={styles.overviewItemLabel}>Galaw Points</div>
-                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.totalGalawPointsPurchased || 0)}</div>
+                  <div className={styles.overviewItemLabel}>Gawa Points</div>
+                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.totalGawaPointsPurchased || 0)}</div>
                 </div>
                 <div className={styles.overviewItem}>
                   <div className={styles.overviewItemLabel}>Consumed</div>
-                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.totalGalawPointsConsumed || 0)}</div>
+                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.totalGawaPointsConsumed || 0)}</div>
                 </div>
                 <div className={styles.overviewItem}>
                   <div className={styles.overviewItemLabel}>Outstanding</div>
-                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.outstandingGalawPoints || 0)}</div>
+                  <div className={styles.overviewItemValue}>{formatNumber(dashStats.outstandingGawaPoints || 0)}</div>
                 </div>
                 <div className={styles.overviewItem}>
                   <div className={styles.overviewItemLabel}>Incidents</div>

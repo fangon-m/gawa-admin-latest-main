@@ -3,7 +3,7 @@ const { toCamelCase } = require('../utilities/helpers');
 
 async function listPacks(req, res) {
   const { isActive } = req.query;
-  let query = supabase.from('galaw_points_packs').select('*');
+  let query = supabase.from('gawa_points_packs').select('*');
   if (isActive !== undefined) query = query.eq('is_active', isActive === 'true');
   query = query.order('price', { ascending: true });
 
@@ -17,7 +17,7 @@ async function createPack(req, res) {
   if (!name || !points || !price) return res.status(400).json({ error: 'Name, points, and price are required' });
 
   const { data, error } = await supabase
-    .from('galaw_points_packs')
+    .from('gawa_points_packs')
     .insert({
       name,
       points: +points,
@@ -44,7 +44,7 @@ async function updatePack(req, res) {
   updates.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
-    .from('galaw_points_packs')
+    .from('gawa_points_packs')
     .update(updates)
     .eq('id', req.params.id)
     .select()
@@ -55,7 +55,7 @@ async function updatePack(req, res) {
 }
 
 async function deletePack(req, res) {
-  const { error } = await supabase.from('galaw_points_packs').delete().eq('id', req.params.id);
+  const { error } = await supabase.from('gawa_points_packs').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ message: 'Pack deleted' });
 }
@@ -66,7 +66,7 @@ async function issuePoints(req, res) {
   if (+pts <= 0) return res.status(400).json({ error: 'Points must be a positive number' });
 
   const { data: txn, error: txnErr } = await supabase
-    .from('galaw_points_transactions')
+    .from('gawa_points_transactions')
     .insert({
       user_id: userId,
       type: 'issued',
@@ -89,7 +89,7 @@ async function deductPoints(req, res) {
   const absPts = +pts;
 
   const { data: txn, error: txnErr } = await supabase
-    .from('galaw_points_transactions')
+    .from('gawa_points_transactions')
     .insert({
       user_id: userId,
       type: 'deducted',
@@ -107,7 +107,7 @@ async function deductPoints(req, res) {
 async function listPointsTransactions(req, res) {
   const { page = 1, limit = 20, userId, type } = req.query;
   const offset = (Math.max(1, +page) - 1) * +limit;
-  let query = supabase.from('galaw_points_transactions').select('*', { count: 'exact' });
+  let query = supabase.from('gawa_points_transactions').select('*', { count: 'exact' });
   if (userId) query = query.eq('user_id', userId);
   if (type) query = query.eq('type', type);
   query = query.order('created_at', { ascending: false }).range(offset, offset + +limit - 1);
