@@ -110,10 +110,19 @@ async function getStats(req, res) {
   // User role distribution
   const roleCounts = {};
   for (const p of roleDistData.data || []) {
-    roleCounts[p.role] = (roleCounts[p.role] || 0) + 1;
+    const normalizedRole = String(p.role || '')
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .trim()
+      .replace(/\s+/g, ' ');
+    if (!normalizedRole || normalizedRole === 'admin' || normalizedRole === 'customer support') continue;
+    roleCounts[normalizedRole] = (roleCounts[normalizedRole] || 0) + 1;
   }
   const userRoleDistribution = Object.entries(roleCounts)
-    .map(([role, count]) => ({ role: role.charAt(0).toUpperCase() + role.slice(1).replace(/_/g, ' '), count }));
+    .map(([role, count]) => ({
+      role: role.charAt(0).toUpperCase() + role.slice(1),
+      count,
+    }));
 
   // Build monthly chart data from parallel query
   const monthlyMap = {};
