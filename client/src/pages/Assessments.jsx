@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import * as categoriesApi from '../api/categories';
-import * as assessmentsApi from '../api/assessments';
+import * as skillsApi from '../api/skills';
+import * as skillAssessmentsApi from '../api/skillAssessments';
+import * as assessmentQuestionsApi from '../api/assessmentQuestions';
 import { formatDate, capitalizeWords } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
@@ -12,7 +13,8 @@ import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
-import { Plus, Pencil, Trash2, X, Save, ChevronLeft, ClipboardCheck } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Save, ChevronLeft, ClipboardCheck, BookOpen, Zap, Wrench, Hammer } from 'lucide-react';
+import * as lucideIcons from 'lucide-react';
 import styles from './Assessments.module.css';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'];
@@ -26,138 +28,150 @@ export default function Assessments() {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const { can } = usePermissions(currentUser?.role);
-  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedSkill, setSelectedSkill] = useState(null);
+  const [selectedAssessment, setSelectedAssessment] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [deletingQuestion, setDeletingQuestion] = useState(null);
   const [tab, setTab] = useState('questions');
   const [qSearch, setQSearch] = useState('');
-
-  const [form, setForm] = useState({
+  const [qForm, setQForm] = useState({
     question: '', questionType: 'multiple_choice', difficulty: 'beginner',
     points: 10, options: ['', '', '', ''], correctAnswer: '',
   });
 
-  const { data: allCategories } = useApiData(() => categoriesApi.list(), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
+  const { data: allSkills, refetch: refetchSkills } = useApiData(() => skillsApi.listSkills(), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  const { data: allAssessments } = useApiData(() => assessmentsApi.list(), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
+  const { data: allSkillAssessments, refetch: refetchSkillAssessments } = useApiData(() => skillAssessmentsApi.listSkillAssessments({ limit: 100 }), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  const { data: allQuestions, refetch: refetchQuestions } = useApiData(() => assessmentsApi.listQuestions({ limit: 500 }), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
+  const { data: allQuestions, refetch: refetchQs } = useApiData(() => assessmentQuestionsApi.listAssessmentQuestions({ limit: 500 }), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  const [doCreateQuestion] = useMutation(assessmentsApi.createQuestion);
-  const [doUpdateQuestion] = useMutation(assessmentsApi.updateQuestion);
-  const [doDeleteQuestion] = useMutation(assessmentsApi.deleteQuestion);
+  const [doCreateQuestion] = useMutation(assessmentQuestionsApi.createAssessmentQuestion);
+  const [doUpdateQuestion] = useMutation(assessmentQuestionsApi.updateAssessmentQuestion);
+  const [doDeleteQuestion] = useMutation(assessmentQuestionsApi.deleteAssessmentQuestion);
+
+  const skillAssessments = useMemo(() => {
+    if (!selectedSkill) return [];
+    return allSkillAssessments.filter((sa) => sa.skillId === selectedSkill.skillId);
+  }, [selectedSkill, allSkillAssessments]);
 
   const questions = useMemo(() => {
-    if (!selectedCategory) return [];
-    const qs = allQuestions.filter((q) => q.categoryId === selectedCategory.id);
+    if (!selectedAssessment) return [];
+    const qs = allQuestions.filter((q) => q.assessmentId === selectedAssessment.assessmentId);
     if (qSearch) {
       const q = qSearch.toLowerCase();
-      return qs.filter((x) => (x.question || x.text || '').toLowerCase().includes(q));
+      return qs.filter((x) => (x.questionText || '').toLowerCase().includes(q));
     }
     return qs;
-  }, [selectedCategory, allQuestions, qSearch]);
+  }, [selectedAssessment, allQuestions, qSearch]);
 
-  const categoryAssessments = useMemo(() => {
-    if (!selectedCategory) return [];
-    return allAssessments.filter((a) => a.categoryId === selectedCategory.id);
-  }, [selectedCategory, allAssessments]);
-
-  const activeCategories = useMemo(() => allCategories.filter((c) => c.isActive), [allCategories]);
+  const activeSkills = useMemo(() => allSkills.filter((s) => s.isActive !== false), [allSkills]);
 
   const openNewForm = () => {
     setEditingQuestion(null);
-    setForm({ question: '', questionType: 'multiple_choice', difficulty: 'beginner', points: 10, options: ['', '', '', ''], correctAnswer: '' });
+    setQForm({ question: '', questionType: 'multiple_choice', difficulty: 'beginner', points: 10, options: ['', '', '', ''], correctAnswer: '' });
     setShowForm(true);
   };
 
   const openEditForm = (q) => {
     setEditingQuestion(q);
-    const opts = q.options?.length ? [...q.options] : [''];
+    const opts = q.choices?.length ? q.choices.map(c => c.choiceText) : [''];
     while (opts.length < 4) opts.push('');
-    setForm({
-      question: q.question || q.text || '',
-      questionType: q.questionType || q.type,
-      difficulty: q.difficulty,
+    setQForm({
+      question: q.questionText,
+      questionType: 'multiple_choice',
+      difficulty: 'beginner',
       points: q.points,
       options: opts,
-      correctAnswer: q.correctAnswer || '',
+      correctAnswer: q.answerKey?.correctChoiceId || '',
     });
     setShowForm(true);
   };
 
   const handleSave = async () => {
-    if (!form.question.trim()) return;
-    if (form.questionType === 'multiple_choice' && form.options.filter((o) => o.trim()).length < 2) return;
-    if ((form.questionType === 'multiple_choice' || form.questionType === 'true_false') && !form.correctAnswer) return;
+    if (!qForm.question.trim() || !selectedAssessment) return;
+    if (qForm.questionType === 'multiple_choice' && qForm.options.filter((o) => o.trim()).length < 2) return;
+
+    const choices = qForm.options.filter((o) => o.trim()).map((opt, i) => ({
+      choiceText: opt,
+      sortOrder: i,
+    }));
+    const correctChoiceIndex = choices.findIndex(c => c.choiceText === qForm.correctAnswer);
 
     const data = {
-      categoryId: selectedCategory.id,
-      text: form.question.trim(),
-      type: form.questionType,
-      difficulty: form.difficulty,
-      points: Number(form.points),
-      options: form.questionType !== 'descriptive' ? form.options.filter((o) => o.trim()) : [],
-      correctAnswer: form.questionType !== 'descriptive' ? form.correctAnswer : null,
+      assessmentId: selectedAssessment.assessmentId,
+      partNo: 1,
+      category: 'general',
+      questionText: qForm.question.trim(),
+      explanation: '',
+      choices,
+      correctChoiceId: correctChoiceIndex >= 0 ? correctChoiceIndex : undefined,
     };
 
     try {
       if (editingQuestion) {
-        await doUpdateQuestion(editingQuestion.id, data);
+        await doUpdateQuestion(editingQuestion.questionId, data);
       } else {
         await doCreateQuestion(data);
       }
       setShowForm(false);
       setEditingQuestion(null);
-      refetchQuestions();
-    } catch {
-      // silently fail
-    }
+      refetchQs();
+    } catch (err) { console.error('Save question failed:', err); }
   };
 
   const handleDelete = async () => {
     try {
-      await doDeleteQuestion(deletingQuestion.id);
+      await doDeleteQuestion(deletingQuestion.questionId);
       setDeletingQuestion(null);
-      refetchQuestions();
-    } catch {
-      // silently fail
-    }
+      refetchQs();
+    } catch (err) { console.error('Delete question failed:', err); }
   };
 
   const totalPoints = useMemo(() => questions.reduce((sum, q) => sum + (q.points || 0), 0), [questions]);
 
   const questionTypeLabel = (type) => QUESTION_TYPES.find((t) => t.value === type)?.label || type;
 
-  if (!selectedCategory) {
+  const renderSkillIcon = (icon) => {
+    if (!icon) return <BookOpen size={24} />;
+    const trimmed = icon.trim();
+    if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/') || trimmed.startsWith('data:')) {
+      return <img src={trimmed} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />;
+    }
+    const normalized = trimmed.toLowerCase().replace(/[-_\s]/g, '');
+    const lucideMatch = Object.keys(lucideIcons).find(k => k.toLowerCase() === normalized);
+    if (lucideMatch && lucideIcons[lucideMatch]) {
+      const Icon = lucideIcons[lucideMatch];
+      return <Icon size={24} />;
+    }
+    return <span role="img" aria-label={icon} style={{ fontSize: 24 }}>{icon}</span>;
+  };
+
+  if (!selectedSkill) {
     return (
       <div>
         <Header title="Skill Assessments" />
         <div className={styles.categoryGrid}>
-          {activeCategories.map((cat) => (
-            <div key={cat.id} className={styles.categoryCard} onClick={() => setSelectedCategory(cat)}>
-              <div className={styles.categoryCardIcon}><ClipboardCheck size={24} /></div>
-              <div className={styles.categoryCardName}>{cat.name}</div>
-              <div className={styles.categoryCardDesc}>{cat.description}</div>
+          {activeSkills.map((skill) => (
+            <div key={skill.skillId} className={styles.categoryCard} onClick={() => setSelectedSkill(skill)}>
+              <div className={styles.categoryCardIcon}>{renderSkillIcon(skill.icon)}</div>
+              <div className={styles.categoryCardName}>{skill.skillName}</div>
+              <div className={styles.categoryCardDesc}>{skill.description}</div>
               <div className={styles.categoryCardMeta}>
-                <span>{allQuestions.filter((q) => q.categoryId === cat.id).length} questions</span>
-                <span>{allAssessments.filter((a) => a.categoryId === cat.id).length} taken</span>
+                <span>{skillAssessments.length > 0 ? skillAssessments.filter(sa => sa.skillId === skill.skillId).length : 0} assessments</span>
               </div>
             </div>
           ))}
-          {activeCategories.length === 0 && (
+          {activeSkills.length === 0 && (
             <div className="empty-state" style={{ gridColumn: '1/-1' }}>
-              <div className="empty-state-text">No categories available</div>
-              <div className="empty-state-sub">Create categories in Jobs &gt; Manage Categories first</div>
+              <div className="empty-state-text">No skills available</div>
+              <div className="empty-state-sub">Create skills in Jobs &gt; Manage Skills first</div>
             </div>
           )}
         </div>
@@ -167,204 +181,47 @@ export default function Assessments() {
 
   return (
     <div>
-      <Header title={`Assessments — ${selectedCategory.name}`} />
+      <Header title={`Assessments - {selectedSkill.skillName}`} />
       <div className={styles.toolbar}>
-        <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowForm(false); setEditingQuestion(null); }}>
-          <ChevronLeft size={16} /> All Categories
+        <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedSkill(null); setSelectedAssessment(null); setShowForm(false); setEditingQuestion(null); }}>
+          <ChevronLeft size={16} /> All Skills
         </button>
         <div className={styles.toolbarStats}>
-          <span>{questions.length} questions</span>
-          <span>{totalPoints} total points</span>
-          <span>{categoryAssessments.length} submissions</span>
+          <span>{skillAssessments.length} assessments</span>
         </div>
       </div>
 
-      <Tabs tabs={[
-        { key: 'questions', label: 'Questions' },
-        { key: 'submissions', label: 'Submissions' },
-      ]} activeTab={tab} onChange={setTab} />
-
-      <div className="tab-content">
-        {tab === 'questions' && (
-          <div className="card">
-            <div className="card-header">
-              <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
-              {can('manageQuestions') && (
-                <button className="btn btn-accent btn-sm" onClick={openNewForm}>
-                  <Plus size={15} /> Add Question
-                </button>
-              )}
-            </div>
-            {showForm && (
-              <div className={styles.questionForm}>
-                <div className={styles.questionFormHeader}>
-                  <h4>{editingQuestion ? 'Edit Question' : 'New Question'}</h4>
-                  <button className={styles.questionFormClose} onClick={() => { setShowForm(false); setEditingQuestion(null); }}>
-                    <X size={16} />
-                  </button>
+      <div className="card">
+        <div className="card-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+            {skillAssessments.map((assessment) => (
+              <div key={assessment.assessmentId} className={styles.categoryCard} onClick={() => setSelectedAssessment(assessment)}>
+                <div className={styles.categoryCardIcon}><ClipboardCheck size={24} /></div>
+                <div className={styles.categoryCardName}>{assessment.title}</div>
+                <div className={styles.categoryCardDesc}>{assessment.description}</div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
+                    {assessment.questionsPerCategory} questions per category
+                  </span>
+                  <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
+                    {assessment.timeLimitMinutes} min
+                  </span>
                 </div>
-                <div className={styles.questionFormBody}>
-                  <div className="form-group">
-                    <label className="form-label">Question</label>
-                    <textarea className="form-textarea" rows={2} value={form.question}
-                      onChange={(e) => setForm((p) => ({ ...p, question: e.target.value }))} />
-                  </div>
-                  <div className="form-row">
-                    <div className="form-group">
-                      <label className="form-label">Type</label>
-                      <select className="form-select" value={form.questionType}
-                        onChange={(e) => setForm((p) => ({ ...p, questionType: e.target.value, correctAnswer: '', options: ['', '', '', ''] }))}>
-                        {QUESTION_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Difficulty</label>
-                      <select className="form-select" value={form.difficulty}
-                        onChange={(e) => setForm((p) => ({ ...p, difficulty: e.target.value }))}>
-                        {DIFFICULTIES.map((d) => <option key={d} value={d}>{capitalizeWords(d)}</option>)}
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Points</label>
-                      <input className="form-input" type="number" min={1} max={100} value={form.points}
-                        onChange={(e) => setForm((p) => ({ ...p, points: e.target.value }))} />
-                    </div>
-                  </div>
-
-                  {form.questionType === 'multiple_choice' && (
-                    <div className="form-group">
-                      <label className="form-label">Options (at least 2, mark correct with radio)</label>
-                      {form.options.map((opt, i) => (
-                        <div key={i} className={styles.optionRow}>
-                          <input type="radio" name="correct" checked={form.correctAnswer === opt}
-                            onChange={() => setForm((p) => ({ ...p, correctAnswer: opt }))} />
-                          <input className="form-input" placeholder={`Option ${i + 1}`} value={opt}
-                            onChange={(e) => {
-                              const opts = [...form.options];
-                              opts[i] = e.target.value;
-                              setForm((p) => ({ ...p, options: opts }));
-                            }} />
-                          {opt && form.correctAnswer === opt && <span className={styles.correctBadge}>Correct</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {form.questionType === 'true_false' && (
-                    <div className="form-group">
-                      <label className="form-label">Correct Answer</label>
-                      <div className={styles.optionRow}>
-                        <input type="radio" name="tf" checked={form.correctAnswer === 'True'}
-                          onChange={() => setForm((p) => ({ ...p, correctAnswer: 'True', options: ['True', 'False'] }))} />
-                        <span>True</span>
-                      </div>
-                      <div className={styles.optionRow}>
-                        <input type="radio" name="tf" checked={form.correctAnswer === 'False'}
-                          onChange={() => setForm((p) => ({ ...p, correctAnswer: 'False', options: ['True', 'False'] }))} />
-                        <span>False</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {form.questionType === 'descriptive' && (
-                    <div className="form-group">
-                      <label className="form-label text-muted">Descriptive questions require manual grading.</label>
-                    </div>
-                  )}
-
-                  <div className={styles.formActions}>
-                    <button className="btn btn-primary btn-sm" onClick={handleSave}>
-                      <Save size={14} /> {editingQuestion ? 'Update' : 'Add Question'}
-                    </button>
-                    <button className="btn btn-outline btn-sm" onClick={() => { setShowForm(false); setEditingQuestion(null); }}>
-                      Cancel
-                    </button>
-                  </div>
+                <div className={styles.categoryCardMeta}>
+                  <span>Passing: {assessment.passingPercent}%</span>
+                  <span>{assessment.isActive ? 'Active' : 'Inactive'}</span>
                 </div>
               </div>
+            ))}
+            {skillAssessments.length === 0 && (
+              <div className="empty-state" style={{ gridColumn: '1/-1' }}>
+                <div className="empty-state-text">No assessments for this skill</div>
+                <div className="empty-state-sub">Create assessments from Jobs &gt; Manage Skills</div>
+              </div>
             )}
-            <div className="card-body p-0">
-              {questions.length === 0 ? (
-                <div className="empty-state">
-                  <div className="empty-state-icon"><ClipboardCheck size={36} /></div>
-                  <div className="empty-state-text">No questions yet</div>
-                  <div className="empty-state-sub">Add assessment questions for {selectedCategory.name}</div>
-                </div>
-              ) : (
-                <div className={styles.questionList}>
-                  {questions.map((q) => (
-                    <div key={q.id} className={styles.questionItem}>
-                      <div className={styles.questionItemTop}>
-                        <div className={styles.questionItemText}>{q.question || q.text}</div>
-                        <div className={styles.questionItemActions}>
-                          {can('manageQuestions') && (
-                            <>
-                              <button className="btn btn-ghost btn-sm" onClick={() => openEditForm(q)}><Pencil size={13} /></button>
-                              <button className="btn btn-ghost btn-sm" onClick={() => setDeletingQuestion(q)}><Trash2 size={13} /></button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <div className={styles.questionItemMeta}>
-                        <span className={styles.qBadge}>{questionTypeLabel(q.questionType || q.type)}</span>
-                        <span className={styles.qBadge}>{capitalizeWords(q.difficulty)}</span>
-                        <span className={styles.qBadge}>{q.points} pts</span>
-                        {q.correctAnswer && <span className={styles.qBadge}>Ans: {q.correctAnswer}</span>}
-                      </div>
-                      {q.options?.length > 0 && (q.questionType || q.type) !== 'true_false' && (
-                        <div className={styles.questionItemOptions}>
-                          {q.options.map((o, i) => (
-                            <span key={i} className={`${styles.optionPill} ${o === q.correctAnswer ? styles.optionCorrect : ''}`}>
-                              {o === q.correctAnswer && '✓ '}{o}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
-        )}
-
-        {tab === 'submissions' && (
-          <div className="card">
-            <div className="card-body p-0">
-              {categoryAssessments.length === 0 ? (
-                <div className="empty-state">
-                  <div className="empty-state-text">No submissions yet</div>
-                  <div className="empty-state-sub">Talents will appear here after they take assessments</div>
-                </div>
-              ) : (
-                <DataTable
-                  columns={[
-                    { key: 'userName', label: 'Talent', render: (row) => row.userName || row.userId },
-                    { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-                    { key: 'score', label: 'Score', render: (row) => `${row.score || 0}/${row.totalPoints || 0}` },
-                    { key: 'startedAt', label: 'Started', render: (row) => formatDate(row.startedAt) },
-                    { key: 'completedAt', label: 'Completed', render: (row) => row.completedAt ? formatDate(row.completedAt) : '-' },
-                  ]}
-                  data={categoryAssessments}
-                  pageSize={10}
-                  emptyMessage="No submissions"
-                  onRowClick={(row) => navigate(`/users/${row.userId}`)}
-                />
-              )}
-            </div>
-          </div>
-        )}
+        </div>
       </div>
-
-      <ConfirmModal
-        open={!!deletingQuestion}
-        title="Delete Question"
-        message={`Remove "${(deletingQuestion?.question || deletingQuestion?.text || '').substring(0, 60)}..."? This cannot be undone.`}
-        confirmLabel="Delete"
-        variant="danger"
-        onConfirm={handleDelete}
-        onCancel={() => setDeletingQuestion(null)}
-      />
     </div>
   );
 }

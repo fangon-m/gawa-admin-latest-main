@@ -11,5 +11,7 @@ router.delete('/packs/:id', authenticate, authorize(ROLES.ADMIN), ctrl.deletePac
 router.post('/issue', authenticate, authorize(ROLES.ADMIN), ctrl.issuePoints);
 router.post('/deduct', authenticate, authorize(ROLES.ADMIN), ctrl.deductPoints);
 router.get('/transactions', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listPointsTransactions);
+router.get('/wallets', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listWallets);
+router.post('/wallets/:userId/adjust', authenticate, authorize(ROLES.ADMIN), ctrl.adjustWallet);
 
 module.exports = router;

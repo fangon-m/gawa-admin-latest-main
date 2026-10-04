@@ -36,6 +36,7 @@ export default function Dashboard() {
     flaggedContent: dashStats.flaggedContent || 0,
     totalTransactions: dashStats.totalTransactions || 0,
     pendingVerifications: dashStats.pendingVerifications || 0,
+    outstandingGawaPoints: dashStats.outstandingGawaPoints || 0,
   };
 
   const pendingV = (dashStats.pendingVerificationsList || []).slice(0, 5);
@@ -59,6 +60,7 @@ export default function Dashboard() {
     { label: 'Flagged Content', value: formatNumber(stats.flaggedContent), icon: <AlertTriangle size={20} />, color: 'var(--color-error)', trend: undefined, path: '/oversight' },
     { label: 'Total Transactions', value: formatNumber(stats.totalTransactions), icon: <ArrowLeftRightIcon size={20} />, color: 'var(--color-success)', trend: dashStats.totalTransactionsGrowth, path: '/transactions' },
     { label: 'Pending Verifications', value: formatNumber(stats.pendingVerifications), icon: <UserRoundCheck size={20} />, color: 'var(--color-text-muted)', trend: undefined, path: '/verifications' },
+    { label: 'Gawa Points Outstanding', value: formatNumber(stats.outstandingGawaPoints), icon: <Star size={20} />, color: 'var(--color-accent)', trend: undefined, path: '/gawa-points' },
   ];
 
   const quickActions = [

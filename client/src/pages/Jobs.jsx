@@ -4,8 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listJobs } from '../api/jobs';
-import * as categoriesApi from '../api/categories';
-import * as assessmentsApi from '../api/assessments';
+import * as skillsApi from '../api/skills';
+import * as skillAssessmentsApi from '../api/skillAssessments';
+import * as assessmentQuestionsApi from '../api/assessmentQuestions';
 import { formatDate, formatCurrency, capitalizeWords, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
@@ -15,6 +16,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
 import { Plus, Pencil, Trash2, X, Save, ClipboardCheck, BookOpen, ChevronLeft, Briefcase } from 'lucide-react';
+import * as lucideIcons from 'lucide-react';
 import styles from './Assessments.module.css';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'];
@@ -24,6 +26,17 @@ const QUESTION_TYPES = [
   { value: 'descriptive', label: 'Descriptive' },
 ];
 
+const SKILL_ICON_OPTIONS = [
+  'Zap', 'Wrench', 'Hammer', 'HardHat', 'Paintbrush', 'Ruler', 'Saw', 'Drill',
+  'Truck', 'Car', 'Bike', 'Leaf', 'Trees', 'Flower2', 'Shovel', 'Drill',
+  'Briefcase', 'ChefHat', 'Scissors', 'Camera', 'Monitor', 'Smartphone', 'Wifi',
+  'Plug', 'Lightbulb', 'Droplets', 'Flame', 'Snowflake', 'ShieldCheck', 'Star',
+  'Heart', 'Home', 'Building2', 'Store', 'Factory', 'Warehouse', 'Package',
+]
+  .filter((v, i, a) => a.indexOf(v) === i)
+  .map((name) => ({ name, Icon: lucideIcons[name] }))
+  .filter((o) => o.Icon);
+
 export default function Jobs() {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
@@ -32,8 +45,9 @@ export default function Jobs() {
   const [fil, setFil] = useState({ type: '', status: '', category: '' });
   const [showCatModal, setShowCatModal] = useState(false);
   const [editingCat, setEditingCat] = useState(null);
-  const [catForm, setCatForm] = useState({ name: '', description: '' });
+  const [catForm, setCatForm] = useState({ name: '', description: '', icon: '' });
   const [deletingCat, setDeletingCat] = useState(null);
+  const [showIconPicker, setShowIconPicker] = useState(false);
 
   const [activeTab, setActiveTab] = useState('jobs');
   const [selectedCategory, setSelectedCategory] = useState(null);
@@ -47,7 +61,7 @@ export default function Jobs() {
     points: 10, options: ['', '', '', ''], correctAnswer: '',
   });
 
-  // Data fetching — pass type filter so backend enriches contractor data when applicable
+  // Data fetching
   const { data: jobs, loading: jobsLoading } = useApiData(
     () => {
       const params = { limit: 100 };
@@ -57,49 +71,52 @@ export default function Jobs() {
     [fil.type],
     { defaultValue: [], transform: (r) => r?.data ?? r ?? [] }
   );
-  const { data: allCategories, refetch: refetchCats } = useApiData(() => categoriesApi.list(), [], {
+  const { data: allSkills, refetch: refetchSkills } = useApiData(() => skillsApi.listSkills(), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
-  const { data: allAssessments } = useApiData(() => assessmentsApi.list({ limit: 100 }), [], {
+  const { data: allSkillAssessments, refetch: refetchSkillAssessments } = useApiData(() => skillAssessmentsApi.listSkillAssessments({ limit: 100 }), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
+  });
+  const { data: allQuestions, refetch: refetchQs } = useApiData(() => assessmentQuestionsApi.listAssessmentQuestions({ limit: 500 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  // Fetch ALL questions upfront (used by both overview grid and drill-down view)
-  const { data: allQuestions, refetch: refetchQs } = useApiData(() => assessmentsApi.listQuestions({ limit: 500 }), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
-
-  // Question drill-down: filter from all questions when a category is selected
+  // Question drill-down: filter from all questions when a skill is selected
   const questions = useMemo(() => {
     if (!selectedCategory) return [];
-    const qs = allQuestions.filter((q) => q.categoryId === selectedCategory.id);
+    const skillAssessmentIds = allSkillAssessments
+      .filter((sa) => sa.skillId === selectedCategory.skillId)
+      .map((sa) => sa.assessmentId);
+    const qs = allQuestions.filter((q) => skillAssessmentIds.includes(q.assessmentId));
     if (qSearch) {
       const q = qSearch.toLowerCase();
-      return qs.filter((x) => (x.question || x.text || '').toLowerCase().includes(q));
+      return qs.filter((x) => (x.questionText || '').toLowerCase().includes(q));
     }
     return qs;
-  }, [selectedCategory, allQuestions, qSearch]);
+  }, [selectedCategory, allQuestions, qSearch, allSkillAssessments]);
 
-  const categoryAssessments = useMemo(() => {
+  const skillAssessments = useMemo(() => {
     if (!selectedCategory) return [];
-    return allAssessments.filter((a) => a.categoryId === selectedCategory.id);
-  }, [selectedCategory, allAssessments]);
+    return allSkillAssessments.filter((a) => a.skillId === selectedCategory.skillId);
+  }, [selectedCategory, allSkillAssessments]);
 
-  const activeCategories = useMemo(() => allCategories.filter((c) => c.isActive !== false), [allCategories]);
+  const activeSkills = useMemo(() => allSkills.filter((s) => s.isActive !== false), [allSkills]);
 
   // Analytics: computed from all questions (works for overview grid even without a selected category)
-  const categoryAnalytics = useMemo(() => {
-    return activeCategories.map((cat) => {
-      const qs = allQuestions.filter((q) => q.categoryId === cat.id);
-      const asmts = allAssessments.filter((a) => a.categoryId === cat.id);
-      const totalPts = qs.reduce((s, q) => s + (q.points || 0), 0);
-      const passed = asmts.filter((a) => (a.score || 0) / (a.totalPoints || 1) >= 0.6).length;
-      const avgScore = asmts.length > 0
-        ? Math.round(asmts.reduce((s, a) => s + ((a.score || 0) / (a.totalPoints || 1)) * 100, 0) / asmts.length)
+  const skillAnalytics = useMemo(() => {
+    return activeSkills.map((skill) => {
+      const skillAssmts = allSkillAssessments.filter((sa) => sa.skillId === skill.skillId);
+      const questions = skillAssmts.flatMap((sa) => 
+        allQuestions.filter((q) => q.assessmentId === sa.assessmentId)
+      );
+      const totalPts = questions.reduce((s, q) => s + (q.points || 0), 0);
+      const passed = skillAssmts.filter((sa) => sa.isActive).length;
+      const avgScore = skillAssmts.length > 0
+        ? Math.round(skillAssmts.reduce((s, a) => s + ((a.scorePercent || 0)), 0) / skillAssmts.length)
         : 0;
-      return { ...cat, questionCount: qs.length, submissionCount: asmts.length, passed, avgScore, totalPoints: totalPts };
+      return { ...skill, questionCount: questions.length, submissionCount: skillAssmts.length, passed, avgScore, totalPoints: totalPts };
     });
-  }, [activeCategories, allAssessments, allQuestions]);
+  }, [activeSkills, allSkillAssessments, allQuestions]);
 
   const filterDefs = useMemo(() => [
     { key: 'type', label: 'Type', placeholder: 'All Types', options: [
@@ -165,30 +182,30 @@ export default function Jobs() {
 
   const openEditCat = (cat) => {
     setEditingCat(cat);
-    setCatForm({ name: cat.name, description: cat.description || '' });
+    setCatForm({ name: cat.skillName, icon: cat.icon || '' });
   };
 
   const handleSaveCat = async () => {
     if (!catForm.name.trim()) return;
     try {
       if (editingCat) {
-        await categoriesApi.update(editingCat.id, { name: catForm.name.trim(), description: catForm.description.trim() });
+        await skillsApi.updateSkill(editingCat.skillId, { skillName: catForm.name.trim(), icon: catForm.icon });
       } else {
-        await categoriesApi.create({ name: catForm.name.trim(), description: catForm.description.trim() });
+        await skillsApi.createSkill({ skillName: catForm.name.trim(), icon: catForm.icon });
       }
       setEditingCat(null);
-      setCatForm({ name: '', description: '' });
-      refetchCats();
-    } catch (err) { console.error('Save category failed:', err); }
+      setCatForm({ name: '', description: '', icon: '' }); setShowIconPicker(false);
+      refetchSkills();
+    } catch (err) { console.error('Save skill failed:', err); }
   };
 
   const handleDeleteCat = async () => {
     try {
-      await categoriesApi.remove(deletingCat.id);
+      await skillsApi.deleteSkill(deletingCat.skillId);
       setDeletingCat(null);
-      refetchCats();
+      refetchSkills();
     } catch (err) {
-      alert('Cannot delete this category.');
+      alert('Cannot delete this skill.');
       setDeletingCat(null);
     }
   };
@@ -201,15 +218,15 @@ export default function Jobs() {
 
   const openEditForm = (q) => {
     setEditingQuestion(q);
-    const opts = q.options?.length ? [...q.options] : [''];
+    const opts = q.choices?.length ? q.choices.map(c => c.choiceText) : [''];
     while (opts.length < 4) opts.push('');
     setQForm({
-      question: q.question,
-      questionType: q.questionType,
-      difficulty: q.difficulty,
+      question: q.questionText,
+      questionType: 'multiple_choice',
+      difficulty: 'beginner',
       points: q.points,
       options: opts,
-      correctAnswer: q.correctAnswer || '',
+      correctAnswer: q.answerKey?.correctChoiceId || '',
     });
     setShowQuestionForm(true);
   };
@@ -217,22 +234,28 @@ export default function Jobs() {
   const handleSaveQuestion = async () => {
     if (!qForm.question.trim() || !selectedCategory) return;
     if (qForm.questionType === 'multiple_choice' && qForm.options.filter((o) => o.trim()).length < 2) return;
-    if ((qForm.questionType === 'multiple_choice' || qForm.questionType === 'true_false') && !qForm.correctAnswer) return;
+
+    const choices = qForm.options.filter((o) => o.trim()).map((opt, i) => ({
+      choiceText: opt,
+      sortOrder: i,
+    }));
+    const correctChoiceIndex = choices.findIndex(c => c.choiceText === qForm.correctAnswer);
 
     const data = {
-      categoryId: selectedCategory.id,
-      text: qForm.question.trim(),
-      type: qForm.questionType,
-      points: Number(qForm.points),
-      options: qForm.questionType !== 'descriptive' ? qForm.options.filter((o) => o.trim()) : [],
-      correctAnswer: qForm.questionType !== 'descriptive' ? qForm.correctAnswer : null,
+      assessmentId: selectedCategory.assessmentId || selectedCategory.skillId,
+      partNo: 1,
+      category: 'general',
+      questionText: qForm.question.trim(),
+      explanation: '',
+      choices,
+      correctChoiceId: correctChoiceIndex >= 0 ? correctChoiceIndex : undefined,
     };
 
     try {
       if (editingQuestion) {
-        await assessmentsApi.updateQuestion(editingQuestion.id, data);
+        await assessmentQuestionsApi.updateAssessmentQuestion(editingQuestion.questionId, data);
       } else {
-        await assessmentsApi.createQuestion(data);
+        await assessmentQuestionsApi.createAssessmentQuestion(data);
       }
       setShowQuestionForm(false);
       setEditingQuestion(null);
@@ -242,7 +265,7 @@ export default function Jobs() {
 
   const handleDeleteQuestion = async () => {
     try {
-      await assessmentsApi.deleteQuestion(deletingQuestion.id);
+      await assessmentQuestionsApi.deleteAssessmentQuestion(deletingQuestion.questionId);
       setDeletingQuestion(null);
       refetchQs();
     } catch (err) { console.error('Delete question failed:', err); }
@@ -250,30 +273,34 @@ export default function Jobs() {
 
   const totalPoints = useMemo(() => questions.reduce((sum, q) => sum + (q.points || 0), 0), [questions]);
 
-  const assessmentColumns = [
+  const skillAssessmentColumns = [
     { key: 'userName', label: 'Talent', render: (row) => row.userName || row.userId || 'Unknown' },
     { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-    { key: 'score', label: 'Score', render: (row) => `${row.score || 0}/${row.totalPoints || 0}` },
+    { key: 'scorePercent', label: 'Score', render: (row) => `${row.scorePercent ? row.scorePercent.toFixed(1) : 0}%` },
     { key: 'startedAt', label: 'Started', render: (row) => formatDate(row.startedAt) },
-    { key: 'completedAt', label: 'Completed', render: (row) => row.completedAt ? formatDate(row.completedAt) : '-' },
+    { key: 'submittedAt', label: 'Submitted', render: (row) => row.submittedAt ? formatDate(row.submittedAt) : '-' },
   ];
 
   return (
     <div>
       <Header title="Job Management" onSearch={activeTab === 'jobs' ? setSearch : undefined} />
-      <Tabs tabs={[
-        { key: 'jobs', label: 'Jobs' },
-        { key: 'assessments', label: 'Assessments' },
-      ]} activeTab={activeTab} onChange={(t) => { setActiveTab(t); setSelectedCategory(null); }} />
+      <Tabs
+        tabs={[
+          { key: 'jobs', label: 'Jobs' },
+          { key: 'assessments', label: 'Assessments' },
+        ]}
+        activeTab={activeTab}
+        onChange={(t) => { setActiveTab(t); setSelectedCategory(null); }}
+      />
 
       {activeTab === 'jobs' && (
         <>
           <div className="card">
             <div className="card-header">
               <FilterBar filters={filterDefs} values={fil} onChange={(key, value) => setFil((p) => ({ ...p, [key]: value }))} />
-              {can('manageSettings') && (
+              {can('manageSkills') && (
                 <button className="btn btn-outline btn-sm" onClick={() => setShowCatModal(true)}>
-                  Manage Categories
+                  Manage Skills
                 </button>
               )}
             </div>
@@ -283,57 +310,144 @@ export default function Jobs() {
           </div>
 
           {showCatModal && (
-            <div className="modal-overlay" onClick={() => { setShowCatModal(false); setEditingCat(null); setCatForm({ name: '', description: '' }); }}>
+            <div className="modal-overlay" onClick={() => { setShowCatModal(false); setEditingCat(null); setCatForm({ name: '', description: '', icon: '' }); setShowIconPicker(false); }}>
               <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
                 <div className="modal-header">
-                  <h3>Manage Categories</h3>
-                  <button className="modal-close" onClick={() => { setShowCatModal(false); setEditingCat(null); setCatForm({ name: '', description: '' }); }}>
+                  <h3>Manage Skills</h3>
+                  <button className="modal-close" onClick={() => { setShowCatModal(false); setEditingCat(null); setCatForm({ name: '', description: '', icon: '' }); setShowIconPicker(false); }}>
                     <X size={16} />
                   </button>
                 </div>
                 <div className="modal-body">
                   <div className="form-section" style={{ marginBottom: '1.5rem', padding: '1rem', background: 'var(--color-surface)', borderRadius: 'var(--radius-md)' }}>
-                    <h4 className="text-sm font-semibold mb-3">{editingCat ? `Edit: ${editingCat.name}` : 'Add New Category'}</h4>
+                    <h4 className="text-sm font-semibold mb-3">{editingCat ? `Edit: ${editingCat.skillName}` : 'Add New Skill'}</h4>
                     <div className="form-row">
                       <div className="form-group">
-                        <label className="form-label">Name</label>
-                        <input className="form-input" placeholder="e.g. Landscaping" value={catForm.name} onChange={(e) => setCatForm((p) => ({ ...p, name: e.target.value }))} />
+                        <label className="form-label">Skill Name</label>
+                        <input className="form-input" placeholder="e.g. Electrical" value={catForm.name} onChange={(e) => setCatForm((p) => ({ ...p, name: e.target.value }))} />
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Description</label>
-                        <input className="form-input" placeholder="Brief description" value={catForm.description} onChange={(e) => setCatForm((p) => ({ ...p, description: e.target.value }))} />
-                      </div>
+                    <div className="form-group" style={{ position: 'relative' }}>
+                      <label className="form-label">Icon</label>
+                      <button
+                        type="button"
+                        className="form-input"
+                        onClick={() => setShowIconPicker((v) => !v)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', textAlign: 'left' }}
+                      >
+                        {(() => {
+                          const opt = SKILL_ICON_OPTIONS.find((o) => o.name === catForm.icon);
+                          if (opt) { const Icon = opt.Icon; return <><Icon size={18} style={{ color: 'var(--color-accent)' }} /> <span>{opt.name}</span></>; }
+                          if (catForm.icon) {
+                            const isImg = /^https?:\/\//i.test(catForm.icon) || catForm.icon.startsWith('/') || catForm.icon.startsWith('data:');
+                            return (
+                              <>
+                                {isImg ? (
+                                  <img src={catForm.icon} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />
+                                ) : (
+                                  <span style={{ fontSize: 18 }}>{catForm.icon}</span>
+                                )}
+                                <span style={{ color: 'var(--color-text-muted)' }}>{isImg ? 'Custom icon' : catForm.icon}</span>
+                              </>
+                            );
+                          }
+                          return <span style={{ color: 'var(--color-text-muted)' }}>Choose icon...</span>;
+                        })()}
+                      </button>
+                      {showIconPicker && (
+                        <>
+                          <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.4)' }} onClick={() => setShowIconPicker(false)} />
+                          <div style={{
+                            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', zIndex: 301,
+                            background: 'var(--color-bg)', border: '1px solid var(--color-border)',
+                            borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)', padding: '1rem',
+                            maxHeight: '80vh', overflowY: 'auto', width: 'fit-content', maxWidth: '90vw',
+                          }}>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 40px)', gap: '0.5rem' }}>
+                              <button
+                                type="button"
+                                title="No icon"
+                                onClick={() => { setCatForm((p) => ({ ...p, icon: '' })); setShowIconPicker(false); }}
+                                style={{
+                                  width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                                  border: !catForm.icon ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                                  background: !catForm.icon ? 'rgba(199, 90, 27, 0.08)' : 'var(--color-surface)',
+                                  color: 'var(--color-text-muted)', fontSize: 18,
+                                }}
+                              >
+                                <X size={16} />
+                              </button>
+                              {SKILL_ICON_OPTIONS.map(({ name, Icon }) => (
+                                <button
+                                  key={name}
+                                  type="button"
+                                  title={name}
+                                  onClick={() => { setCatForm((p) => ({ ...p, icon: name })); setShowIconPicker(false); }}
+                                  style={{
+                                    width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    borderRadius: 'var(--radius-md)', cursor: 'pointer',
+                                    border: catForm.icon === name ? '2px solid var(--color-accent)' : '1px solid var(--color-border)',
+                                    background: catForm.icon === name ? 'rgba(199, 90, 27, 0.08)' : 'var(--color-surface)',
+                                    color: catForm.icon === name ? 'var(--color-accent)' : 'var(--color-text-muted)',
+                                  }}
+                                >
+                                  <Icon size={18} />
+                                </button>
+                              ))}
+                            </div>
+                            <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--color-border)' }}>
+                              <label className="btn btn-outline btn-sm" style={{ width: '100%', justifyContent: 'center', cursor: 'pointer', display: 'flex' }}>
+                                Upload custom icon
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  style={{ display: 'none' }}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    const reader = new FileReader();
+                                    reader.onload = () => {
+                                      setCatForm((p) => ({ ...p, icon: reader.result }));
+                                      setShowIconPicker(false);
+                                    };
+                                    reader.readAsDataURL(file);
+                                    e.target.value = '';
+                                  }}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
                     </div>
                     <div className="flex gap-2 mt-2">
                       <button className="btn btn-sm btn-primary" onClick={handleSaveCat}>
                         <Save size={14} /> {editingCat ? 'Update' : 'Add'}
                       </button>
                       {editingCat && (
-                        <button className="btn btn-sm btn-outline" onClick={() => { setEditingCat(null); setCatForm({ name: '', description: '' }); }}>
+                        <button className="btn btn-sm btn-outline" onClick={() => { setEditingCat(null); setCatForm({ name: '', description: '', icon: '' }); setShowIconPicker(false); }}>
                           Cancel
                         </button>
                       )}
                     </div>
                   </div>
-                  {allCategories.map((cat) => (
-                    <div key={cat.id} className="flex justify-between items-center py-2" style={{ borderBottom: '1px solid var(--color-border)' }}>
-                      <div>
-                        <div className="font-medium text-sm">{cat.name}</div>
-                        <div className="text-xs text-muted">{cat.description}{cat.description ? ' · ' : ''}{cat.jobCount || 0} job(s)</div>
+                  {allSkills.map((skill) => (
+<div key={skill.skillId} className="flex justify-between items-center py-2" style={{ borderBottom: '1px solid var(--color-border)' }}>
+                        <div className="font-medium text-sm">{skill.skillName}</div>
+                        <div className="flex gap-1">
+                          <button className="btn btn-sm btn-outline" onClick={() => openEditCat(skill)}><Pencil size={13} /></button>
+                          <button className="btn btn-sm btn-danger" onClick={() => setDeletingCat(skill)}><Trash2 size={13} /></button>
+                        </div>
                       </div>
-                      <div className="flex gap-1">
-                        <button className="btn btn-sm btn-outline" onClick={() => openEditCat(cat)}><Pencil size={13} /></button>
-                        <button className="btn btn-sm btn-danger" onClick={() => setDeletingCat(cat)}><Trash2 size={13} /></button>
-                      </div>
-                    </div>
                   ))}
                 </div>
               </div>
             </div>
           )}
 
-          <ConfirmModal open={!!deletingCat} title="Delete Category"
-            message={`Delete "${deletingCat?.name}"?`}
+          <ConfirmModal open={!!deletingCat} title="Delete Skill"
+            message={`Delete "${deletingCat?.skillName}"?`}
             confirmLabel="Delete" variant="danger" onConfirm={handleDeleteCat} onCancel={() => setDeletingCat(null)} />
         </>
       )}
@@ -343,27 +457,43 @@ export default function Jobs() {
           {!selectedCategory ? (
             <>
               <div className={styles.toolbar}>
-                <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>Assessment Overview</h3>
+                <h3 style={{ margin: 0, fontSize: '0.9375rem', fontWeight: 600 }}>Skills Overview</h3>
               </div>
               <div className="card">
                 <div className="card-body">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
-                    {categoryAnalytics.map((cat) => (
-                      <div key={cat.id} className={styles.categoryCard} onClick={() => setSelectedCategory(cat)}>
-                        <div className={styles.categoryCardIcon}><ClipboardCheck size={24} /></div>
-                        <div className={styles.categoryCardName}>{cat.name}</div>
-                        <div className={styles.categoryCardDesc}>{cat.description}</div>
+                    {skillAnalytics.map((skill) => (
+                      <div key={skill.skillId} className={styles.categoryCard} onClick={() => setSelectedCategory(skill)}>
+                        <div className={styles.categoryCardIcon}>
+                          {skill.icon ? (
+                            /^https?:\/\//i.test(skill.icon) || skill.icon.startsWith('/') || skill.icon.startsWith('data:') ? (
+                              <img src={skill.icon} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
+                            ) : (() => {
+                              const normalized = skill.icon.toLowerCase().replace(/[-_\s]/g, '');
+                              const lucideMatch = Object.keys(lucideIcons).find(k => k.toLowerCase() === normalized);
+                              if (lucideMatch) {
+                                const Icon = lucideIcons[lucideMatch];
+                                return <Icon size={24} />;
+                              }
+                              return <span style={{ fontSize: 24 }} role="img" aria-label={skill.icon}>{skill.icon}</span>;
+                            })()
+                          ) : (
+                            <BookOpen size={24} />
+                          )}
+                        </div>
+                        <div className={styles.categoryCardName}>{skill.skillName}</div>
+                        <div className={styles.categoryCardDesc}>{skill.description}</div>
                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
                           <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
-                            {cat.questionCount} questions
+                            {skill.questionCount} questions
                           </span>
                           <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
-                            {cat.totalPoints} pts
+                            {skill.totalPoints} pts
                           </span>
                         </div>
                         <div className={styles.categoryCardMeta}>
-                          <span>{cat.submissionCount} taken</span>
-                          {cat.submissionCount > 0 && (<><span>{cat.avgScore}% avg</span><span>{cat.passed}/{cat.submissionCount} passed</span></>)}
+                          <span>{skill.submissionCount} assessments</span>
+                          {skill.submissionCount > 0 && (<><span>{skill.avgScore}% avg</span><span>{skill.passed}/{skill.submissionCount} passed</span></>)}
                         </div>
                       </div>
                     ))}
@@ -375,23 +505,23 @@ export default function Jobs() {
             <>
               <div className={styles.toolbar}>
                 <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowQuestionForm(false); setEditingQuestion(null); }}>
-                  <ChevronLeft size={16} /> All Categories
+                  <ChevronLeft size={16} /> All Skills
                 </button>
                 <div className={styles.toolbarStats}>
                   <span>{questions.length} questions</span>
                   <span>{totalPoints} total points</span>
-                  <span>{categoryAssessments.length} submissions</span>
+                  <span>{skillAssessments.length} assessments</span>
                 </div>
               </div>
 
-              <Tabs tabs={[{ key: 'questions', label: 'Questions' }, { key: 'submissions', label: 'Submissions' }]} activeTab={qTab} onChange={setQTab} />
+              <Tabs tabs={[{ key: 'questions', label: 'Questions' }, { key: 'assessments', label: 'Assessments' }]} activeTab={qTab} onChange={setQTab} />
 
               <div className="tab-content">
                 {qTab === 'questions' && (
                   <div className="card">
                     <div className="card-header">
                       <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
-                      {can('manageQuestions') && (
+                      {can('manageAssessmentQuestions') && (
                         <button className="btn btn-accent btn-sm" onClick={openNewForm}>
                           <Plus size={15} /> Add Question
                         </button>
@@ -479,11 +609,11 @@ export default function Jobs() {
                       ) : (
                         <div className={styles.questionList}>
                           {questions.map((q) => (
-                            <div key={q.id} className={styles.questionItem}>
+                            <div key={q.questionId} className={styles.questionItem}>
                               <div className={styles.questionItemTop}>
-                                <div className={styles.questionItemText}>{q.question || q.text}</div>
+                                <div className={styles.questionItemText}>{q.questionText}</div>
                                 <div className={styles.questionItemActions}>
-                                  {can('manageQuestions') && (
+                                  {can('manageAssessmentQuestions') && (
                                     <>
                                       <button className="btn btn-ghost btn-sm" onClick={() => openEditForm(q)}><Pencil size={13} /></button>
                                       <button className="btn btn-ghost btn-sm" onClick={() => setDeletingQuestion(q)}><Trash2 size={13} /></button>
@@ -492,10 +622,19 @@ export default function Jobs() {
                                 </div>
                               </div>
                               <div className={styles.questionItemMeta}>
-                                <span className={styles.qBadge}>{QUESTION_TYPES.find((t) => t.value === q.type)?.label}</span>
+                                <span className={styles.qBadge}>{q.category}</span>
                                 <span className={styles.qBadge}>{q.points} pts</span>
-                                {q.correctAnswer && <span className={styles.qBadge}>Ans: {q.correctAnswer}</span>}
+                                {q.answerKey && <span className={styles.qBadge}>Has Answer Key</span>}
                               </div>
+                              {q.choices?.length > 0 && (
+                                <div className={styles.questionItemOptions}>
+                                  {q.choices.map((c, i) => (
+                                    <span key={i} className={`${styles.optionPill} ${q.answerKey?.correctChoiceId === c.choiceId ? styles.optionCorrect : ''}`}>
+                                      {q.answerKey?.correctChoiceId === c.choiceId && '✓ '}{c.choiceText}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -504,22 +643,22 @@ export default function Jobs() {
                   </div>
                 )}
 
-                {qTab === 'submissions' && (
-                  <div className="card">
-                    <div className="card-body p-0">
-                      <DataTable columns={assessmentColumns} data={categoryAssessments} pageSize={10} emptyMessage="No submissions" />
-                    </div>
+{qTab === 'assessments' && (
+                <div className="card">
+                  <div className="card-body p-0">
+                    <DataTable columns={skillAssessmentColumns} data={skillAssessments} pageSize={10} emptyMessage="No attempts" />
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               <ConfirmModal open={!!deletingQuestion} title="Delete Question"
                 message={`Remove this question?`}
                 confirmLabel="Delete" variant="danger" onConfirm={handleDeleteQuestion} onCancel={() => setDeletingQuestion(null)} />
-            </>
-          )}
-        </>
-      )}
-    </div>
-  );
+            </div>
+          </>
+        )}
+      </>
+    )}
+  </div>
+);
 }

@@ -49,8 +49,8 @@ async function getStats(req, res) {
     safeQuery(supabase.from('transactions').select('*', { count: 'exact', head: true })),
     safeQuery(supabase.from('id_verifications').select('*', { count: 'exact', head: true }).eq('status', 'pending')),
     safeQuery(supabase.from('appeals').select('*', { count: 'exact', head: true }).eq('status', 'pending')),
-    safeQuery(supabase.from('gawa_points_transactions').select('points').in('type', ['purchase', 'issued'])),
-    safeQuery(supabase.from('gawa_points_transactions').select('points').in('type', ['consumed', 'deducted'])),
+    safeQuery(supabase.from('gawa_points_transactions').select('amount').in('transaction_type', ['credit'])),
+    safeQuery(supabase.from('gawa_points_transactions').select('amount').in('transaction_type', ['proposal_charge'])),
     safeQuery(supabase.from('incident_logs').select('*', { count: 'exact', head: true })
       .gte('created_at', new Date(now.getFullYear(), now.getMonth(), 1).toISOString())),
     safeQuery(supabase.from('transactions').select('amount, created_at')
@@ -100,8 +100,8 @@ async function getStats(req, res) {
   }));
 
   // Compute gawa points totals
-  const totalGawaPointsPurchased = (purchasedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
-  const totalGawaPointsConsumed = (consumedData.data || []).reduce((s, r) => s + Math.abs(r.points), 0);
+  const totalGawaPointsPurchased = (purchasedData.data || []).reduce((s, r) => s + Math.abs(r.amount), 0);
+  const totalGawaPointsConsumed = (consumedData.data || []).reduce((s, r) => s + Math.abs(r.amount), 0);
   const outstandingGawaPoints = totalGawaPointsPurchased - totalGawaPointsConsumed;
 
   // Count flagged content

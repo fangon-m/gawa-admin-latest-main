@@ -4,9 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import * as gawaPointsApi from '../api/gawaPoints';
-import * as feeConfigApi from '../api/feeConfig';
 import * as usersApi from '../api/users';
-import * as walletsApi from '../api/wallets';
 import { formatDate, formatCurrency, formatNumber } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
@@ -15,15 +13,10 @@ import StatusBadge from '../components/common/StatusBadge';
 import StatCard from '../components/common/StatCard';
 import ConfirmModal from '../components/common/ConfirmModal';
 import {
-  Star, ArrowRight, RotateCcw, PhilippinePeso, Check, X, Plus, Minus, Save, Settings2,
+  Star, ArrowRight, RotateCcw, PhilippinePeso, Check, X, Plus, Minus, Save,
 } from 'lucide-react';
 
-const emptyPackForm = { name: '', points: '', price: '', description: '' };
-
-const emptyFeeForm = {
-  name: '', proposalGpCost: '50', platformFeePercent: '2.5', gpConversionRate: '1.0',
-  listingFee: '0', rentalCommission: '10',
-};
+const emptyPackForm = { displayName: '', points: '', pricePhp: '', description: '', costPerPoint: '', sortOrder: '' };
 
 const modalStyles = {
   overlay: {
@@ -52,16 +45,10 @@ export default function GawaPoints() {
   const { data: transactions, refetch: refetchTxns } = useApiData(() => gawaPointsApi.listTransactions({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
-  const { data: feeConfigs, refetch: refetchFees } = useApiData(() => feeConfigApi.list(), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
-  const { data: activeFee } = useApiData(() => feeConfigApi.getActive(), [], {
-    defaultValue: null, transform: (r) => r?.data ?? r,
-  });
   const { data: allUsers } = useApiData(() => usersApi.list({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
-  const { data: wallets, refetch: refetchWallets } = useApiData(() => walletsApi.list({ limit: 100 }), [], {
+  const { data: wallets, refetch: refetchWallets } = useApiData(() => gawaPointsApi.listWallets({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
@@ -71,25 +58,24 @@ export default function GawaPoints() {
   const [doDeletePack] = useMutation(gawaPointsApi.deletePack);
   const [doIssuePoints] = useMutation(gawaPointsApi.issuePoints);
   const [doDeductPoints] = useMutation(gawaPointsApi.deductPoints);
-  const [doCreateFee] = useMutation(feeConfigApi.create);
-  const [doUpdateFee] = useMutation(feeConfigApi.update);
-  const [doDeleteFee] = useMutation(feeConfigApi.remove);
-  const [doSetActiveFee] = useMutation(feeConfigApi.setActive);
-  const [doAdjustWallet] = useMutation(walletsApi.adjustBalance);
 
   // === Derived stats ===
   const dashStats = useMemo(() => {
-    const purchased = transactions.filter(t => t.type === 'purchase' || t.type === 'issued').reduce((s, t) => s + Math.abs(t.points || 0), 0);
-    const consumed = transactions.filter(t => t.type === 'consumed' || t.type === 'deducted').reduce((s, t) => s + Math.abs(t.points || 0), 0);
+    const purchased = transactions.filter(t => t.transactionType === 'credit' || t.transactionType === 'purchase').reduce((s, t) => s + Math.abs(t.amount || 0), 0);
+    const consumed = transactions.filter(t => t.transactionType === 'proposal_charge' || t.transactionType === 'deducted' || t.transactionType === 'consumed').reduce((s, t) => s + Math.abs(t.amount || 0), 0);
+    const refunded = transactions.filter(t => t.transactionType === 'refund').reduce((s, t) => s + Math.abs(t.amount || 0), 0);
     return {
       totalGawaPointsPurchased: purchased,
       totalGawaPointsConsumed: consumed,
-      totalGawaPointsRefunded: 0,
-      outstandingGawaPoints: purchased - consumed,
+      totalGawaPointsRefunded: refunded,
+      outstandingGawaPoints: purchased - consumed - refunded,
     };
   }, [transactions]);
 
-  const userOptions = useMemo(() => allUsers.filter((u) => !['admin', 'customer_support'].includes(u.role)), [allUsers]);
+  const userOptions = useMemo(() => {
+    const walletUserIds = new Set(wallets.map(w => w.userId));
+    return allUsers.filter((u) => !['admin', 'customer_support'].includes(u.role) && walletUserIds.has(u.id));
+  }, [allUsers, wallets]);
 
   // === Modal state ===
   const [showCreate, setShowCreate] = useState(false);
@@ -99,17 +85,9 @@ export default function GawaPoints() {
   const [deletingPack, setDeletingPack] = useState(null);
   const [togglingPack, setTogglingPack] = useState(null);
   const [showIssue, setShowIssue] = useState(false);
-  const [issueForm, setIssueForm] = useState({ userId: '', points: '', reason: '' });
+  const [issueForm, setIssueForm] = useState({ userId: '', amount: '', reason: '' });
   const [showDeduct, setShowDeduct] = useState(false);
-  const [deductForm, setDeductForm] = useState({ userId: '', points: '', reason: '' });
-  const [showFeeCreate, setShowFeeCreate] = useState(false);
-  const [feeCreateForm, setFeeCreateForm] = useState({ ...emptyFeeForm });
-  const [editingFee, setEditingFee] = useState(null);
-  const [feeEditForm, setFeeEditForm] = useState({ ...emptyFeeForm });
-  const [deletingFee, setDeletingFee] = useState(null);
-  const [activatingFee, setActivatingFee] = useState(null);
-  const [adjustingWallet, setAdjustingWallet] = useState(null);
-  const [adjustForm, setAdjustForm] = useState({ amount: '', description: '' });
+  const [deductForm, setDeductForm] = useState({ userId: '', amount: '', reason: '' });
 
   const showMsg = (text, type = 'success') => {
     setMessage({ text, type });
@@ -119,34 +97,38 @@ export default function GawaPoints() {
   const refetchAll = useCallback(() => {
     refetchPacks();
     refetchTxns();
-    refetchFees();
-  }, [refetchPacks, refetchTxns, refetchFees]);
+    refetchWallets();
+  }, [refetchPacks, refetchTxns, refetchWallets]);
 
   // === Pack handlers ===
   const handleCreatePack = async (e) => {
     e.preventDefault();
     try {
       await doCreatePack({
-        name: createForm.name,
+        displayName: createForm.displayName,
         points: parseInt(createForm.points),
-        price: parseFloat(createForm.price),
+        pricePhp: parseFloat(createForm.pricePhp),
         description: createForm.description,
+        costPerPoint: createForm.costPerPoint ? parseFloat(createForm.costPerPoint) : undefined,
+        sortOrder: createForm.sortOrder ? parseInt(createForm.sortOrder) : undefined,
       });
       setShowCreate(false);
       setCreateForm({ ...emptyPackForm });
       refetchPacks();
-      showMsg(`Pack "${createForm.name}" created`);
+      showMsg(`Pack "${createForm.displayName}" created`);
     } catch (err) { console.error('Create pack failed:', err); }
   };
 
   const handleEditPack = async (e) => {
     e.preventDefault();
     try {
-      await doUpdatePack(editingPack.id, {
-        name: editForm.name,
+      await doUpdatePack(editingPack.packId, {
+        displayName: editForm.displayName,
         points: parseInt(editForm.points),
-        price: parseFloat(editForm.price),
+        pricePhp: parseFloat(editForm.pricePhp),
         description: editForm.description,
+        costPerPoint: editForm.costPerPoint ? parseFloat(editForm.costPerPoint) : undefined,
+        sortOrder: editForm.sortOrder ? parseInt(editForm.sortOrder) : undefined,
       });
       setEditingPack(null);
       refetchPacks();
@@ -156,150 +138,70 @@ export default function GawaPoints() {
 
   const handleDeletePack = async () => {
     try {
-      await doDeletePack(deletingPack.id);
+      await doDeletePack(deletingPack.packId);
       setDeletingPack(null);
       refetchPacks();
-      showMsg(`Pack "${deletingPack.name}" deleted`);
+      showMsg(`Pack "${deletingPack.displayName}" deleted`);
     } catch (err) { console.error('Delete pack failed:', err); }
   };
 
   const handleTogglePack = async () => {
     const pack = togglingPack;
     try {
-      await doUpdatePack(pack.id, { isActive: !pack.isActive });
+      await doUpdatePack(pack.packId, { isActive: !pack.isActive });
       setTogglingPack(null);
       refetchPacks();
-      showMsg(`Pack "${pack.name}" ${pack.isActive ? 'deactivated' : 'activated'}`);
+      showMsg(`Pack "${pack.displayName}" ${pack.isActive ? 'deactivated' : 'activated'}`);
     } catch (err) { console.error('Toggle pack failed:', err); }
   };
 
   const openEditPack = (pack) => {
     setEditingPack(pack);
     setEditForm({
-      name: pack.name,
+      displayName: pack.displayName,
       points: String(pack.points),
-      price: String(pack.price),
+      pricePhp: String(pack.pricePhp),
       description: pack.description || '',
+      costPerPoint: pack.costPerPoint ? String(pack.costPerPoint) : '',
+      sortOrder: pack.sortOrder ? String(pack.sortOrder) : '',
     });
   };
 
   const handleIssue = async (e) => {
     e.preventDefault();
-    const pts = parseInt(issueForm.points);
-    if (!issueForm.userId || !pts || pts <= 0) return;
+    const amt = parseInt(issueForm.amount);
+    if (!issueForm.userId || !amt || amt <= 0) return;
     try {
-      await doIssuePoints({ userId: issueForm.userId, points: pts, description: issueForm.reason });
+      await doIssuePoints({ userId: issueForm.userId, amount: amt, reason: issueForm.reason });
       setShowIssue(false);
-      setIssueForm({ userId: '', points: '', reason: '' });
+      setIssueForm({ userId: '', amount: '', reason: '' });
       refetchTxns();
-      showMsg(`Issued ${pts} GP`);
+      refetchWallets();
+      showMsg(`Issued ${amt} GP`);
     } catch (err) { console.error('Issue points failed:', err); }
   };
 
   const handleDeduct = async (e) => {
     e.preventDefault();
-    const pts = parseInt(deductForm.points);
-    if (!deductForm.userId || !pts || pts <= 0) return;
+    const amt = parseInt(deductForm.amount);
+    if (!deductForm.userId || !amt || amt <= 0) return;
     try {
-      await doDeductPoints({ userId: deductForm.userId, points: pts, description: deductForm.reason });
+      await doDeductPoints({ userId: deductForm.userId, amount: amt, reason: deductForm.reason });
       setShowDeduct(false);
-      setDeductForm({ userId: '', points: '', reason: '' });
+      setDeductForm({ userId: '', amount: '', reason: '' });
       refetchTxns();
-      showMsg(`Deducted ${pts} GP`);
-    } catch (err) { console.error('Deduct points failed:', err); }
-  };
-
-  // === Fee config handlers ===
-  const handleCreateFee = async (e) => {
-    e.preventDefault();
-    try {
-      await doCreateFee({
-        name: feeCreateForm.name,
-        proposalGpCost: parseFloat(feeCreateForm.proposalGpCost) || 0,
-        platformFeePercent: parseFloat(feeCreateForm.platformFeePercent) || 0,
-        gpConversionRate: parseFloat(feeCreateForm.gpConversionRate) || 0,
-        listingFee: parseFloat(feeCreateForm.listingFee) || 0,
-        rentalCommission: parseFloat(feeCreateForm.rentalCommission) || 0,
-      });
-      setShowFeeCreate(false);
-      setFeeCreateForm({ ...emptyFeeForm });
-      refetchFees();
-      showMsg(`Fee config "${feeCreateForm.name}" created`);
-    } catch (err) { console.error('Create fee config failed:', err); }
-  };
-
-  const handleEditFee = async (e) => {
-    e.preventDefault();
-    try {
-      await doUpdateFee(editingFee.id, {
-        name: feeEditForm.name,
-        proposalGpCost: parseFloat(feeEditForm.proposalGpCost) || 0,
-        platformFeePercent: parseFloat(feeEditForm.platformFeePercent) || 0,
-        gpConversionRate: parseFloat(feeEditForm.gpConversionRate) || 0,
-        listingFee: parseFloat(feeEditForm.listingFee) || 0,
-        rentalCommission: parseFloat(feeEditForm.rentalCommission) || 0,
-      });
-      setEditingFee(null);
-      refetchFees();
-      showMsg('Fee config updated');
-    } catch (err) { console.error('Edit fee config failed:', err); }
-  };
-
-  const handleDeleteFee = async () => {
-    try {
-      await doDeleteFee(deletingFee.id);
-      setDeletingFee(null);
-      refetchFees();
-      showMsg(`Fee config "${deletingFee.name}" deleted`);
-    } catch {
-      showMsg('Cannot delete the active fee config.', 'error');
-      setDeletingFee(null);
-    }
-  };
-
-  const handleSetActiveFee = async () => {
-    try {
-      await doSetActiveFee(activatingFee.id);
-      setActivatingFee(null);
-      refetchFees();
-      showMsg(`"${activatingFee.name}" is now active`);
-    } catch (err) { console.error('Set active fee failed:', err); }
-  };
-
-  const openAdjustWallet = (wallet) => {
-    setAdjustingWallet(wallet);
-    setAdjustForm({ amount: '', description: '' });
-  };
-
-  const handleAdjustWallet = async (e) => {
-    e.preventDefault();
-    const amount = parseFloat(adjustForm.amount);
-    if (!amount || !adjustForm.description.trim()) return;
-    try {
-      await doAdjustWallet(adjustingWallet.walletId, { amount, description: adjustForm.description.trim() });
-      setAdjustingWallet(null);
       refetchWallets();
-      showMsg(`Wallet balance adjusted by ${amount > 0 ? '+' : ''}${amount}`);
-    } catch (err) { showMsg(err?.error || 'Failed to adjust balance', 'error'); }
-  };
-
-  const openEditFee = (cfg) => {
-    setEditingFee(cfg);
-    setFeeEditForm({
-      name: cfg.name,
-      proposalGpCost: String(cfg.proposalGpCost),
-      platformFeePercent: String(cfg.platformFeePercent),
-      gpConversionRate: String(cfg.gpConversionRate),
-      listingFee: String(cfg.listingFee),
-      rentalCommission: String(cfg.rentalCommission),
-    });
+      showMsg(`Deducted ${amt} GP`);
+    } catch (err) { console.error('Deduct points failed:', err); }
   };
 
   // === Table columns ===
   const packCols = [
-    { key: 'name', label: 'Pack Name' },
+    { key: 'displayName', label: 'Pack Name' },
     { key: 'points', label: 'Points', render: (row) => <strong>{formatNumber(row.points)}</strong> },
-    { key: 'price', label: 'Price', render: (row) => formatCurrency(row.price) },
+    { key: 'pricePhp', label: 'Price (PHP)', render: (row) => formatCurrency(row.pricePhp) },
+    { key: 'costPerPoint', label: 'Cost/Point', render: (row) => row.costPerPoint ? `PHP ${row.costPerPoint.toFixed(2)}` : '—' },
+    { key: 'sortOrder', label: 'Sort Order', render: (row) => row.sortOrder ?? '—' },
     { key: 'description', label: 'Description' },
     { key: 'isActive', label: 'Active', render: (row) => row.isActive ? <Check size={16} color="var(--color-success)" /> : <X size={16} color="var(--color-error)" /> },
     { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt) },
@@ -319,12 +221,12 @@ export default function GawaPoints() {
   ];
 
   const txnCols = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.displayId || row.id?.slice(0, 8)}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.id?.slice(0, 8)}</span> },
     { key: 'userName', label: 'User' },
-    { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
-    { key: 'points', label: 'Points', render: (row) => (
-      <span style={{ color: (row.points || 0) > 0 ? 'var(--color-success)' : 'var(--color-error)', fontWeight: 600 }}>
-        {(row.points || 0) > 0 ? '+' : ''}{row.points}
+    { key: 'transactionType', label: 'Type', render: (row) => <StatusBadge status={row.transactionType} /> },
+    { key: 'amount', label: 'Amount', render: (row) => (
+      <span style={{ color: (row.amount || 0) > 0 ? 'var(--color-success)' : 'var(--color-error)', fontWeight: 600 }}>
+        {(row.amount || 0) > 0 ? '+' : ''}{row.amount}
       </span>
     )},
     { key: 'description', label: 'Description' },
@@ -356,64 +258,18 @@ export default function GawaPoints() {
 
   const walletCols = [
     { key: 'userName', label: 'User' },
-    { key: 'balance', label: 'Balance', render: (row) => <strong>{formatCurrency(row.balance)}</strong> },
+    { key: 'userEmail', label: 'Email', render: (row) => <span className="text-sm text-muted">{row.userEmail}</span> },
+    { key: 'balance', label: 'Balance', render: (row) => <strong>{formatNumber(row.balance)} GP</strong> },
     { key: 'updatedAt', label: 'Last Updated', render: (row) => formatDate(row.updatedAt) },
     { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt) },
-    ...(can('viewFinance') ? [{
-      key: 'actions', label: 'Actions', render: (row) => (
-        <div className="table-actions">
-          <button className="btn btn-sm btn-outline" onClick={() => openAdjustWallet(row)}>Adjust Balance</button>
-        </div>
-      ),
-    }] : []),
   ];
 
   const tabs = [
     { key: 'packs', label: 'Points Packs' },
     { key: 'transactions', label: 'Transaction History' },
     { key: 'wallets', label: 'Wallets' },
-    { key: 'fee-config', label: 'Fee Configuration' },
     { key: 'metrics', label: 'Platform Metrics' },
   ];
-
-  const renderFeeConfigFields = (form, setter) => {
-    const set = (key) => (e) => setter((p) => ({ ...p, [key]: e.target.value }));
-    return (
-      <>
-        <div className="form-group">
-          <label className="form-label">Configuration Name</label>
-          <input className="form-input" placeholder="e.g. Default Rates" value={form.name} onChange={set('name')} required />
-        </div>
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">GP Cost per Proposal</label>
-            <input className="form-input" type="number" min="0" value={form.proposalGpCost} onChange={set('proposalGpCost')} />
-            <div className="form-hint">Gawa Points deducted per job proposal</div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Platform Fee (%)</label>
-            <input className="form-input" type="number" min="0" step="0.1" value={form.platformFeePercent} onChange={set('platformFeePercent')} />
-            <div className="form-hint">Percentage on all transactions</div>
-          </div>
-        </div>
-        <div className="form-row">
-          <div className="form-group">
-            <label className="form-label">GP Conversion Rate (PHP/GP)</label>
-            <input className="form-input" type="number" min="0" step="0.01" value={form.gpConversionRate} onChange={set('gpConversionRate')} />
-            <div className="form-hint">1 Gawa Point = X PHP</div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Listing Fee (GP)</label>
-            <input className="form-input" type="number" min="0" step="0.01" value={form.listingFee} onChange={set('listingFee')} />
-          </div>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Rental Commission (%)</label>
-          <input className="form-input" type="number" min="0" step="0.1" value={form.rentalCommission} style={{ maxWidth: 300 }} onChange={set('rentalCommission')} />
-        </div>
-      </>
-    );
-  };
 
   return (
     <div>
@@ -472,44 +328,6 @@ export default function GawaPoints() {
           </div>
         )}
 
-        {tab === 'fee-config' && (
-          <div>
-            {can('managePacks') && (
-              <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>
-                <button className="btn btn-accent" onClick={() => { setFeeCreateForm({ ...emptyFeeForm }); setShowFeeCreate(true); }}>
-                  <Plus size={16} /> Create Fee Config
-                </button>
-              </div>
-            )}
-            {activeFee && (
-              <div className="card mb-4">
-                <div className="card-header"><h3><Settings2 size={16} style={{ marginRight: 6 }} />Active Configuration: {activeFee.name}</h3></div>
-                <div className="card-body">
-                  <div className="fee-config-preview-grid">
-                    {[
-                      { label: 'GP Cost per Proposal', value: `${activeFee.proposalGpCost} GP` },
-                      { label: 'Platform Fee', value: `${activeFee.platformFeePercent}%` },
-                      { label: 'GP Conversion Rate', value: `PHP ${activeFee.gpConversionRate} / GP` },
-                      { label: 'Listing Fee', value: `${activeFee.listingFee} GP` },
-                      { label: 'Rental Commission', value: `${activeFee.rentalCommission}%` },
-                    ].map((item, i) => (
-                      <div key={i} className="fee-config-preview-item">
-                        <div className="fee-config-preview-label">{item.label}</div>
-                        <div className="fee-config-preview-value">{item.value}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="card">
-              <div className="card-body" style={{ padding: 0 }}>
-                <DataTable columns={feeCols} data={feeConfigs} pageSize={10} emptyMessage="No fee configurations." />
-              </div>
-            </div>
-          </div>
-        )}
-
         {tab === 'metrics' && (
           <div className="card">
             <div className="card-body">
@@ -526,16 +344,16 @@ export default function GawaPoints() {
 
       {can('issuePoints') && (
         <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-          <button className="btn btn-success" onClick={() => { setIssueForm({ userId: '', points: '', reason: '' }); setShowIssue(true); }}>
+          <button className="btn btn-success" onClick={() => { setIssueForm({ userId: '', amount: '', reason: '' }); setShowIssue(true); }}>
             <Plus size={16} /> Manual Issue Points
           </button>
-          <button className="btn btn-danger" onClick={() => { setDeductForm({ userId: '', points: '', reason: '' }); setShowDeduct(true); }}>
+          <button className="btn btn-danger" onClick={() => { setDeductForm({ userId: '', amount: '', reason: '' }); setShowDeduct(true); }}>
             <Minus size={16} /> Manual Deduct Points
           </button>
         </div>
       )}
 
-      {/* Modals (same structure as before, handlers now async) */}
+      {/* Modals */}
       {showCreate && (
         <div style={modalStyles.overlay} onClick={() => setShowCreate(false)}>
           <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
@@ -543,7 +361,7 @@ export default function GawaPoints() {
             <form onSubmit={handleCreatePack}>
               <div className="form-group">
                 <label className="form-label">Pack Name</label>
-                <input className="form-input" placeholder="e.g. Starter Pack" value={createForm.name} onChange={(e) => setCreateForm((p) => ({ ...p, name: e.target.value }))} required />
+                <input className="form-input" placeholder="e.g. Starter Pack" value={createForm.displayName} onChange={(e) => setCreateForm((p) => ({ ...p, displayName: e.target.value }))} required />
               </div>
               <div className="form-row">
                 <div className="form-group">
@@ -552,7 +370,17 @@ export default function GawaPoints() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Price (PHP)</label>
-                  <input className="form-input" type="number" min="0" step="0.01" placeholder="100" value={createForm.price} onChange={(e) => setCreateForm((p) => ({ ...p, price: e.target.value }))} required />
+                  <input className="form-input" type="number" min="0" step="0.01" placeholder="100" value={createForm.pricePhp} onChange={(e) => setCreateForm((p) => ({ ...p, pricePhp: e.target.value }))} required />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Cost per Point (PHP)</label>
+                  <input className="form-input" type="number" min="0" step="0.01" placeholder="Auto-calculated" value={createForm.costPerPoint} onChange={(e) => setCreateForm((p) => ({ ...p, costPerPoint: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Sort Order</label>
+                  <input className="form-input" type="number" min="0" placeholder="0" value={createForm.sortOrder} onChange={(e) => setCreateForm((p) => ({ ...p, sortOrder: e.target.value }))} />
                 </div>
               </div>
               <div className="form-group">
@@ -571,11 +399,11 @@ export default function GawaPoints() {
       {editingPack && (
         <div style={modalStyles.overlay} onClick={() => setEditingPack(null)}>
           <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={modalStyles.title}>Edit Pack: {editingPack.name}</div>
+            <div style={modalStyles.title}>Edit Pack: {editingPack.displayName}</div>
             <form onSubmit={handleEditPack}>
               <div className="form-group">
                 <label className="form-label">Pack Name</label>
-                <input className="form-input" value={editForm.name} onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))} required />
+                <input className="form-input" value={editForm.displayName} onChange={(e) => setEditForm((p) => ({ ...p, displayName: e.target.value }))} required />
               </div>
               <div className="form-row">
                 <div className="form-group">
@@ -584,7 +412,17 @@ export default function GawaPoints() {
                 </div>
                 <div className="form-group">
                   <label className="form-label">Price (PHP)</label>
-                  <input className="form-input" type="number" min="0" step="0.01" value={editForm.price} onChange={(e) => setEditForm((p) => ({ ...p, price: e.target.value }))} required />
+                  <input className="form-input" type="number" min="0" step="0.01" value={editForm.pricePhp} onChange={(e) => setEditForm((p) => ({ ...p, pricePhp: e.target.value }))} required />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label className="form-label">Cost per Point (PHP)</label>
+                  <input className="form-input" type="number" min="0" step="0.01" value={editForm.costPerPoint} onChange={(e) => setEditForm((p) => ({ ...p, costPerPoint: e.target.value }))} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Sort Order</label>
+                  <input className="form-input" type="number" min="0" value={editForm.sortOrder} onChange={(e) => setEditForm((p) => ({ ...p, sortOrder: e.target.value }))} />
                 </div>
               </div>
               <div className="form-group">
@@ -601,7 +439,7 @@ export default function GawaPoints() {
       )}
 
       <ConfirmModal open={!!deletingPack} title="Delete Points Pack"
-        message={`Are you sure you want to delete "${deletingPack?.name}"?`}
+        message={`Are you sure you want to delete "${deletingPack?.displayName}"?`}
         confirmLabel="Delete Pack" variant="danger" onConfirm={handleDeletePack} onCancel={() => setDeletingPack(null)} />
 
       {showIssue && (
@@ -620,7 +458,7 @@ export default function GawaPoints() {
               </div>
               <div className="form-group">
                 <label className="form-label">Points to Issue</label>
-                <input className="form-input" type="number" min="1" placeholder="e.g. 200" value={issueForm.points} onChange={(e) => setIssueForm((p) => ({ ...p, points: e.target.value }))} required />
+                <input className="form-input" type="number" min="1" placeholder="e.g. 200" value={issueForm.amount} onChange={(e) => setIssueForm((p) => ({ ...p, amount: e.target.value }))} required />
               </div>
               <div className="form-group">
                 <label className="form-label">Reason</label>
@@ -651,7 +489,7 @@ export default function GawaPoints() {
               </div>
               <div className="form-group">
                 <label className="form-label">Points to Deduct</label>
-                <input className="form-input" type="number" min="1" placeholder="e.g. 100" value={deductForm.points} onChange={(e) => setDeductForm((p) => ({ ...p, points: e.target.value }))} required />
+                <input className="form-input" type="number" min="1" placeholder="e.g. 100" value={deductForm.amount} onChange={(e) => setDeductForm((p) => ({ ...p, amount: e.target.value }))} required />
               </div>
               <div className="form-group">
                 <label className="form-label">Reason</label>
@@ -666,74 +504,14 @@ export default function GawaPoints() {
         </div>
       )}
 
-      {showFeeCreate && (
-        <div style={modalStyles.overlay} onClick={() => setShowFeeCreate(false)}>
-          <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={modalStyles.title}>Create Fee Configuration</div>
-            <form onSubmit={handleCreateFee}>
-              {renderFeeConfigFields(feeCreateForm, setFeeCreateForm)}
-              <div style={modalStyles.actions}>
-                <button type="button" className="btn btn-outline" onClick={() => setShowFeeCreate(false)}>Cancel</button>
-                <button type="submit" className="btn btn-accent"><Save size={16} /> Create Config</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {editingFee && (
-        <div style={modalStyles.overlay} onClick={() => setEditingFee(null)}>
-          <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={modalStyles.title}>Edit: {editingFee.name}</div>
-            <form onSubmit={handleEditFee}>
-              {renderFeeConfigFields(feeEditForm, setFeeEditForm)}
-              <div style={modalStyles.actions}>
-                <button type="button" className="btn btn-outline" onClick={() => setEditingFee(null)}>Cancel</button>
-                <button type="submit" className="btn btn-primary"><Save size={16} /> Save Changes</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      <ConfirmModal open={!!deletingFee} title="Delete Fee Configuration"
-        message={`Delete "${deletingFee?.name}"?`}
-        confirmLabel="Delete" variant="danger" onConfirm={handleDeleteFee} onCancel={() => setDeletingFee(null)} />
-      <ConfirmModal open={!!activatingFee} title="Set Active Configuration"
-        message={`Set "${activatingFee?.name}" as active?`}
-        confirmLabel="Set Active" variant="success" onConfirm={handleSetActiveFee} onCancel={() => setActivatingFee(null)} />
+      <ConfirmModal open={!!deletingPack} title="Delete Points Pack"
+        message={`Are you sure you want to delete "${deletingPack?.displayName}"?`}
+        confirmLabel="Delete Pack" variant="danger" onConfirm={handleDeletePack} onCancel={() => setDeletingPack(null)} />
       <ConfirmModal open={!!togglingPack} title={togglingPack?.isActive ? 'Deactivate Pack' : 'Activate Pack'}
-        message={`${togglingPack?.isActive ? 'Deactivate' : 'Activate'} "${togglingPack?.name}"?`}
+        message={`${togglingPack?.isActive ? 'Deactivate' : 'Activate'} "${togglingPack?.displayName}"?`}
         confirmLabel={togglingPack?.isActive ? 'Deactivate' : 'Activate'}
         variant={togglingPack?.isActive ? 'warning' : 'success'}
         onConfirm={handleTogglePack} onCancel={() => setTogglingPack(null)} />
-
-      {adjustingWallet && (
-        <div style={modalStyles.overlay} onClick={() => setAdjustingWallet(null)}>
-          <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={modalStyles.title}>Adjust Wallet Balance</div>
-            <div className="detail-field" style={{ marginBottom: '1rem' }}>
-              <div className="detail-label">{adjustingWallet.userName}</div>
-              <div className="detail-value">{formatCurrency(adjustingWallet.balance)}</div>
-            </div>
-            <form onSubmit={handleAdjustWallet}>
-              <div className="form-group">
-                <label className="form-label">Amount</label>
-                <input className="form-input" type="number" step="0.01" placeholder="e.g. 100 or -50" value={adjustForm.amount} onChange={(e) => setAdjustForm((p) => ({ ...p, amount: e.target.value }))} required />
-                <div className="form-hint">Use a negative number to deduct from the balance</div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Description</label>
-                <input className="form-input" placeholder="e.g. Correction for duplicate charge" value={adjustForm.description} onChange={(e) => setAdjustForm((p) => ({ ...p, description: e.target.value }))} required />
-              </div>
-              <div style={modalStyles.actions}>
-                <button type="button" className="btn btn-outline" onClick={() => setAdjustingWallet(null)}>Cancel</button>
-                <button type="submit" className="btn btn-accent">Apply Adjustment</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

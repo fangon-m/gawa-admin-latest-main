@@ -35,6 +35,8 @@ router.use('/matches/:matchId/completions', require('./tasks'));
 // Schema-aligned routes (migration 003 — new tables)
 router.use('/roles', require('./roles'));
 router.use('/skills', require('./skills'));
+router.use('/skill-assessments', require('./skillAssessments'));
+router.use('/assessment-questions', require('./assessmentQuestions'));
 router.use('/assessments-tests', require('./assessmentsTests'));
 router.use('/wallets', require('./wallets'));
 router.use('/flags', require('./flags'));

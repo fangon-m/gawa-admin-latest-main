@@ -75,6 +75,12 @@ const PERMISSIONS = {
   viewAssessmentAttempts: { admin: true, customer_support: true },
   grantRetakeException: { admin: true, customer_support: false },
 
+  // Skills & Assessment System
+  viewSkills: { admin: true, customer_support: true },
+  manageSkills: { admin: true, customer_support: false },
+  manageSkillAssessments: { admin: true, customer_support: false },
+  manageAssessmentQuestions: { admin: true, customer_support: false },
+
 };
 
 export function hasPermission(userRole, permission) {
