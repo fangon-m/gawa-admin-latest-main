@@ -1,5 +1,9 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const PROFILE_FIELDS = [
+  'email', 'phone', 'first_name', 'middle_name', 'last_name', 'birth_date',
+  'region', 'province', 'municipality', 'barangay', 'complete_address',
+];
 
 async function getSignedImageUrl(value) {
   if (!value) return value;
@@ -113,7 +117,7 @@ async function reviewVerification(req, res, { status, isVerified, remarks, messa
 
   const { data: verification, error: verificationError } = await supabase
     .from('id_verifications')
-    .select('verification_id, user_id')
+    .select(`verification_id, user_id, ${PROFILE_FIELDS.join(', ')}`)
     .eq('verification_id', req.params.id)
     .single();
 
@@ -121,15 +125,28 @@ async function reviewVerification(req, res, { status, isVerified, remarks, messa
 
   const { data: user, error: userLookupError } = await supabase
     .from('users_table')
-    .select('is_verified')
+    .select(`is_verified, ${PROFILE_FIELDS.join(', ')}`)
     .eq('id', verification.user_id)
     .single();
 
   if (userLookupError || !user) return res.status(404).json({ error: 'User not found' });
 
+  const profileUpdates = {};
+  if (isVerified) {
+    PROFILE_FIELDS.forEach(field => {
+      const currentValue = user[field];
+      const verificationValue = verification[field];
+      const isEmpty = currentValue == null || (typeof currentValue === 'string' && !currentValue.trim());
+      const hasVerificationValue = verificationValue != null
+        && (typeof verificationValue !== 'string' || verificationValue.trim());
+
+      if (isEmpty && hasVerificationValue) profileUpdates[field] = verificationValue;
+    });
+  }
+
   const { error: userUpdateError } = await supabase
     .from('users_table')
-    .update({ is_verified: isVerified })
+    .update({ is_verified: isVerified, ...profileUpdates })
     .eq('id', verification.user_id);
 
   if (userUpdateError) return res.status(500).json({ error: userUpdateError.message });
@@ -147,9 +164,11 @@ async function reviewVerification(req, res, { status, isVerified, remarks, messa
     .single();
 
   if (error || !data) {
+    const rollback = { is_verified: user.is_verified };
+    Object.keys(profileUpdates).forEach(field => { rollback[field] = user[field]; });
     await supabase
       .from('users_table')
-      .update({ is_verified: user.is_verified })
+      .update(rollback)
       .eq('id', verification.user_id);
     return res.status(error ? 500 : 404).json({ error: error?.message || 'Verification not found' });
   }
