@@ -67,6 +67,9 @@ const schemas = {
     email: z.string().email('Invalid email address'),
     role: z.enum(['admin', 'customer_support'], 'Role must be admin or customer_support'),
   }),
+  archiveUser: z.object({
+    reason: z.string().trim().min(1, 'Archive reason is required').max(500),
+  }),
 
   // Verifications
   reviewVerification: z.object({

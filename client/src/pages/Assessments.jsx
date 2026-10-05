@@ -13,6 +13,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
+import AssessmentQuestionImport from '../components/assessments/AssessmentQuestionImport';
 import { Plus, Pencil, Trash2, X, Save, ChevronLeft, ClipboardCheck, BookOpen, Zap, Wrench, Hammer } from 'lucide-react';
 import * as lucideIcons from 'lucide-react';
 import styles from './Assessments.module.css';
@@ -83,13 +84,14 @@ export default function Assessments() {
     setEditingQuestion(q);
     const opts = q.choices?.length ? q.choices.map(c => c.choiceText) : [''];
     while (opts.length < 4) opts.push('');
+    const correctAnswerText = q.choices?.find((c) => c.choiceId === q.answerKey?.correctChoiceId)?.choiceText || '';
     setQForm({
       question: q.questionText,
       questionType: 'multiple_choice',
       difficulty: 'beginner',
       points: q.points,
       options: opts,
-      correctAnswer: q.answerKey?.correctChoiceId || '',
+      correctAnswer: correctAnswerText,
     });
     setShowForm(true);
   };
@@ -179,9 +181,9 @@ export default function Assessments() {
     );
   }
 
-  return (
+  if (!selectedAssessment) return (
     <div>
-      <Header title={`Assessments - {selectedSkill.skillName}`} />
+      <Header title={`Assessments - ${selectedSkill.skillName}`} />
       <div className={styles.toolbar}>
         <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedSkill(null); setSelectedAssessment(null); setShowForm(false); setEditingQuestion(null); }}>
           <ChevronLeft size={16} /> All Skills
@@ -220,6 +222,73 @@ export default function Assessments() {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div>
+      <Header title={selectedAssessment.title} />
+      <div className={styles.toolbar}>
+        <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedAssessment(null); setQSearch(''); }}>
+          <ChevronLeft size={16} /> All Assessments
+        </button>
+        <div className={styles.toolbarStats}>
+          <span>{questions.length} questions</span>
+          <span>{selectedAssessment.timeLimitMinutes} min</span>
+          <span>Passing: {selectedAssessment.passingPercent}%</span>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
+        </div>
+        {can('manageAssessmentQuestions') && (
+          <AssessmentQuestionImport
+            assessmentId={selectedAssessment.assessmentId}
+            skillId={selectedSkill.skillId}
+            skillName={selectedSkill.skillName}
+            onImported={refetchQs}
+          />
+        )}
+        <div className="card-body">
+          {questions.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon"><BookOpen size={36} /></div>
+              <div className="empty-state-text">{qSearch ? 'No matching questions' : 'No questions yet'}</div>
+              {!qSearch && can('manageAssessmentQuestions') && (
+                <div className="empty-state-sub">Upload an Excel or CSV file to add questions to this assessment.</div>
+              )}
+            </div>
+          ) : (
+            <div className={styles.questionList}>
+              {questions.map((question) => (
+                <div key={question.questionId} className={styles.questionItem}>
+                  <div className={styles.questionItemText}>{question.questionText}</div>
+                  <div className={styles.questionItemMeta}>
+                    <span className={styles.qBadge}>{question.category || 'general'}</span>
+                    <span className={styles.qBadge}>Part {question.partNo}</span>
+                    {question.answerKey && <span className={styles.qBadge}>Has Answer Key</span>}
+                  </div>
+                  {question.choices?.length > 0 && (
+                    <div className={styles.questionItemOptions}>
+                      {question.choices.map((choice) => (
+                        <span
+                          key={choice.choiceId}
+                          className={`${styles.optionPill} ${question.answerKey?.correctChoiceId === choice.choiceId ? styles.optionCorrect : ''}`}
+                        >
+                          {question.answerKey?.correctChoiceId === choice.choiceId && '✓ '}
+                          {choice.choiceText}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

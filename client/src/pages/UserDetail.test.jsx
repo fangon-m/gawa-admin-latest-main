@@ -33,6 +33,8 @@ vi.mock('../api/users', () => ({
   getById: vi.fn(),
   suspend: vi.fn(),
   reinstate: vi.fn(),
+  archiveUser: vi.fn(),
+  unarchiveUser: vi.fn(),
   flagUser: vi.fn(),
   resetPassword: vi.fn(),
 }));
@@ -102,6 +104,7 @@ describe('UserDetail', () => {
   });
 
   it('renders job rows in the Jobs tab when the payload uses snake_case fields', async () => {
+    let callIndex = 0;
     const userData = {
       id: 'user-123',
       name: 'Ada Lovelace',
@@ -116,28 +119,28 @@ describe('UserDetail', () => {
       skills: [],
     };
 
-    useApiDataMock.mockImplementation((fetchFn, deps) => {
-      const callIndex = useApiDataMock.mock.calls.length - 1;
-      if (callIndex === 0) {
+    useApiDataMock.mockImplementation(() => {
+      const currentCall = callIndex++ % 7;
+      if (currentCall === 0) {
         return { data: userData, loading: false, refetch: vi.fn() };
       }
-      if (callIndex === 1) {
+      if (currentCall === 1) {
         return { data: [], loading: false, refetch: vi.fn() };
       }
-      if (callIndex === 2) {
+      if (currentCall === 2) {
         return {
           data: [{ job_title: 'Renovation', job_post_id: 'job-1', hiring_option: 'contractor_based', job_status: 'active', created_at: '2024-01-01T00:00:00.000Z' }],
           loading: false,
           refetch: vi.fn(),
         };
       }
-      if (callIndex === 3) {
+      if (currentCall === 3) {
         return { data: [], loading: false, refetch: vi.fn() };
       }
-      if (callIndex === 4) {
+      if (currentCall === 4) {
         return { data: [], loading: false, refetch: vi.fn() };
       }
-      if (callIndex === 5) {
+      if (currentCall === 5) {
         return { data: { data: [], stats: {} }, loading: false, refetch: vi.fn() };
       }
       return { data: [], loading: false, refetch: vi.fn() };
@@ -147,5 +150,27 @@ describe('UserDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Jobs' }));
 
     expect(await screen.findByText('Renovation')).toBeInTheDocument();
+  });
+
+  it('offers a reversible archive action and requires a reason before confirming', () => {
+    const userData = {
+      id: 'user-123',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      role: 'client',
+      status: 'active',
+      flags: 0,
+      notes: [],
+      skills: [],
+    };
+    useApiDataMock.mockImplementation(() => ({ data: userData, loading: false, refetch: vi.fn() }));
+
+    render(<UserDetail />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive & Ban Account' }));
+
+    expect(screen.getByText(/Their records will be retained/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Archive & Ban', exact: true })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason for archiving'), { target: { value: 'Policy violation' } });
+    expect(screen.getByRole('button', { name: 'Archive & Ban', exact: true })).toBeEnabled();
   });
 });

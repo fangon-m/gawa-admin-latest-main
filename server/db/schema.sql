@@ -19,6 +19,10 @@ CREATE TABLE public.users_table (
   complete_address text,
   profile_image_url text,
   is_verified boolean NOT NULL DEFAULT false,
+  is_archived boolean NOT NULL DEFAULT false,
+  archived_at timestamp with time zone,
+  archived_by text,
+  archive_reason text,
   CONSTRAINT users_table_pkey PRIMARY KEY (id),
   CONSTRAINT users_table_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );

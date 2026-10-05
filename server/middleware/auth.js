@@ -41,6 +41,10 @@ async function authenticate(req, res, next) {
   const profile = profileRes.data || {};
   const userRoles = (rolesRes.data || []).map(r => r.roles?.role_name).filter(Boolean);
 
+  if (profile.is_archived) {
+    return res.status(403).json({ error: 'This account is archived and cannot access the application' });
+  }
+
   req.user = {
     id: data.user.id,
     email: data.user.email,

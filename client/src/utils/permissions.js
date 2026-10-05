@@ -36,6 +36,8 @@ const PERMISSIONS = {
   flagUser: { admin: true, customer_support: true },
   suspendUser: { admin: true, customer_support: false },
   reinstateUser: { admin: true, customer_support: false },
+  archiveUser: { admin: true, customer_support: false },
+  unarchiveUser: { admin: true, customer_support: false },
   deleteAccount: { admin: true, customer_support: false },
   approveVerification: { admin: true, customer_support: true },
   rejectVerification: { admin: true, customer_support: true },

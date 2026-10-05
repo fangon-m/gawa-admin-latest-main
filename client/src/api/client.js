@@ -129,6 +129,45 @@ export function post(path, body) {
   return request(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
+function sendFile(path, formData, authToken, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE_URL}${path}`);
+    if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onerror = () => reject(new Error('Network error while uploading the file'));
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        data = {};
+      }
+      resolve({ status: xhr.status, data });
+    };
+    xhr.send(formData);
+  });
+}
+
+export async function postFile(path, formData, onProgress) {
+  let response = await sendFile(path, formData, token, onProgress);
+  if (response.status === 401 || response.status === 403) {
+    const refreshed = await tryRefreshToken().catch(() => null);
+    if (!refreshed) {
+      clearAuthSession();
+      throw { status: response.status, ...response.data };
+    }
+    response = await sendFile(path, formData, refreshed, onProgress);
+    if (response.status === 401 || response.status === 403) clearAuthSession();
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw { status: response.status, ...response.data };
+  }
+  return response.data;
+}
+
 export function patch(path, body) {
   return request(path, { method: 'PATCH', body: JSON.stringify(body) });
 }

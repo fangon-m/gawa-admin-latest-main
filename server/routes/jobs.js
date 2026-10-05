@@ -6,9 +6,9 @@ const escalatedCtrl = require('../controllers/escalatedJobs');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
 
-router.get('/', authenticate, ctrl.listJobs);
+router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listJobs);
 router.get('/escalated', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), escalatedCtrl.listEscalatedJobs);
-router.get('/:id', authenticate, ctrl.getJobById);
+router.get('/:id', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getJobById);
 router.post('/:id/flag', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.flagJob);
 router.post('/:id/remove', authenticate, authorize(ROLES.ADMIN), ctrl.removeJob);
 router.post('/:id/resolve', authenticate, authorize(ROLES.ADMIN), escalatedCtrl.resolveEscalatedJob);

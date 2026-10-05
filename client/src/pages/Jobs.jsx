@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
@@ -15,6 +15,8 @@ import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
+import AssessmentQuestionImport from '../components/assessments/AssessmentQuestionImport';
+import { focusAssessmentEditor, updateAssessmentEditHistory } from '../utils/assessmentEditor';
 import { Plus, Pencil, Trash2, X, Save, ClipboardCheck, BookOpen, ChevronLeft, Briefcase } from 'lucide-react';
 import * as lucideIcons from 'lucide-react';
 import styles from './Assessments.module.css';
@@ -51,6 +53,7 @@ export default function Jobs() {
 
   const [activeTab, setActiveTab] = useState('jobs');
   const [selectedCategory, setSelectedCategory] = useState(null);
+  const [questionAssessmentId, setQuestionAssessmentId] = useState('');
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [deletingQuestion, setDeletingQuestion] = useState(null);
@@ -60,6 +63,8 @@ export default function Jobs() {
     question: '', questionType: 'multiple_choice', difficulty: 'beginner',
     points: 10, options: ['', '', '', ''], correctAnswer: '',
   });
+  const questionFormRef = useRef(null);
+  const questionInputRef = useRef(null);
 
   // Data fetching
   const { data: jobs, loading: jobsLoading } = useApiData(
@@ -99,6 +104,9 @@ export default function Jobs() {
     if (!selectedCategory) return [];
     return allSkillAssessments.filter((a) => a.skillId === selectedCategory.skillId);
   }, [selectedCategory, allSkillAssessments]);
+  const selectedAssessmentId = skillAssessments.some((assessment) => assessment.assessmentId === questionAssessmentId)
+    ? questionAssessmentId
+    : skillAssessments[0]?.assessmentId || '';
 
   const activeSkills = useMemo(() => allSkills.filter((s) => s.isActive !== false), [allSkills]);
 
@@ -212,6 +220,7 @@ export default function Jobs() {
 
   const openNewForm = () => {
     setEditingQuestion(null);
+    updateAssessmentEditHistory(null);
     setQForm({ question: '', questionType: 'multiple_choice', difficulty: 'beginner', points: 10, options: ['', '', '', ''], correctAnswer: '' });
     setShowQuestionForm(true);
   };
@@ -220,19 +229,26 @@ export default function Jobs() {
     setEditingQuestion(q);
     const opts = q.choices?.length ? q.choices.map(c => c.choiceText) : [''];
     while (opts.length < 4) opts.push('');
+    const correctAnswerText = q.choices?.find((c) => c.choiceId === q.answerKey?.correctChoiceId)?.choiceText || '';
     setQForm({
       question: q.questionText,
       questionType: 'multiple_choice',
       difficulty: 'beginner',
       points: q.points,
       options: opts,
-      correctAnswer: q.answerKey?.correctChoiceId || '',
+      correctAnswer: correctAnswerText,
     });
     setShowQuestionForm(true);
   };
 
+  useEffect(() => {
+    if (!showQuestionForm || !editingQuestion) return;
+    updateAssessmentEditHistory(editingQuestion.questionId);
+    focusAssessmentEditor(questionFormRef.current, questionInputRef.current);
+  }, [showQuestionForm, editingQuestion]);
+
   const handleSaveQuestion = async () => {
-    if (!qForm.question.trim() || !selectedCategory) return;
+    if (!qForm.question.trim() || !selectedCategory || (!editingQuestion && !selectedAssessmentId)) return;
     if (qForm.questionType === 'multiple_choice' && qForm.options.filter((o) => o.trim()).length < 2) return;
 
     const choices = qForm.options.filter((o) => o.trim()).map((opt, i) => ({
@@ -242,7 +258,7 @@ export default function Jobs() {
     const correctChoiceIndex = choices.findIndex(c => c.choiceText === qForm.correctAnswer);
 
     const data = {
-      assessmentId: selectedCategory.assessmentId || selectedCategory.skillId,
+      assessmentId: editingQuestion?.assessmentId || selectedAssessmentId,
       partNo: 1,
       category: 'general',
       questionText: qForm.question.trim(),
@@ -259,6 +275,7 @@ export default function Jobs() {
       }
       setShowQuestionForm(false);
       setEditingQuestion(null);
+      updateAssessmentEditHistory(null);
       refetchQs();
     } catch (err) { console.error('Save question failed:', err); }
   };
@@ -463,7 +480,7 @@ export default function Jobs() {
                 <div className="card-body">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
                     {skillAnalytics.map((skill) => (
-                      <div key={skill.skillId} className={styles.categoryCard} onClick={() => setSelectedCategory(skill)}>
+                      <div key={skill.skillId} className={styles.categoryCard} onClick={() => { setSelectedCategory(skill); setQuestionAssessmentId(''); }}>
                         <div className={styles.categoryCardIcon}>
                           {skill.icon ? (
                             /^https?:\/\//i.test(skill.icon) || skill.icon.startsWith('/') || skill.icon.startsWith('data:') ? (
@@ -504,7 +521,7 @@ export default function Jobs() {
           ) : (
             <>
               <div className={styles.toolbar}>
-                <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowQuestionForm(false); setEditingQuestion(null); }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowQuestionForm(false); setEditingQuestion(null); updateAssessmentEditHistory(null); }}>
                   <ChevronLeft size={16} /> All Skills
                 </button>
                 <div className={styles.toolbarStats}>
@@ -521,24 +538,36 @@ export default function Jobs() {
                   <div className="card">
                     <div className="card-header">
                       <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
-                      {can('manageAssessmentQuestions') && (
-                        <button className="btn btn-accent btn-sm" onClick={openNewForm}>
-                          <Plus size={15} /> Add Question
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        {can('manageAssessmentQuestions') && (
+                          <button className="btn btn-accent btn-sm" onClick={openNewForm} disabled={!selectedAssessmentId}>
+                            <Plus size={15} /> Add Question
+                          </button>
+                        )}
+                      </div>
                     </div>
+                    {can('manageAssessmentQuestions') && (
+                      <AssessmentQuestionImport
+                        assessmentId={selectedAssessmentId}
+                        skillId={selectedCategory.skillId}
+                        skillName={selectedCategory.skillName}
+                        onImported={async () => {
+                          await Promise.all([refetchQs(), refetchSkillAssessments()]);
+                        }}
+                      />
+                    )}
                     {showQuestionForm && (
-                      <div className={styles.questionForm}>
+                      <div className={styles.questionForm} ref={questionFormRef}>
                         <div className={styles.questionFormHeader}>
                           <h4>{editingQuestion ? 'Edit Question' : 'New Question'}</h4>
-                          <button className={styles.questionFormClose} onClick={() => { setShowQuestionForm(false); setEditingQuestion(null); }}>
+                          <button className={styles.questionFormClose} onClick={() => { setShowQuestionForm(false); setEditingQuestion(null); updateAssessmentEditHistory(null); }}>
                             <X size={16} />
                           </button>
                         </div>
                         <div className={styles.questionFormBody}>
                           <div className="form-group">
-                            <label className="form-label">Question</label>
-                            <textarea className="form-textarea" rows={2} value={qForm.question}
+                            <label className="form-label" htmlFor="assessment-question-editor">Question</label>
+                            <textarea id="assessment-question-editor" ref={questionInputRef} className="form-textarea" rows={2} value={qForm.question}
                               onChange={(e) => setQForm((p) => ({ ...p, question: e.target.value }))} />
                           </div>
                           <div className="form-row">
@@ -595,7 +624,7 @@ export default function Jobs() {
                             <button className="btn btn-primary btn-sm" onClick={handleSaveQuestion}>
                               <Save size={14} /> {editingQuestion ? 'Update' : 'Add Question'}
                             </button>
-                            <button className="btn btn-outline btn-sm" onClick={() => { setShowQuestionForm(false); setEditingQuestion(null); }}>Cancel</button>
+                            <button className="btn btn-outline btn-sm" onClick={() => { setShowQuestionForm(false); setEditingQuestion(null); updateAssessmentEditHistory(null); }}>Cancel</button>
                           </div>
                         </div>
                       </div>
@@ -615,8 +644,8 @@ export default function Jobs() {
                                 <div className={styles.questionItemActions}>
                                   {can('manageAssessmentQuestions') && (
                                     <>
-                                      <button className="btn btn-ghost btn-sm" onClick={() => openEditForm(q)}><Pencil size={13} /></button>
-                                      <button className="btn btn-ghost btn-sm" onClick={() => setDeletingQuestion(q)}><Trash2 size={13} /></button>
+                                      <button className="btn btn-ghost btn-sm" aria-label="Edit question" onClick={() => openEditForm(q)}><Pencil size={13} /></button>
+                                      <button className="btn btn-ghost btn-sm" aria-label="Delete question" onClick={() => setDeletingQuestion(q)}><Trash2 size={13} /></button>
                                     </>
                                   )}
                                 </div>

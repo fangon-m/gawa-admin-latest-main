@@ -2,14 +2,14 @@ const supabase = require('../db/supabase');
 const crypto = require('crypto');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
 
-const USER_SELECT = 'id, email, phone, role, is_verified, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
+const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
 
 function mapUser(u) {
   return {
     ...toCamelCase(u),
     name: getFullName(u),
     fullName: getFullName(u),
-    status: u.status || (u.is_verified ? 'verified' : 'unverified'),
+    status: u.is_archived ? 'archived' : (u.status || (u.is_verified ? 'verified' : 'unverified')),
     location: u.complete_address,
     avatarUrl: u.profile_image_url,
     joinedAt: u.created_at,
@@ -35,6 +35,8 @@ async function listUsers(req, res) {
   let query = supabase.from('users_table').select(USER_SELECT, { count: 'exact' })
     .not('role', 'in', '("admin","customer_support")');
   if (role) query = query.eq('role', role);
+  if (status === 'archived') query = query.eq('is_archived', true);
+  if (status && status !== 'archived') query = query.eq('is_archived', false);
   if (status === 'verified') query = query.eq('is_verified', true);
   if (status === 'unverified') query = query.eq('is_verified', false);
   if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
@@ -70,6 +72,8 @@ async function listUsers(req, res) {
         skills: skillsMap[u.id] || [],
         suspendedUntil: susp.suspended_until || null,
         suspensionReason: susp.suspension_reason || null,
+        archivedAt: u.archived_at || null,
+        archiveReason: u.archive_reason || null,
       };
     }),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -113,7 +117,7 @@ async function getUserById(req, res) {
       suspendedUntil: susp.suspended_until || null,
       suspensionReason: susp.suspension_reason || null,
       escalatedToDeletion: susp.escalated_to_deletion || false,
-      status: susp.escalated_to_deletion ? 'archived' : susp.suspension_status ? 'suspended' : (user.is_verified ? 'verified' : 'unverified'),
+      status: user.is_archived ? 'archived' : susp.escalated_to_deletion ? 'archived' : susp.suspension_status ? 'suspended' : (user.is_verified ? 'verified' : 'unverified'),
     },
   });
 }
@@ -200,6 +204,107 @@ async function deleteUser(req, res) {
   const { error } = await supabase.auth.admin.deleteUser(req.params.id);
   if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
   res.json({ message: 'User deleted' });
+}
+
+async function archiveUser(req, res) {
+  const userId = req.params.id;
+  if (req.user?.id === userId) {
+    return res.status(400).json({ error: 'You cannot archive your own account' });
+  }
+
+  const { data: user, error: fetchError } = await supabase
+    .from('users_table')
+    .select('id, role, is_archived')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (fetchError) return res.status(500).json({ error: fetchError.message });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (['admin', 'customer_support'].includes(user.role)) {
+    return res.status(403).json({ error: 'Staff accounts cannot be archived here' });
+  }
+
+  const archivedAt = new Date().toISOString();
+  const { data: archivedUser, error: updateError } = await supabase
+    .from('users_table')
+    .update({
+      is_archived: true,
+      archived_at: archivedAt,
+      archived_by: req.user?.id || null,
+      archive_reason: req.body.reason,
+      updated_at: archivedAt,
+    })
+    .eq('id', userId)
+    .select(USER_SELECT)
+    .single();
+
+  if (updateError || !archivedUser) {
+    return res.status(500).json({ error: updateError?.message || 'Could not archive user' });
+  }
+
+  const { error: banError } = await supabase.auth.admin.updateUserById(userId, {
+    ban_duration: '876000h',
+  });
+
+  if (banError) {
+    const { error: rollbackError } = await supabase
+      .from('users_table')
+      .update({ is_archived: false, archived_at: null, archived_by: null, archive_reason: null, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (rollbackError) {
+      return res.status(500).json({
+        error: 'Auth ban failed and archive rollback failed; user access remains blocked by the archive flag',
+      });
+    }
+    return res.status(502).json({ error: banError.message });
+  }
+
+  res.json({ data: mapUser(archivedUser), message: 'User archived and banned from signing in' });
+}
+
+async function unarchiveUser(req, res) {
+  const userId = req.params.id;
+  const { data: user, error: fetchError } = await supabase
+    .from('users_table')
+    .select('id, is_archived')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (fetchError) return res.status(500).json({ error: fetchError.message });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user.is_archived) return res.status(409).json({ error: 'User is not archived' });
+
+  const { data: restoredUser, error: updateError } = await supabase
+    .from('users_table')
+    .update({ is_archived: false, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select(USER_SELECT)
+    .single();
+
+  if (updateError || !restoredUser) {
+    return res.status(500).json({ error: updateError?.message || 'Could not unarchive user' });
+  }
+
+  const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, {
+    ban_duration: 'none',
+  });
+
+  if (unbanError) {
+    const { error: rollbackError } = await supabase
+      .from('users_table')
+      .update({ is_archived: true, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (rollbackError) {
+      return res.status(500).json({
+        error: 'Auth unban failed and archive rollback failed; verify the account remains blocked before retrying',
+      });
+    }
+    return res.status(502).json({ error: unbanError.message });
+  }
+
+  res.json({ data: mapUser(restoredUser), message: 'User unarchived and sign-in restored' });
 }
 
 async function listEscalatedUsers(req, res) {
@@ -429,5 +534,5 @@ async function listUserProposals(req, res) {
 }
 
 module.exports = { listUsers, getUserById, updateUser, suspendUser, reinstateUser, deleteUser, inviteUser, flagUser,
-  listEscalatedUsers, escalateToDeletion, removeFromEscalation, adminResetPassword, listUserProposals,
+  listEscalatedUsers, escalateToDeletion, removeFromEscalation, archiveUser, unarchiveUser, adminResetPassword, listUserProposals,
 };

@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { getById as getUserById, suspend, reinstate, flagUser, resetPassword } from '../api/users';
+import { getById as getUserById, suspend, reinstate, archiveUser, unarchiveUser, flagUser, resetPassword } from '../api/users';
 import * as notesApi from '../api/notes';
 import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
@@ -89,6 +89,8 @@ export default function UserDetail() {
   const [showConfirm, setShowConfirm] = useState(null);
   const [suspensionDays, setSuspensionDays] = useState(7);
   const [suspensionReason, setSuspensionReason] = useState('');
+  const [archiveReason, setArchiveReason] = useState('');
+  const [userActionError, setUserActionError] = useState('');
   const [showPwReset, setShowPwReset] = useState(false);
   const [pwNew, setPwNew] = useState('');
   const [pwConfirm, setPwConfirm] = useState('');
@@ -165,15 +167,23 @@ export default function UserDetail() {
         await suspend(id, { duration: suspensionDays, reason: suspensionReason });
       } else if (action === 'reinstate') {
         await reinstate(id);
+      } else if (action === 'archive') {
+        await archiveUser(id, archiveReason.trim());
+      } else if (action === 'unarchive') {
+        await unarchiveUser(id);
       } else if (action === 'flag') {
         await flagUser(id);
       } else return;
       addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, `/users/${user.id}`);
+      setUserActionError('');
       refetch();
-    } catch (err) { console.error('User action failed:', err); }
-    setShowConfirm(null);
-    setSuspensionDays(7);
-    setSuspensionReason('');
+      setShowConfirm(null);
+      setSuspensionDays(7);
+      setSuspensionReason('');
+      setArchiveReason('');
+    } catch (err) {
+      setUserActionError(err?.error || err?.message || 'User action failed. Please try again.');
+    }
   };
 
   const handlePasswordReset = async () => {
@@ -200,11 +210,14 @@ export default function UserDetail() {
   };
 
   const isSuspended = user.status === 'suspended';
+  const isArchived = user.isArchived || user.status === 'archived';
   const isExpiredSuspension = isSuspended && user.suspendedUntil && new Date(user.suspendedUntil) < new Date();
 
   const actionButtons = [
     { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended },
     { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended },
+    { label: 'Archive & Ban Account', action: 'archive', permission: 'archiveUser', show: !isArchived },
+    { label: 'Unarchive & Restore Access', action: 'unarchive', permission: 'unarchiveUser', show: isArchived },
     { label: 'Reset Password', action: 'reset-password', permission: 'resetPassword', show: true },
     { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: true },
   ];
@@ -244,6 +257,7 @@ export default function UserDetail() {
             <StatusBadge status={user.status} />
             <span className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{capitalizeWords(user.role)}</span>
             {user.flags > 0 && <StatusBadge status="flagged" label={`${user.flags} flag(s)`} />}
+            {isArchived && user.archivedAt && <span className="status-badge">{`Archived ${formatDate(user.archivedAt)}`}</span>}
             {isSuspended && user.suspendedUntil && (
               <span className="status-badge" style={{
                 background: isExpiredSuspension ? 'var(--color-warning-subtle, #fef3c7)' : 'var(--color-error-subtle, #fee2e2)',
@@ -540,7 +554,36 @@ export default function UserDetail() {
         )}
       </div>
 
-      {showConfirm === 'suspend' ? (
+      {showConfirm === 'archive' ? (
+        <div className="modal-overlay" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Archive & Ban Account</h3>
+              <button className="modal-close" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>×</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '1rem' }}>
+                Archive <strong>{user.name}</strong>? Their records will be retained, new sign-ins will be blocked, and their access to this API will be denied. An admin can restore access later.
+              </p>
+              <label className="detail-label" htmlFor="archive-reason" style={{ display: 'block', marginBottom: '0.375rem' }}>Reason for archiving</label>
+              <textarea
+                id="archive-reason"
+                className="form-input"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+                maxLength={500}
+                rows={3}
+                placeholder="Record the reason for this action"
+              />
+              {userActionError && <div role="alert" style={{ color: 'var(--color-error)', marginTop: '0.75rem' }}>{userActionError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>Cancel</button>
+              <button className="btn btn-danger" disabled={!archiveReason.trim()} onClick={() => handleAction('archive')}>Archive & Ban</button>
+            </div>
+          </div>
+        </div>
+      ) : showConfirm === 'suspend' ? (
         <div className="modal-overlay" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -609,11 +652,13 @@ export default function UserDetail() {
         <ConfirmModal
           open={!!showConfirm}
           title={`${capitalizeWords(showConfirm?.replace(/_/g, ' ') || '')}`}
-          message={`Are you sure you want to ${showConfirm?.replace(/_/g, ' ') || ''} for ${user.name}?`}
-          confirmLabel="Confirm"
+          message={showConfirm === 'unarchive'
+            ? `Restore sign-in and API access for ${user.name}? Their retained records will not be deleted.`
+            : `${userActionError || ''} Are you sure you want to ${showConfirm?.replace(/_/g, ' ') || ''} for ${user.name}?`}
+          confirmLabel={showConfirm === 'unarchive' ? 'Unarchive & Restore Access' : 'Confirm'}
           variant={showConfirm?.includes('reinstate') ? 'success' : 'primary'}
           onConfirm={() => handleAction(showConfirm)}
-          onCancel={() => setShowConfirm(null)}
+          onCancel={() => { setShowConfirm(null); setUserActionError(''); }}
         />
       )}
 
