@@ -7,6 +7,7 @@ import { list as listJobs } from '../api/jobs';
 import * as skillsApi from '../api/skills';
 import * as skillAssessmentsApi from '../api/skillAssessments';
 import * as assessmentQuestionsApi from '../api/assessmentQuestions';
+import * as assessmentAttemptsApi from '../api/assessmentAttempts';
 import { formatDate, formatCurrency, capitalizeWords, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
@@ -16,6 +17,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
 import AssessmentQuestionImport from '../components/assessments/AssessmentQuestionImport';
+import AssessmentAttemptsTable from '../components/assessments/AssessmentAttemptsTable';
 import { focusAssessmentEditor, updateAssessmentEditHistory } from '../utils/assessmentEditor';
 import { Plus, Pencil, Trash2, X, Save, ClipboardCheck, BookOpen, ChevronLeft, Briefcase } from 'lucide-react';
 import * as lucideIcons from 'lucide-react';
@@ -85,6 +87,9 @@ export default function Jobs() {
   const { data: allQuestions, refetch: refetchQs } = useApiData(() => assessmentQuestionsApi.listAssessmentQuestions({ limit: 500 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
+  const { data: skillAttemptStats } = useApiData(() => assessmentAttemptsApi.getSkillAttemptStats(), [], {
+    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
+  });
 
   // Question drill-down: filter from all questions when a skill is selected
   const questions = useMemo(() => {
@@ -117,14 +122,13 @@ export default function Jobs() {
       const questions = skillAssmts.flatMap((sa) => 
         allQuestions.filter((q) => q.assessmentId === sa.assessmentId)
       );
-      const totalPts = questions.reduce((s, q) => s + (q.points || 0), 0);
-      const passed = skillAssmts.filter((sa) => sa.isActive).length;
-      const avgScore = skillAssmts.length > 0
-        ? Math.round(skillAssmts.reduce((s, a) => s + ((a.scorePercent || 0)), 0) / skillAssmts.length)
-        : 0;
-      return { ...skill, questionCount: questions.length, submissionCount: skillAssmts.length, passed, avgScore, totalPoints: totalPts };
+      const attemptStats = skillAttemptStats.find((stats) => stats.skillId === skill.skillId);
+      const submissionCount = Number(attemptStats?.attemptCount || 0);
+      const passed = Number(attemptStats?.passedCount || 0);
+      const avgScore = submissionCount > 0 ? Math.round(Number(attemptStats.averageScorePercent || 0)) : 0;
+      return { ...skill, questionCount: questions.length, submissionCount, passed, avgScore };
     });
-  }, [activeSkills, allSkillAssessments, allQuestions]);
+  }, [activeSkills, allSkillAssessments, allQuestions, skillAttemptStats]);
 
   const filterDefs = useMemo(() => [
     { key: 'type', label: 'Type', placeholder: 'All Types', options: [
@@ -287,16 +291,6 @@ export default function Jobs() {
       refetchQs();
     } catch (err) { console.error('Delete question failed:', err); }
   };
-
-  const totalPoints = useMemo(() => questions.reduce((sum, q) => sum + (q.points || 0), 0), [questions]);
-
-  const skillAssessmentColumns = [
-    { key: 'userName', label: 'Talent', render: (row) => row.userName || row.userId || 'Unknown' },
-    { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-    { key: 'scorePercent', label: 'Score', render: (row) => `${row.scorePercent ? row.scorePercent.toFixed(1) : 0}%` },
-    { key: 'startedAt', label: 'Started', render: (row) => formatDate(row.startedAt) },
-    { key: 'submittedAt', label: 'Submitted', render: (row) => row.submittedAt ? formatDate(row.submittedAt) : '-' },
-  ];
 
   return (
     <div>
@@ -504,13 +498,15 @@ export default function Jobs() {
                           <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
                             {skill.questionCount} questions
                           </span>
-                          <span style={{ fontSize: '0.6875rem', padding: '0.125rem 0.4375rem', borderRadius: 'var(--radius-full)', background: '#EEF2F6', color: '#475569', fontWeight: 500 }}>
-                            {skill.totalPoints} pts
-                          </span>
                         </div>
                         <div className={styles.categoryCardMeta}>
-                          <span>{skill.submissionCount} assessments</span>
-                          {skill.submissionCount > 0 && (<><span>{skill.avgScore}% avg</span><span>{skill.passed}/{skill.submissionCount} passed</span></>)}
+                          {skill.submissionCount > 0 && (
+                            <>
+                              <span>{skill.submissionCount} attempts</span>
+                              <span>{skill.avgScore}% avg score</span>
+                              <span>{skill.passed}/{skill.submissionCount} passed</span>
+                            </>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -526,7 +522,6 @@ export default function Jobs() {
                 </button>
                 <div className={styles.toolbarStats}>
                   <span>{questions.length} questions</span>
-                  <span>{totalPoints} total points</span>
                   <span>{skillAssessments.length} assessments</span>
                 </div>
               </div>
@@ -675,7 +670,7 @@ export default function Jobs() {
 {qTab === 'assessments' && (
                 <div className="card">
                   <div className="card-body p-0">
-                    <DataTable columns={skillAssessmentColumns} data={skillAssessments} pageSize={10} emptyMessage="No attempts" />
+                    <AssessmentAttemptsTable skillId={selectedCategory.skillId} />
                   </div>
                 </div>
               )}

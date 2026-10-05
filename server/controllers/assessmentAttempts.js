@@ -19,6 +19,55 @@ function determineResult(score, totalPoints) {
   return (score / totalPoints) >= 0.6 ? 'passed' : 'failed';
 }
 
+async function getSkillAttemptStats(req, res) {
+  const { data, error } = await supabase.rpc('get_skill_assessment_attempt_stats');
+  if (error) {
+    console.error('[Assessment attempts] Failed to load skill statistics:', error.message);
+    return res.status(500).json({ error: 'Unable to load assessment attempt statistics.' });
+  }
+  res.json({ data: (data || []).map(toCamelCase) });
+}
+
+async function getSkillAttempts(req, res) {
+  const { skillId } = req.params;
+  const { data: attempts, error } = await supabase
+    .from('assessment_attempts')
+    .select('attempt_id, user_id, assessment_id, skill_id, status, started_at, submitted_at, score_percent')
+    .eq('skill_id', skillId)
+    .order('started_at', { ascending: false });
+
+  if (error) {
+    console.error('[Assessment attempts] Failed to load skill attempts:', error.message);
+    return res.status(500).json({ error: 'Unable to load assessment attempts.' });
+  }
+
+  const userIds = [...new Set((attempts || []).map((attempt) => attempt.user_id).filter(Boolean))];
+  const { data: users, error: usersError } = userIds.length
+    ? await supabase
+      .from('users_table')
+      .select('id, first_name, middle_name, last_name, email')
+      .in('id', userIds)
+    : { data: [], error: null };
+
+  if (usersError) {
+    console.error('[Assessment attempts] Failed to load attempt users:', usersError.message);
+    return res.status(500).json({ error: 'Unable to load assessment attempt users.' });
+  }
+
+  const userMap = new Map((users || []).map((user) => [
+    user.id,
+    getFullName(user) || user.email || user.id,
+  ]));
+
+  res.json({
+    data: (attempts || []).map((attempt) => ({
+      ...toCamelCase(attempt),
+      id: attempt.attempt_id,
+      userName: userMap.get(attempt.user_id) || attempt.user_id,
+    })),
+  });
+}
+
 /**
  * Guard: check if a user has passed an assessment (for proposal gates)
  * Returns { passed: boolean, assessmentId: string|null }
@@ -403,6 +452,8 @@ async function getActiveOverrides(req, res) {
 
 module.exports = {
   submitAttempt,
+  getSkillAttemptStats,
+  getSkillAttempts,
   getAttemptHistory,
   getUserAllAttempts,
   grantRetakeOverride,

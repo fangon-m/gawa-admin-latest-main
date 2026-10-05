@@ -7,6 +7,10 @@ const { authorize, ROLES } = require('../middleware/roles');
 // Submit an assessment attempt (with retake gating) — authenticated but open to any logged-in user
 router.post('/submit', authenticate, ctrl.submitAttempt);
 
+// Actual submitted attempt counts and pass rates, grouped by skill.
+router.get('/stats/skills', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getSkillAttemptStats);
+router.get('/skills/:skillId', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getSkillAttempts);
+
 // Get active overrides for a user
 router.get('/:userId/overrides', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getActiveOverrides);
 

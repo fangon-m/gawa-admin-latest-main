@@ -128,3 +128,31 @@ $$;
 
 REVOKE ALL ON FUNCTION public.import_assessment_questions(uuid, uuid, text, jsonb) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.import_assessment_questions(uuid, uuid, text, jsonb) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.get_skill_assessment_attempt_stats()
+RETURNS TABLE (
+  skill_id uuid,
+  attempt_count bigint,
+  passed_count bigint,
+  average_score_percent numeric
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    assessments.skill_id,
+    count(attempts.attempt_id) AS attempt_count,
+    count(attempts.attempt_id) FILTER (WHERE attempts.status = 'passed') AS passed_count,
+    coalesce(
+      round(avg(attempts.score_percent) FILTER (WHERE attempts.status IN ('passed', 'failed')), 1),
+      0
+    ) AS average_score_percent
+  FROM public.skill_assessments AS assessments
+  LEFT JOIN public.assessment_attempts AS attempts
+    ON attempts.assessment_id = assessments.assessment_id
+  GROUP BY assessments.skill_id;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_skill_assessment_attempt_stats() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_skill_assessment_attempt_stats() TO service_role;
