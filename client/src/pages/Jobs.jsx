@@ -59,6 +59,12 @@ export default function Jobs() {
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [deletingQuestion, setDeletingQuestion] = useState(null);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState([]);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkDeleteError, setBulkDeleteError] = useState('');
+  const [questionError, setQuestionError] = useState('');
+  const [savingQuestion, setSavingQuestion] = useState(false);
+  const [deletingQuestions, setDeletingQuestions] = useState(false);
   const [qTab, setQTab] = useState('questions');
   const [qSearch, setQSearch] = useState('');
   const [qForm, setQForm] = useState({
@@ -112,6 +118,8 @@ export default function Jobs() {
   const selectedAssessmentId = skillAssessments.some((assessment) => assessment.assessmentId === questionAssessmentId)
     ? questionAssessmentId
     : skillAssessments[0]?.assessmentId || '';
+  const allVisibleQuestionsSelected = questions.length > 0 &&
+    questions.every((question) => selectedQuestionIds.includes(question.questionId));
 
   const activeSkills = useMemo(() => allSkills.filter((s) => s.isActive !== false), [allSkills]);
 
@@ -225,12 +233,14 @@ export default function Jobs() {
   const openNewForm = () => {
     setEditingQuestion(null);
     updateAssessmentEditHistory(null);
+    setQuestionError('');
     setQForm({ question: '', questionType: 'multiple_choice', difficulty: 'beginner', points: 10, options: ['', '', '', ''], correctAnswer: '' });
     setShowQuestionForm(true);
   };
 
   const openEditForm = (q) => {
     setEditingQuestion(q);
+    setQuestionError('');
     const opts = q.choices?.length ? q.choices.map(c => c.choiceText) : [''];
     while (opts.length < 4) opts.push('');
     const correctAnswerText = q.choices?.find((c) => c.choiceId === q.answerKey?.correctChoiceId)?.choiceText || '';
@@ -252,7 +262,7 @@ export default function Jobs() {
   }, [showQuestionForm, editingQuestion]);
 
   const handleSaveQuestion = async () => {
-    if (!qForm.question.trim() || !selectedCategory || (!editingQuestion && !selectedAssessmentId)) return;
+    if (!qForm.question.trim() || !selectedCategory || savingQuestion) return;
     if (qForm.questionType === 'multiple_choice' && qForm.options.filter((o) => o.trim()).length < 2) return;
 
     const choices = qForm.options.filter((o) => o.trim()).map((opt, i) => ({
@@ -261,17 +271,27 @@ export default function Jobs() {
     }));
     const correctChoiceIndex = choices.findIndex(c => c.choiceText === qForm.correctAnswer);
 
-    const data = {
-      assessmentId: editingQuestion?.assessmentId || selectedAssessmentId,
-      partNo: 1,
-      category: 'general',
-      questionText: qForm.question.trim(),
-      explanation: '',
-      choices,
-      correctChoiceId: correctChoiceIndex >= 0 ? correctChoiceIndex : undefined,
-    };
-
+    setSavingQuestion(true);
+    setQuestionError('');
     try {
+      let assessmentId = editingQuestion?.assessmentId || selectedAssessmentId;
+      if (!assessmentId) {
+        const assessmentResponse = await skillAssessmentsApi.createSkillAssessment({
+          skillId: selectedCategory.skillId,
+          title: `${selectedCategory.skillName} Assessment`.slice(0, 200),
+        });
+        assessmentId = (assessmentResponse?.data ?? assessmentResponse)?.assessmentId;
+        if (!assessmentId) throw new Error('The assessment could not be created.');
+      }
+      const data = {
+        assessmentId,
+        partNo: 1,
+        category: 'general',
+        questionText: qForm.question.trim(),
+        explanation: '',
+        choices,
+        correctChoiceId: correctChoiceIndex >= 0 ? correctChoiceIndex : undefined,
+      };
       if (editingQuestion) {
         await assessmentQuestionsApi.updateAssessmentQuestion(editingQuestion.questionId, data);
       } else {
@@ -279,17 +299,41 @@ export default function Jobs() {
       }
       setShowQuestionForm(false);
       setEditingQuestion(null);
+      setQuestionError('');
+      setQuestionAssessmentId(assessmentId);
       updateAssessmentEditHistory(null);
-      refetchQs();
-    } catch (err) { console.error('Save question failed:', err); }
+      await Promise.all([refetchQs(), refetchSkillAssessments()]);
+    } catch (err) {
+      setQuestionError(err?.error || err?.message || 'Could not save the question.');
+    } finally {
+      setSavingQuestion(false);
+    }
   };
 
   const handleDeleteQuestion = async () => {
     try {
       await assessmentQuestionsApi.deleteAssessmentQuestion(deletingQuestion.questionId);
+      setSelectedQuestionIds((current) => current.filter((id) => id !== deletingQuestion.questionId));
       setDeletingQuestion(null);
       refetchQs();
     } catch (err) { console.error('Delete question failed:', err); }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selectedCategory || !selectedQuestionIds.length || deletingQuestions) return;
+    setDeletingQuestions(true);
+    setBulkDeleteError('');
+    try {
+      await assessmentQuestionsApi.deleteAssessmentQuestions(selectedCategory.skillId, selectedQuestionIds);
+      setSelectedQuestionIds([]);
+      setConfirmBulkDelete(false);
+      await refetchQs();
+    } catch (err) {
+      setBulkDeleteError(err?.error || err?.message || 'Could not delete the selected questions.');
+      setConfirmBulkDelete(false);
+    } finally {
+      setDeletingQuestions(false);
+    }
   };
 
   return (
@@ -301,7 +345,7 @@ export default function Jobs() {
           { key: 'assessments', label: 'Assessments' },
         ]}
         activeTab={activeTab}
-        onChange={(t) => { setActiveTab(t); setSelectedCategory(null); }}
+        onChange={(t) => { setActiveTab(t); setSelectedCategory(null); setSelectedQuestionIds([]); }}
       />
 
       {activeTab === 'jobs' && (
@@ -474,7 +518,7 @@ export default function Jobs() {
                 <div className="card-body">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
                     {skillAnalytics.map((skill) => (
-                      <div key={skill.skillId} className={styles.categoryCard} onClick={() => { setSelectedCategory(skill); setQuestionAssessmentId(''); }}>
+                      <div key={skill.skillId} className={styles.categoryCard} onClick={() => { setSelectedCategory(skill); setQuestionAssessmentId(''); setSelectedQuestionIds([]); }}>
                         <div className={styles.categoryCardIcon}>
                           {skill.icon ? (
                             /^https?:\/\//i.test(skill.icon) || skill.icon.startsWith('/') || skill.icon.startsWith('data:') ? (
@@ -517,7 +561,7 @@ export default function Jobs() {
           ) : (
             <>
               <div className={styles.toolbar}>
-                <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowQuestionForm(false); setEditingQuestion(null); updateAssessmentEditHistory(null); }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setSelectedCategory(null); setShowQuestionForm(false); setEditingQuestion(null); setSelectedQuestionIds([]); updateAssessmentEditHistory(null); }}>
                   <ChevronLeft size={16} /> All Skills
                 </button>
                 <div className={styles.toolbarStats}>
@@ -535,7 +579,7 @@ export default function Jobs() {
                       <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
                         {can('manageAssessmentQuestions') && (
-                          <button className="btn btn-accent btn-sm" onClick={openNewForm} disabled={!selectedAssessmentId}>
+                          <button className="btn btn-accent btn-sm" onClick={openNewForm}>
                             <Plus size={15} /> Add Question
                           </button>
                         )}
@@ -560,6 +604,10 @@ export default function Jobs() {
                           </button>
                         </div>
                         <div className={styles.questionFormBody}>
+                          {!selectedAssessmentId && !editingQuestion && (
+                            <p className={styles.formHint}>Saving this question will create an assessment for {selectedCategory.skillName}.</p>
+                          )}
+                          {questionError && <p className={styles.bulkDeleteError} role="alert">{questionError}</p>}
                           <div className="form-group">
                             <label className="form-label" htmlFor="assessment-question-editor">Question</label>
                             <textarea id="assessment-question-editor" ref={questionInputRef} className="form-textarea" rows={2} value={qForm.question}
@@ -616,8 +664,8 @@ export default function Jobs() {
                             </div>
                           )}
                           <div className={styles.formActions}>
-                            <button className="btn btn-primary btn-sm" onClick={handleSaveQuestion}>
-                              <Save size={14} /> {editingQuestion ? 'Update' : 'Add Question'}
+                            <button className="btn btn-primary btn-sm" onClick={handleSaveQuestion} disabled={savingQuestion}>
+                              <Save size={14} /> {savingQuestion ? 'Saving…' : editingQuestion ? 'Update' : 'Add Question'}
                             </button>
                             <button className="btn btn-outline btn-sm" onClick={() => { setShowQuestionForm(false); setEditingQuestion(null); updateAssessmentEditHistory(null); }}>Cancel</button>
                           </div>
@@ -625,6 +673,34 @@ export default function Jobs() {
                       </div>
                     )}
                     <div className="card-body p-0">
+                      {can('manageAssessmentQuestions') && questions.length > 0 && (
+                        <div className={styles.selectionToolbar}>
+                          <label className={styles.selectAll}>
+                            <input
+                              type="checkbox"
+                              aria-label="Select all visible questions"
+                              checked={allVisibleQuestionsSelected}
+                              onChange={(event) => setSelectedQuestionIds((current) => {
+                                const visibleIds = questions.map((question) => question.questionId);
+                                return event.target.checked
+                                  ? [...new Set([...current, ...visibleIds])]
+                                  : current.filter((id) => !visibleIds.includes(id));
+                              })}
+                            />
+                            Select all visible
+                          </label>
+                          <span className={styles.selectedCount}>{selectedQuestionIds.length} selected</span>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            type="button"
+                            disabled={!selectedQuestionIds.length || deletingQuestions}
+                            onClick={() => { setBulkDeleteError(''); setConfirmBulkDelete(true); }}
+                          >
+                            <Trash2 size={14} /> Delete selected
+                          </button>
+                        </div>
+                      )}
+                      {bulkDeleteError && <p className={styles.bulkDeleteError} role="alert">{bulkDeleteError}</p>}
                       {questions.length === 0 ? (
                         <div className="empty-state">
                           <div className="empty-state-icon"><BookOpen size={36} /></div>
@@ -635,6 +711,16 @@ export default function Jobs() {
                           {questions.map((q) => (
                             <div key={q.questionId} className={styles.questionItem}>
                               <div className={styles.questionItemTop}>
+                                {can('manageAssessmentQuestions') && (
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Select question: ${q.questionText}`}
+                                    checked={selectedQuestionIds.includes(q.questionId)}
+                                    onChange={() => setSelectedQuestionIds((current) => current.includes(q.questionId)
+                                      ? current.filter((id) => id !== q.questionId)
+                                      : [...current, q.questionId])}
+                                  />
+                                )}
                                 <div className={styles.questionItemText}>{q.questionText}</div>
                                 <div className={styles.questionItemActions}>
                                   {can('manageAssessmentQuestions') && (
@@ -678,6 +764,17 @@ export default function Jobs() {
               <ConfirmModal open={!!deletingQuestion} title="Delete Question"
                 message={`Remove this question?`}
                 confirmLabel="Delete" variant="danger" onConfirm={handleDeleteQuestion} onCancel={() => setDeletingQuestion(null)} />
+              <ConfirmModal
+                open={confirmBulkDelete}
+                title={`Delete ${selectedQuestionIds.length} question${selectedQuestionIds.length === 1 ? '' : 's'}?`}
+                message="This permanently deletes the selected questions and their answer choices. Questions with assessment attempt history cannot be deleted."
+                confirmLabel={deletingQuestions
+                  ? 'Deleting…'
+                  : `Delete ${selectedQuestionIds.length} question${selectedQuestionIds.length === 1 ? '' : 's'}`}
+                variant="danger"
+                onConfirm={handleBulkDelete}
+                onCancel={() => { if (!deletingQuestions) setConfirmBulkDelete(false); }}
+              />
             </div>
           </>
         )}

@@ -266,7 +266,9 @@ export default function Assessments() {
             <div className={styles.questionList}>
               {questions.map((question) => (
                 <div key={question.questionId} className={styles.questionItem}>
-                  <div className={styles.questionItemText}>{question.questionText}</div>
+                  <div className={styles.questionItemTop}>
+                    <div className={styles.questionItemText}>{question.questionText}</div>
+                  </div>
                   <div className={styles.questionItemMeta}>
                     <span className={styles.qBadge}>{question.category || 'general'}</span>
                     <span className={styles.qBadge}>Part {question.partNo}</span>

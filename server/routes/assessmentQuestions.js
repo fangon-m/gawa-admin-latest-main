@@ -42,6 +42,7 @@ router.get('/:id', authenticate, ctrl.getAssessmentQuestionById);
 router.post('/import', authenticate, authorize(ROLES.ADMIN), upload.single('file'), importCtrl.importAssessmentQuestions, handleUploadError);
 router.post('/', authenticate, authorize(ROLES.ADMIN), ctrl.createAssessmentQuestion);
 router.put('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.updateAssessmentQuestion);
+router.delete('/bulk', authenticate, authorize(ROLES.ADMIN), ctrl.deleteAssessmentQuestions);
 router.delete('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.deleteAssessmentQuestion);
 
 module.exports = router;

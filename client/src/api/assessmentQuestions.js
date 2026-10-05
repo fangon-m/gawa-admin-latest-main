@@ -14,3 +14,4 @@ export const importAssessmentQuestions = ({ assessmentId, skillId, skillName }, 
 };
 export const updateAssessmentQuestion = (id, body) => put(`/assessment-questions/${id}`, body);
 export const deleteAssessmentQuestion = (id) => del(`/assessment-questions/${id}`);
+export const deleteAssessmentQuestions = (skillId, ids) => del('/assessment-questions/bulk', { skillId, ids });

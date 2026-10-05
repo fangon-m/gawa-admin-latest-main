@@ -47,6 +47,7 @@ vi.mock('../utils/useApiData', () => ({
 describe('assessment page question import', () => {
   beforeEach(() => {
     fixtures.index = 0;
+    fixtures.questions = [];
   });
 
   it('enables Excel import for an existing assessment with no questions', () => {

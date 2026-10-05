@@ -182,4 +182,58 @@ async function deleteAssessmentQuestion(req, res) {
   res.json({ message: 'Question deleted' });
 }
 
-module.exports = { listAssessmentQuestions, getAssessmentQuestionById, createAssessmentQuestion, updateAssessmentQuestion, deleteAssessmentQuestion };
+async function deleteAssessmentQuestions(req, res) {
+  const { skillId, ids } = req.body || {};
+  if (!skillId || !Array.isArray(ids) || ids.length === 0 || ids.length > 500 ||
+      ids.some((id) => typeof id !== 'string' || !id.trim()) || new Set(ids).size !== ids.length) {
+    return res.status(400).json({ error: 'A skill ID and 1-500 unique question IDs are required' });
+  }
+
+  const { data: assessments, error: assessmentLookupError } = await supabase
+    .from('skill_assessments')
+    .select('assessment_id')
+    .eq('skill_id', skillId);
+  if (assessmentLookupError) return res.status(500).json({ error: assessmentLookupError.message });
+  const assessmentIds = (assessments || []).map((assessment) => assessment.assessment_id);
+  if (!assessmentIds.length) return res.status(404).json({ error: 'No assessments were found for this skill' });
+
+  const { data: questions, error: questionLookupError } = await supabase
+    .from('assessment_questions')
+    .select('question_id, assessment_id')
+    .in('assessment_id', assessmentIds)
+    .in('question_id', ids);
+  if (questionLookupError) return res.status(500).json({ error: questionLookupError.message });
+  if (!questions || questions.length !== ids.length) {
+    return res.status(404).json({ error: 'One or more selected questions do not belong to this skill' });
+  }
+
+  const { data: attemptedQuestions, error: attemptsError } = await supabase
+    .from('assessment_attempt_answers')
+    .select('question_id')
+    .in('question_id', ids);
+
+  if (attemptsError) return res.status(500).json({ error: attemptsError.message });
+  if (attemptedQuestions?.length) {
+    return res.status(409).json({ error: 'One or more selected questions have attempt history and cannot be deleted' });
+  }
+
+  for (const table of ['assessment_answer_keys', 'assessment_choices']) {
+    const { error } = await supabase.from(table).delete().in('question_id', ids);
+    if (error) return res.status(500).json({ error: `Could not remove related question data: ${error.message}` });
+  }
+
+  const { data: deletedQuestions, error: deleteError } = await supabase
+    .from('assessment_questions')
+    .delete()
+    .in('question_id', ids)
+    .select('question_id');
+
+  if (deleteError) return res.status(500).json({ error: deleteError.message });
+  if (!deletedQuestions || deletedQuestions.length !== ids.length) {
+    return res.status(409).json({ error: 'The selected questions changed before deletion completed; refresh and try again' });
+  }
+
+  res.json({ message: 'Questions deleted', deletedCount: deletedQuestions.length });
+}
+
+module.exports = { listAssessmentQuestions, getAssessmentQuestionById, createAssessmentQuestion, updateAssessmentQuestion, deleteAssessmentQuestion, deleteAssessmentQuestions };
