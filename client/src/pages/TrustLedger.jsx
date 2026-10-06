@@ -10,17 +10,15 @@ import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import StatCard from '../components/common/StatCard';
-import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, TrendingUp, PiggyBank, Lock, Clock } from 'lucide-react';
+import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, PiggyBank, Lock, Clock } from 'lucide-react';
 
 const typeFilters = [
   { key: 'type', label: 'Type', placeholder: 'All Types', options: [
+    { value: 'job_payment', label: 'Job Payment' },
+    { value: 'rental_payment', label: 'Rental Payment' },
     { value: 'deposit', label: 'Deposit' },
-    { value: 'payout', label: 'Payout' },
-    { value: 'refund', label: 'Refund' },
-    { value: 'fee', label: 'Fee' },
   ]},
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-    { value: 'completed', label: 'Completed' },
     { value: 'pending', label: 'Pending' },
     { value: 'held', label: 'Held' },
   ]},
@@ -34,15 +32,20 @@ export default function TrustLedger() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
-  const { data: summary } = useApiData(() => get('/trust-ledger/summary'), [], {
-    defaultValue: {},
-    transform: (r) => r?.data ?? r ?? {},
+  const { data: ledgerData, loading, error } = useApiData(async () => {
+    const [summaryResponse, entriesResponse] = await Promise.all([
+      get('/trust-ledger/summary'),
+      get('/trust-ledger'),
+    ]);
+    return {
+      summary: summaryResponse?.data ?? summaryResponse ?? {},
+      entries: entriesResponse?.data ?? entriesResponse ?? [],
+    };
+  }, [], {
+    defaultValue: { summary: {}, entries: [] },
   });
-
-  const { data: entries, loading } = useApiData(() => get('/trust-ledger'), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
-  });
+  const summary = ledgerData.summary;
+  const entries = ledgerData.entries;
 
   const filtered = useMemo(() => {
     let data = [...entries];
@@ -111,7 +114,7 @@ export default function TrustLedger() {
   const columns = [
     { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.displayId || row.id?.slice(0, 8)}</span> },
     { key: 'type', label: 'Type', render: (row) => (
-      <StatusBadge status={row.type} label={row.type === 'deposit' ? 'Deposit' : row.type === 'payout' ? 'Payout' : row.type === 'refund' ? 'Refund' : row.type} />
+      <StatusBadge status={row.type} label={row.type === 'deposit' ? 'Security Deposit' : row.type === 'job_payment' ? 'Job Payment' : 'Rental Payment'} />
     )},
     { key: 'userName', label: 'User' },
     { key: 'amount', label: 'Amount', render: (row) => (
@@ -119,7 +122,6 @@ export default function TrustLedger() {
         {row.amount >= 0 ? '+' : ''}{formatCurrency(row.amount)}
       </span>
     )},
-    { key: 'balance', label: 'Running Balance', render: (row) => formatCurrency(row.balance) },
     {
       key: 'status', label: 'Status', render: (row) => {
         const variant = row.status === 'held' ? 'warning' : row.status === 'pending' ? 'pending' : 'active';
@@ -162,6 +164,7 @@ export default function TrustLedger() {
           <StatCard key={idx} {...card} />
         ))}
       </div>
+      {error && <div className="alert alert-error" role="alert">Unable to load trust ledger: {error}</div>}
 
       <div className="card">
         <div className="card-header">
