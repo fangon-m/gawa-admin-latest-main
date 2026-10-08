@@ -17,10 +17,12 @@ const filters = [
     { value: 'payout', label: 'Payout' },
   ]},
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-    { value: 'completed', label: 'Completed' },
     { value: 'pending', label: 'Pending' },
     { value: 'escrow', label: 'Escrow' },
     { value: 'held', label: 'Held' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'cancelled', label: 'Cancelled' },
+    { value: 'refunded', label: 'Refunded' },
   ]},
   { key: 'paymentMethod', label: 'Payment', placeholder: 'All Methods', options: [
     { value: 'cash', label: 'Cash' },

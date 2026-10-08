@@ -94,7 +94,6 @@ async function listTransactions(req, res) {
   const offset = (Math.max(1, +page) - 1) * +limit;
 
   let query = supabase.from('transactions').select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type, direction', { count: 'exact' });
-  query = query.or(`type.not.in.(${CLIENT_FUND_TRANSACTION_TYPES.join(',')}),status.not.in.(${UNRELEASED_STATUSES.join(',')})`);
   if (type) query = query.eq('type', type);
   if (status) query = query.eq('status', status);
   if (userId) query = query.eq('user_id', userId);
@@ -118,7 +117,6 @@ async function getTransactionById(req, res) {
     .from('transactions')
     .select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type, direction')
     .eq('id', req.params.id)
-    .or(`type.not.in.(${CLIENT_FUND_TRANSACTION_TYPES.join(',')}),status.not.in.(${UNRELEASED_STATUSES.join(',')})`)
     .single();
 
   if (error || !txn) return res.status(404).json({ error: 'Transaction not found' });

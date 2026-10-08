@@ -21,6 +21,8 @@ const typeFilters = [
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
     { value: 'pending', label: 'Pending' },
     { value: 'held', label: 'Held' },
+    { value: 'released', label: 'Released' },
+    { value: 'refunded', label: 'Refunded' },
   ]},
 ];
 
@@ -114,9 +116,11 @@ export default function TrustLedger() {
   const columns = [
     { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.displayId || row.id?.slice(0, 8)}</span> },
     { key: 'type', label: 'Type', render: (row) => (
-      <StatusBadge status={row.type} label={row.type === 'deposit' ? 'Security Deposit' : row.type === 'job_payment' ? 'Job Payment' : 'Rental Payment'} />
+      <StatusBadge status={row.type} label={row.isEquipmentEscrow ? 'Equipment Security Deposit' : row.type === 'deposit' ? 'Security Deposit' : row.type === 'job_payment' ? 'Job Payment' : 'Rental Payment'} />
     )},
     { key: 'userName', label: 'User' },
+    { key: 'ownerName', label: 'Owner', render: (row) => row.ownerName || '-' },
+    { key: 'paymentMethod', label: 'Payment Method', render: (row) => row.paymentMethod?.replaceAll('_', ' ') || '-' },
     { key: 'amount', label: 'Amount', render: (row) => (
       <span style={{ color: row.amount >= 0 ? 'var(--color-success)' : 'var(--color-error)', fontWeight: 600 }}>
         {row.amount >= 0 ? '+' : ''}{formatCurrency(row.amount)}
@@ -139,11 +143,11 @@ export default function TrustLedger() {
     {
       key: 'releaseDate', label: 'Release Date', render: (row) => {
         if (row.releaseDate) return formatDate(row.releaseDate);
-        if (row.status === 'pending' || row.status === 'held') {
+        if (row.releaseTransactionId && (row.status === 'pending' || row.status === 'held')) {
           return (
             <button
               className="btn btn-sm btn-accent"
-              onClick={(e) => { e.stopPropagation(); handleRelease(row.id); }}
+              onClick={(e) => { e.stopPropagation(); handleRelease(row.releaseTransactionId); }}
               style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
             >
               Release

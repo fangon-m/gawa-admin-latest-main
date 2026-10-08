@@ -6,7 +6,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
 jest.mock('../../db/supabase', () => ({ from: jest.fn() }));
 
 const supabase = require('../../db/supabase');
-const { listTransactions, processRefund } = require('../transactions');
+const { listTransactions, getTransactionById, processRefund } = require('../transactions');
 const { releaseHeldFunds } = require('../trustLedger');
 
 function makeQuery(result) {
@@ -30,18 +30,50 @@ function makeQuery(result) {
 describe('transactions and trust ledger visibility', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('omits pending client funds from transaction monitoring without querying another table', async () => {
-    const transactionsQuery = makeQuery({ data: [], count: 0, error: null });
+  it('lists client funds in every transaction status', async () => {
+    const transactionsQuery = makeQuery({
+      data: [
+        { id: 'pending-id', type: 'deposit', status: 'pending' },
+        { id: 'held-id', type: 'job_payment', status: 'held' },
+        { id: 'cancelled-id', type: 'rental_payment', status: 'cancelled' },
+        { id: 'refunded-id', type: 'deposit', status: 'refunded' },
+      ],
+      count: 4,
+      error: null,
+    });
     supabase.from.mockReturnValueOnce(transactionsQuery);
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
 
     await listTransactions({ query: {} }, res);
 
-    expect(transactionsQuery.or).toHaveBeenCalledWith(
-      'type.not.in.(job_payment,rental_payment,deposit),status.not.in.(pending,escrow,held)',
-    );
+    expect(transactionsQuery.or).not.toHaveBeenCalled();
     expect(supabase.from).toHaveBeenCalledWith('transactions');
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ data: [] }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.arrayContaining([
+        expect.objectContaining({ id: 'pending-id', status: 'pending' }),
+        expect.objectContaining({ id: 'held-id', status: 'held' }),
+        expect.objectContaining({ id: 'cancelled-id', status: 'cancelled' }),
+        expect.objectContaining({ id: 'refunded-id', status: 'refunded' }),
+      ]),
+    }));
+  });
+
+  it('allows transaction detail lookup for held client funds', async () => {
+    const transaction = {
+      id: 'held-transaction-id',
+      type: 'job_payment',
+      status: 'held',
+    };
+    const transactionQuery = makeQuery({ data: transaction, error: null });
+    supabase.from.mockReturnValueOnce(transactionQuery);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await getTransactionById({ params: { id: transaction.id } }, res);
+
+    expect(transactionQuery.or).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ id: transaction.id, status: 'held' }),
+    }));
   });
 
   it('lists pending payments from the existing transactions table on the trust ledger', async () => {
@@ -60,8 +92,10 @@ describe('transactions and trust ledger visibility', () => {
       data: [{ id: 'user-id', first_name: 'Client', last_name: 'Name' }],
       error: null,
     });
+    const escrowsQuery = makeQuery({ data: [], error: null });
     supabase.from
       .mockReturnValueOnce(transactionsQuery)
+      .mockReturnValueOnce(escrowsQuery)
       .mockReturnValueOnce(usersQuery);
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
 
@@ -79,6 +113,97 @@ describe('transactions and trust ledger visibility', () => {
         userName: 'Client Name',
       })],
     }));
+  });
+
+  it('lists equipment deposit escrow details once alongside transaction entries', async () => {
+    const transactionsQuery = makeQuery({
+      data: [{
+        id: 'transaction-id',
+        user_id: 'renter-id',
+        type: 'deposit',
+        amount: 100,
+        status: 'held',
+        payment_method: 'gcash',
+        related_id: 'request-id',
+        related_type: 'equipment_rental',
+        created_at: '2026-10-06T10:00:00.000Z',
+      }],
+      error: null,
+    });
+    const escrowsQuery = makeQuery({
+      data: [{
+        escrow_id: 'escrow-id',
+        request_id: 'request-id',
+        renter_id: 'renter-id',
+        owner_id: 'owner-id',
+        amount: 100,
+        payment_method: 'gcash',
+        status: 'held',
+        held_at: '2026-10-06T10:00:00.000Z',
+        released_at: null,
+        created_at: '2026-10-06T10:00:00.000Z',
+      }],
+      error: null,
+    });
+    const usersQuery = makeQuery({
+      data: [
+        { id: 'renter-id', first_name: 'Renter', last_name: 'Name' },
+        { id: 'owner-id', first_name: 'Owner', last_name: 'Name' },
+      ],
+      error: null,
+    });
+    supabase.from
+      .mockReturnValueOnce(transactionsQuery)
+      .mockReturnValueOnce(escrowsQuery)
+      .mockReturnValueOnce(usersQuery);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await require('../trustLedger').listEntries({ query: {} }, res);
+
+    expect(supabase.from).toHaveBeenNthCalledWith(2, 'equipment_security_deposit_escrow');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        id: 'transaction-id',
+        displayId: 'ESC-escrow-i',
+        type: 'deposit',
+        isEquipmentEscrow: true,
+        userName: 'Renter Name',
+        ownerName: 'Owner Name',
+        paymentMethod: 'gcash',
+        status: 'held',
+        releaseTransactionId: 'transaction-id',
+      })],
+    }));
+  });
+
+  it('includes equipment escrow balances and completed outcomes in the ledger summary', async () => {
+    const transactionsQuery = makeQuery({ data: [], error: null });
+    const escrowsQuery = makeQuery({
+      data: [
+        { escrow_id: 'held-id', request_id: 'held-request', amount: 25, status: 'held' },
+        { escrow_id: 'released-id', request_id: 'released-request', amount: 100, status: 'released' },
+        { escrow_id: 'refunded-id', request_id: 'refunded-request', amount: 50, status: 'refunded' },
+      ],
+      error: null,
+    });
+    supabase.from
+      .mockReturnValueOnce(transactionsQuery)
+      .mockReturnValueOnce(escrowsQuery);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await require('../trustLedger').getSummary({}, res);
+
+    expect(res.json).toHaveBeenCalledWith({
+      data: {
+        totalDeposits: 175,
+        totalPayouts: 100,
+        totalRefunds: 50,
+        totalHeld: 25,
+        totalPending: 0,
+        currentBalance: 25,
+        totalEntries: 3,
+      },
+    });
   });
 
   it('releases the transaction record used by both pages', async () => {
