@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
 
 const CLIENT_FUND_TRANSACTION_TYPES = ['job_payment', 'rental_payment', 'deposit'];
 const UNRELEASED_STATUSES = ['pending', 'escrow', 'held'];
@@ -155,12 +156,27 @@ async function releaseEscrow(req, res) {
 async function processRefund(req, res) {
   const { data: txn, error: fetchErr } = await supabase
     .from('transactions')
-    .select('id, user_id, type, amount, status, created_at')
+    .select('id, user_id, type, amount, status, created_at, related_id, related_type')
     .eq('id', req.params.id)
     .single();
 
   if (fetchErr || !txn) return res.status(404).json({ error: 'Transaction not found' });
-  if (txn.status === 'refunded') return res.status(400).json({ error: 'Transaction already refunded' });
+  const escrowResult = await findEquipmentDepositEscrow(txn);
+  if (escrowResult.error) return res.status(409).json({ error: escrowResult.error });
+  const escrow = escrowResult.escrow;
+  if (escrow && escrow.status !== 'held' && escrow.status !== 'refunded') {
+    return res.status(409).json({ error: 'This equipment deposit has already been released and cannot be refunded' });
+  }
+  if (txn.status === 'refunded' && (!escrow || escrow.status === 'refunded')) {
+    return res.status(400).json({ error: 'Transaction already refunded' });
+  }
+  if (txn.status === 'refunded' && escrow?.status === 'held') {
+    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'refunded');
+    if (escrowUpdate.error) {
+      return res.status(500).json({ error: `Transaction was refunded, but its equipment deposit escrow record could not be updated. Retry refund to reconcile it. ${escrowUpdate.error}` });
+    }
+    return res.json({ data: toCamelCase(txn), message: 'Transaction refunded' });
+  }
 
   const { data, error } = await supabase
     .from('transactions')
@@ -170,6 +186,12 @@ async function processRefund(req, res) {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+  if (escrow?.status === 'held') {
+    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'refunded');
+    if (escrowUpdate.error) {
+      return res.status(500).json({ error: `Transaction was refunded, but its equipment deposit escrow record could not be updated. Retry refund to reconcile it. ${escrowUpdate.error}` });
+    }
+  }
   res.json({ data: toCamelCase(data), message: 'Transaction refunded' });
 }
 

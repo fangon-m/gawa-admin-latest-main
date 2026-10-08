@@ -122,6 +122,23 @@ async function createAssessmentQuestion(req, res) {
 
 async function updateAssessmentQuestion(req, res) {
   const { partNo, category, questionText, explanation, isActive, choices, correctChoiceId } = req.body;
+  const changesQuestionContent = [partNo, category, questionText, explanation, choices, correctChoiceId]
+    .some((value) => value !== undefined);
+  if (changesQuestionContent) {
+    const { data: attemptedQuestion, error: attemptsError } = await supabase
+      .from('assessment_attempt_answers')
+      .select('question_id')
+      .eq('question_id', req.params.id)
+      .limit(1);
+
+    if (attemptsError) return res.status(500).json({ error: attemptsError.message });
+    if (attemptedQuestion?.length) {
+      return res.status(409).json({
+        error: 'This question has attempt history and cannot be edited; deactivate it and add a replacement question instead',
+      });
+    }
+  }
+
   const updates = {};
   if (partNo !== undefined) updates.part_no = partNo;
   if (category) updates.category = category;
@@ -174,7 +191,17 @@ async function updateAssessmentQuestion(req, res) {
 }
 
 async function deleteAssessmentQuestion(req, res) {
-  // Cascade delete: answer keys, choices, then question
+  const { data: attemptedQuestion, error: attemptsError } = await supabase
+    .from('assessment_attempt_answers')
+    .select('question_id')
+    .eq('question_id', req.params.id)
+    .limit(1);
+
+  if (attemptsError) return res.status(500).json({ error: attemptsError.message });
+  if (attemptedQuestion?.length) {
+    return res.status(409).json({ error: 'This question has attempt history and cannot be deleted; deactivate it and add a replacement question instead' });
+  }
+
   await supabase.from('assessment_answer_keys').delete().eq('question_id', req.params.id);
   await supabase.from('assessment_choices').delete().eq('question_id', req.params.id);
   const { error } = await supabase.from('assessment_questions').delete().eq('question_id', req.params.id);

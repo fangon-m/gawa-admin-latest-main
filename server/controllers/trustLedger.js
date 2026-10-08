@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { getFullName } = require('../utilities/helpers');
+const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
 
 const CLIENT_FUND_TYPES = ['job_payment', 'rental_payment', 'deposit'];
 const UNRELEASED_STATUSES = ['pending', 'escrow', 'held'];
@@ -121,20 +122,40 @@ async function releaseHeldFunds(req, res) {
   if (!CLIENT_FUND_TYPES.includes(transaction.type)) {
     return res.status(400).json({ error: 'Only client payments and deposits can be released here' });
   }
-  if (!UNRELEASED_STATUSES.includes(transaction.status)) {
+  const escrowResult = await findEquipmentDepositEscrow(transaction);
+  if (escrowResult.error) return res.status(409).json({ error: escrowResult.error });
+  const escrow = escrowResult.escrow;
+  if (escrow && escrow.status !== 'held' && escrow.status !== 'released') {
+    return res.status(409).json({ error: 'This equipment deposit has already been refunded and cannot be released' });
+  }
+  if (!UNRELEASED_STATUSES.includes(transaction.status) &&
+      !(transaction.status === 'completed' && escrow?.status === 'held')) {
     return res.status(400).json({ error: 'Transaction must be pending or held to release' });
   }
 
-  const { data, error } = await supabase
-    .from('transactions')
-    .update({ status: 'completed' })
-    .eq('id', req.params.id)
-    .in('status', UNRELEASED_STATUSES)
-    .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
-    .single();
+  let data = transaction;
+  if (transaction.status !== 'completed') {
+    const { data: updatedTransaction, error } = await supabase
+      .from('transactions')
+      .update({ status: 'completed' })
+      .eq('id', req.params.id)
+      .in('status', UNRELEASED_STATUSES)
+      .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
+      .single();
 
-  if (error || !data) {
-    return res.status(500).json({ error: error?.message || 'Transaction release failed' });
+    if (error || !updatedTransaction) {
+      return res.status(500).json({ error: error?.message || 'Transaction release failed' });
+    }
+    data = updatedTransaction;
+  }
+
+  if (escrow?.status === 'held') {
+    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'released');
+    if (escrowUpdate.error) {
+      return res.status(500).json({
+        error: `Transaction was released, but its equipment deposit escrow record could not be updated. Retry release to reconcile it. ${escrowUpdate.error}`,
+      });
+    }
   }
 
   res.json({ data, message: 'Funds released' });

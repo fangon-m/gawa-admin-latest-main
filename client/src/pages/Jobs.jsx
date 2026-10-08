@@ -59,6 +59,9 @@ export default function Jobs() {
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState(null);
   const [deletingQuestion, setDeletingQuestion] = useState(null);
+  const [deactivatingQuestion, setDeactivatingQuestion] = useState(null);
+  const [confirmBulkDeactivate, setConfirmBulkDeactivate] = useState(false);
+  const [questionActionFeedback, setQuestionActionFeedback] = useState(null);
   const [selectedQuestionIds, setSelectedQuestionIds] = useState([]);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [bulkDeleteError, setBulkDeleteError] = useState('');
@@ -67,6 +70,7 @@ export default function Jobs() {
   const [deletingQuestions, setDeletingQuestions] = useState(false);
   const [qTab, setQTab] = useState('questions');
   const [qSearch, setQSearch] = useState('');
+  const [questionStatusFilter, setQuestionStatusFilter] = useState('active');
   const [qForm, setQForm] = useState({
     question: '', questionType: 'multiple_choice', difficulty: 'beginner',
     points: 10, options: ['', '', '', ''], correctAnswer: '',
@@ -104,12 +108,13 @@ export default function Jobs() {
       .filter((sa) => sa.skillId === selectedCategory.skillId)
       .map((sa) => sa.assessmentId);
     const qs = allQuestions.filter((q) => skillAssessmentIds.includes(q.assessmentId));
-    if (qSearch) {
-      const q = qSearch.toLowerCase();
-      return qs.filter((x) => (x.questionText || '').toLowerCase().includes(q));
-    }
-    return qs;
-  }, [selectedCategory, allQuestions, qSearch, allSkillAssessments]);
+    const statusFiltered = qs.filter((question) => questionStatusFilter === 'inactive'
+      ? question.isActive === false
+      : question.isActive !== false);
+    return qSearch
+      ? statusFiltered.filter((x) => (x.questionText || '').toLowerCase().includes(qSearch.toLowerCase()))
+      : statusFiltered;
+  }, [selectedCategory, allQuestions, qSearch, allSkillAssessments, questionStatusFilter]);
 
   const skillAssessments = useMemo(() => {
     if (!selectedCategory) return [];
@@ -120,6 +125,11 @@ export default function Jobs() {
     : skillAssessments[0]?.assessmentId || '';
   const allVisibleQuestionsSelected = questions.length > 0 &&
     questions.every((question) => selectedQuestionIds.includes(question.questionId));
+  const selectedActiveQuestionIds = selectedQuestionIds.filter((id) =>
+    allQuestions.some((question) => question.questionId === id &&
+      skillAssessments.some((assessment) => assessment.assessmentId === question.assessmentId) &&
+      question.isActive !== false)
+  );
 
   const activeSkills = useMemo(() => allSkills.filter((s) => s.isActive !== false), [allSkills]);
 
@@ -128,7 +138,7 @@ export default function Jobs() {
     return activeSkills.map((skill) => {
       const skillAssmts = allSkillAssessments.filter((sa) => sa.skillId === skill.skillId);
       const questions = skillAssmts.flatMap((sa) => 
-        allQuestions.filter((q) => q.assessmentId === sa.assessmentId)
+        allQuestions.filter((q) => q.assessmentId === sa.assessmentId && q.isActive !== false)
       );
       const attemptStats = skillAttemptStats.find((stats) => stats.skillId === skill.skillId);
       const submissionCount = Number(attemptStats?.attemptCount || 0);
@@ -317,6 +327,48 @@ export default function Jobs() {
       setDeletingQuestion(null);
       refetchQs();
     } catch (err) { console.error('Delete question failed:', err); }
+  };
+
+  const handleBulkDeactivateQuestions = async () => {
+    if (!selectedActiveQuestionIds.length) return;
+    setQuestionActionFeedback(null);
+    const results = await Promise.allSettled(
+      selectedActiveQuestionIds.map((id) => assessmentQuestionsApi.updateAssessmentQuestion(id, { isActive: false }))
+    );
+    const succeededIds = selectedActiveQuestionIds.filter((_, index) => results[index].status === 'fulfilled');
+    const failures = results.filter((result) => result.status === 'rejected');
+    setSelectedQuestionIds((current) => current.filter((id) => !succeededIds.includes(id)));
+    setConfirmBulkDeactivate(false);
+    await refetchQs();
+    if (failures.length) {
+      const conflict = failures.find((result) => result.reason?.status === 409);
+      setQuestionActionFeedback({
+        type: 'error',
+        message: `${succeededIds.length} question(s) deactivated; ${failures.length} could not be deactivated.${conflict?.reason?.error ? ` ${conflict.reason.error}` : ''}`,
+      });
+      return;
+    }
+    setQuestionActionFeedback({ type: 'success', message: `${succeededIds.length} questions deactivated.` });
+  };
+
+  const handleDeactivateQuestion = async () => {
+    if (!deactivatingQuestion) return;
+    setQuestionActionFeedback(null);
+    try {
+      await assessmentQuestionsApi.updateAssessmentQuestion(deactivatingQuestion.questionId, { isActive: false });
+      setSelectedQuestionIds((current) => current.filter((id) => id !== deactivatingQuestion.questionId));
+      setDeactivatingQuestion(null);
+      setQuestionActionFeedback({ type: 'success', message: 'Question deactivated.' });
+      await refetchQs();
+    } catch (err) {
+      setDeactivatingQuestion(null);
+      setQuestionActionFeedback({
+        type: 'error',
+        message: err?.status === 409
+          ? err?.error || 'This question has attempt history. Deactivate it and add a replacement question instead.'
+          : err?.error || err?.message || 'Could not deactivate this question.',
+      });
+    }
   };
 
   const handleBulkDelete = async () => {
@@ -565,6 +617,7 @@ export default function Jobs() {
                   <ChevronLeft size={16} /> All Skills
                 </button>
                 <div className={styles.toolbarStats}>
+                  <span>Question set: {selectedCategory.skillName} (all assessments)</span>
                   <span>{questions.length} questions</span>
                   <span>{skillAssessments.length} assessments</span>
                 </div>
@@ -578,6 +631,11 @@ export default function Jobs() {
                     <div className="card-header">
                       <SearchBar value={qSearch} onChange={setQSearch} placeholder="Search questions..." />
                       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                        <select className="form-select" aria-label="Filter questions by status" value={questionStatusFilter}
+                          onChange={(event) => setQuestionStatusFilter(event.target.value)}>
+                          <option value="active">Active questions</option>
+                          <option value="inactive">Deactivated questions</option>
+                        </select>
                         {can('manageAssessmentQuestions') && (
                           <button className="btn btn-accent btn-sm" onClick={openNewForm}>
                             <Plus size={15} /> Add Question
@@ -691,6 +749,14 @@ export default function Jobs() {
                           </label>
                           <span className={styles.selectedCount}>{selectedQuestionIds.length} selected</span>
                           <button
+                            className="btn btn-outline btn-sm"
+                            type="button"
+                            disabled={!selectedActiveQuestionIds.length}
+                            onClick={() => setConfirmBulkDeactivate(true)}
+                          >
+                            Deactivate selected ({selectedActiveQuestionIds.length})
+                          </button>
+                          <button
                             className="btn btn-danger btn-sm"
                             type="button"
                             disabled={!selectedQuestionIds.length || deletingQuestions}
@@ -701,10 +767,16 @@ export default function Jobs() {
                         </div>
                       )}
                       {bulkDeleteError && <p className={styles.bulkDeleteError} role="alert">{bulkDeleteError}</p>}
+                      {questionActionFeedback && (
+                        <p className={questionActionFeedback.type === 'error' ? styles.bulkDeleteError : styles.questionActionSuccess}
+                          role={questionActionFeedback.type === 'error' ? 'alert' : 'status'}>
+                          {questionActionFeedback.message}
+                        </p>
+                      )}
                       {questions.length === 0 ? (
                         <div className="empty-state">
                           <div className="empty-state-icon"><BookOpen size={36} /></div>
-                          <div className="empty-state-text">No questions yet</div>
+                          <div className="empty-state-text">{qSearch || questionStatusFilter === 'inactive' ? 'No questions match this filter' : 'No questions yet'}</div>
                         </div>
                       ) : (
                         <div className={styles.questionList}>
@@ -725,6 +797,12 @@ export default function Jobs() {
                                 <div className={styles.questionItemActions}>
                                   {can('manageAssessmentQuestions') && (
                                     <>
+                                      {q.isActive !== false && (
+                                        <button className="btn btn-outline btn-sm" type="button"
+                                          onClick={() => setDeactivatingQuestion(q)}>
+                                          Deactivate
+                                        </button>
+                                      )}
                                       <button className="btn btn-ghost btn-sm" aria-label="Edit question" onClick={() => openEditForm(q)}><Pencil size={13} /></button>
                                       <button className="btn btn-ghost btn-sm" aria-label="Delete question" onClick={() => setDeletingQuestion(q)}><Trash2 size={13} /></button>
                                     </>
@@ -734,6 +812,7 @@ export default function Jobs() {
                               <div className={styles.questionItemMeta}>
                                 <span className={styles.qBadge}>{q.category}</span>
                                 <span className={styles.qBadge}>{q.points} pts</span>
+                                {q.isActive === false && <span className={`${styles.qBadge} ${styles.qBadgeInactive}`}>Inactive</span>}
                                 {q.answerKey && <span className={styles.qBadge}>Has Answer Key</span>}
                               </div>
                               {q.choices?.length > 0 && (
@@ -764,6 +843,22 @@ export default function Jobs() {
               <ConfirmModal open={!!deletingQuestion} title="Delete Question"
                 message={`Remove this question?`}
                 confirmLabel="Delete" variant="danger" onConfirm={handleDeleteQuestion} onCancel={() => setDeletingQuestion(null)} />
+              <ConfirmModal
+                open={!!deactivatingQuestion}
+                title="Deactivate Question"
+                message="This question will no longer be available for future assessment attempts. Existing attempt history will be preserved."
+                confirmLabel="Deactivate"
+                onConfirm={handleDeactivateQuestion}
+                onCancel={() => setDeactivatingQuestion(null)}
+              />
+              <ConfirmModal
+                open={confirmBulkDeactivate}
+                title={`Deactivate ${selectedActiveQuestionIds.length} question${selectedActiveQuestionIds.length === 1 ? '' : 's'}?`}
+                message="Selected active questions will no longer be available for future assessment attempts. Existing attempt history will be preserved."
+                confirmLabel={`Deactivate ${selectedActiveQuestionIds.length} question${selectedActiveQuestionIds.length === 1 ? '' : 's'}`}
+                onConfirm={handleBulkDeactivateQuestions}
+                onCancel={() => setConfirmBulkDeactivate(false)}
+              />
               <ConfirmModal
                 open={confirmBulkDelete}
                 title={`Delete ${selectedQuestionIds.length} question${selectedQuestionIds.length === 1 ? '' : 's'}?`}

@@ -6,7 +6,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
 jest.mock('../../db/supabase', () => ({ from: jest.fn() }));
 
 const supabase = require('../../db/supabase');
-const { listTransactions } = require('../transactions');
+const { listTransactions, processRefund } = require('../transactions');
 const { releaseHeldFunds } = require('../trustLedger');
 
 function makeQuery(result) {
@@ -21,6 +21,7 @@ function makeQuery(result) {
     order: jest.fn(() => query),
     range: jest.fn(() => query),
     single: jest.fn(() => Promise.resolve(result)),
+    maybeSingle: jest.fn(() => Promise.resolve(result)),
     then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
   };
   return query;
@@ -106,5 +107,82 @@ describe('transactions and trust ledger visibility', () => {
     expect(updateTransaction.update).toHaveBeenCalledWith({ status: 'completed' });
     expect(updateTransaction.eq).toHaveBeenCalledWith('id', transaction.id);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Funds released' }));
+  });
+
+  it('marks the matching equipment deposit escrow as released', async () => {
+    const transaction = {
+      id: 'transaction-id',
+      user_id: 'renter-id',
+      type: 'deposit',
+      amount: 100,
+      status: 'held',
+      related_id: 'request-id',
+      related_type: 'equipment_rental',
+    };
+    const escrow = {
+      escrow_id: 'escrow-id',
+      request_id: 'request-id',
+      renter_id: 'renter-id',
+      amount: 100,
+      status: 'held',
+    };
+    const fetchEntry = makeQuery({ data: transaction, error: null });
+    const findEscrow = makeQuery({ data: escrow, error: null });
+    const updateTransaction = makeQuery({ data: { ...transaction, status: 'completed' }, error: null });
+    const updateEscrow = makeQuery({ data: { escrow_id: 'escrow-id', status: 'released' }, error: null });
+    supabase.from
+      .mockReturnValueOnce(fetchEntry)
+      .mockReturnValueOnce(findEscrow)
+      .mockReturnValueOnce(updateTransaction)
+      .mockReturnValueOnce(updateEscrow);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await releaseHeldFunds({ params: { id: transaction.id } }, res);
+
+    expect(findEscrow.eq).toHaveBeenCalledWith('request_id', 'request-id');
+    expect(updateEscrow.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'released',
+      released_at: expect.any(String),
+    }));
+    expect(updateEscrow.eq).toHaveBeenCalledWith('status', 'held');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Funds released' }));
+  });
+
+  it('marks the matching equipment deposit escrow as refunded', async () => {
+    const transaction = {
+      id: 'transaction-id',
+      user_id: 'renter-id',
+      type: 'deposit',
+      amount: 100,
+      status: 'held',
+      related_id: 'request-id',
+      related_type: 'equipment_rental',
+    };
+    const escrow = {
+      escrow_id: 'escrow-id',
+      request_id: 'request-id',
+      renter_id: 'renter-id',
+      amount: 100,
+      status: 'held',
+    };
+    const fetchEntry = makeQuery({ data: transaction, error: null });
+    const findEscrow = makeQuery({ data: escrow, error: null });
+    const updateTransaction = makeQuery({ data: { ...transaction, status: 'refunded' }, error: null });
+    const updateEscrow = makeQuery({ data: { escrow_id: 'escrow-id', status: 'refunded' }, error: null });
+    supabase.from
+      .mockReturnValueOnce(fetchEntry)
+      .mockReturnValueOnce(findEscrow)
+      .mockReturnValueOnce(updateTransaction)
+      .mockReturnValueOnce(updateEscrow);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await processRefund({ params: { id: transaction.id } }, res);
+
+    expect(findEscrow.eq).toHaveBeenCalledWith('request_id', 'request-id');
+    expect(updateEscrow.update).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'refunded',
+      updated_at: expect.any(String),
+    }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Transaction refunded' }));
   });
 });

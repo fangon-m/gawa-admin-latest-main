@@ -15,9 +15,17 @@ const rateLimit = require('express-rate-limit');
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
+  skip: (req) => req.path === '/assessment-questions/import',
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later' },
+});
+const assessmentImportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many assessment imports, please try again later' },
 });
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -40,6 +48,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Apply rate limiting: generous for general API, strict for auth
 app.use('/api', apiLimiter);
+app.use('/api/assessment-questions/import', assessmentImportLimiter);
 app.use('/api/auth', authLimiter);
 
 // Audit logging middleware for non-GET requests

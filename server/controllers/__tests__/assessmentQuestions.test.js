@@ -7,13 +7,14 @@ jest.mock('../../db/supabase', () => ({
 }));
 
 const supabase = require('../../db/supabase');
-const { deleteAssessmentQuestions } = require('../assessmentQuestions');
+const { deleteAssessmentQuestion, deleteAssessmentQuestions, updateAssessmentQuestion } = require('../assessmentQuestions');
 
 function makeQuery(result) {
   const query = {
     select: jest.fn(() => query),
     eq: jest.fn(() => query),
     in: jest.fn(() => query),
+    limit: jest.fn(() => query),
     delete: jest.fn(() => query),
     then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
   };
@@ -81,5 +82,43 @@ describe('bulk assessment question deletion', () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(supabase.from).not.toHaveBeenCalled();
+  });
+});
+
+describe('assessment questions with attempt history', () => {
+  let res;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  it('blocks single-question deletion when attempt history exists', async () => {
+    const answers = makeQuery({ data: [{ question_id: 'question-1' }], error: null });
+    supabase.from.mockReturnValue(answers);
+
+    await deleteAssessmentQuestion({ params: { id: 'question-1' } }, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'This question has attempt history and cannot be deleted; deactivate it and add a replacement question instead',
+    });
+    expect(supabase.from).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks content edits when attempt history exists', async () => {
+    const answers = makeQuery({ data: [{ question_id: 'question-1' }], error: null });
+    supabase.from.mockReturnValue(answers);
+
+    await updateAssessmentQuestion({
+      params: { id: 'question-1' },
+      body: { questionText: 'Changed question' },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'This question has attempt history and cannot be edited; deactivate it and add a replacement question instead',
+    });
+    expect(supabase.from).toHaveBeenCalledTimes(1);
   });
 });
