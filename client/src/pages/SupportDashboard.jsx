@@ -39,7 +39,7 @@ export default function SupportDashboard() {
   const pendingVerifications = useMemo(() => verifications.filter((v) => v.status === 'pending'), [verifications]);
   const openDisputes = useMemo(() => disputes.filter((d) => d.status !== 'resolved' && d.status !== 'dismissed'), [disputes]);
   const pendingAppeals = useMemo(() => appeals.filter((a) => a.status === 'pending'), [appeals]);
-  const pendingReports = useMemo(() => reports.filter((r) => r.status === 'pending' || r.status === 'under-review'), [reports]);
+  const pendingReports = useMemo(() => reports.filter((r) => r.status === 'open' || r.status === 'under_review'), [reports]);
 
   const stats = [
     { label: 'Pending Verifications', value: formatNumber(pendingVerifications.length), icon: <Check size={20} />, color: 'var(--color-blue)' },
@@ -150,10 +150,10 @@ export default function SupportDashboard() {
                 {pendingReports.slice(0, 2).map((r) => (
                   <div key={r.id} className="recent-item" style={{ cursor: 'pointer' }} onClick={() => navigate('/oversight')}>
                     <div className="recent-item-info">
-                      <div className="recent-item-title">{r.title}</div>
+                      <div className="recent-item-title">{r.issueType}</div>
                       <div className="recent-item-sub">{r.targetType} - {timeAgo(r.createdAt)}</div>
                     </div>
-                    <SeverityBadge severity={r.severity} />
+                    <StatusBadge status={r.status} />
                   </div>
                 ))}
               </>

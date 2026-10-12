@@ -6,10 +6,6 @@ import { setToken, setRefreshToken } from '../api/client';
 const AuthContext = createContext(null);
 const STORAGE_KEY = 'gawa_admin_user';
 const TOKEN_KEY = 'gawa_admin_token';
-const LOCAL_AUTH_KEY = 'gawa_admin_local_auth';
-const DEFAULT_EMAIL = 'gawaadmin@email.com';
-const DEFAULT_PASSWORD = 'gawaadmin123';
-const LOCAL_ADMIN_TOKEN = 'gawa-local-admin-token';
 const defaultAuthState = {
   user: null,
   isAuthenticated: false,
@@ -32,17 +28,14 @@ export function AuthProvider({ children }) {
     const raw = getStored(STORAGE_KEY);
     return raw ? JSON.parse(raw) : null;
   });
-  const [isAuthenticated, setIsAuthenticated] = useState(() => getStored(LOCAL_AUTH_KEY) === 'true');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    if (getStored(LOCAL_AUTH_KEY) === 'true') {
-      setInitializing(false);
-      return;
-    }
-
     const storedToken = getStored(TOKEN_KEY);
     if (!storedToken) {
+      setUser(null);
+      setIsAuthenticated(false);
       setInitializing(false);
       return;
     }
@@ -69,7 +62,6 @@ export function AuthProvider({ children }) {
     const handleAuthExpired = () => {
       setToken(null);
       setStored(TOKEN_KEY, null);
-      setStored(LOCAL_AUTH_KEY, null);
       setUser(null);
       setIsAuthenticated(false);
     };
@@ -84,32 +76,18 @@ export function AuthProvider({ children }) {
   }, [user]);
 
   const login = useCallback(async (email, password) => {
-    if (email === DEFAULT_EMAIL && password === DEFAULT_PASSWORD) {
-      setToken(LOCAL_ADMIN_TOKEN);
-      setRefreshToken(null);
-      setStored(LOCAL_AUTH_KEY, 'true');
-      setUser({
-        id: 'local-admin',
-        name: 'GAWA Admin',
-        email: DEFAULT_EMAIL,
-        role: 'admin',
-        status: 'active',
-      });
-      setIsAuthenticated(true);
-      return true;
-    }
-
     try {
       const response = await authApi.login(email, password);
       const { token, refreshToken, user: userData } = response.data;
       setToken(token);
       if (refreshToken) setRefreshToken(refreshToken);
+      else setRefreshToken(null);
       setStored(TOKEN_KEY, token);
       setUser(userData);
       setIsAuthenticated(true);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      throw error;
     }
   }, []);
 
@@ -130,7 +108,7 @@ export function AuthProvider({ children }) {
   const logout = useCallback(() => {
     setToken(null);
     setStored(TOKEN_KEY, null);
-    setStored(LOCAL_AUTH_KEY, null);
+    setRefreshToken(null);
     setUser(null);
     setIsAuthenticated(false);
   }, []);

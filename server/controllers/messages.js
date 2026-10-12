@@ -1,287 +1,196 @@
+const { createHash } = require('crypto');
 const supabase = require('../db/supabase');
 const { getFullName } = require('../utilities/helpers');
 
-/**
- * Enrich conversation participants with user names and camelCase keys.
- * Takes raw participant rows [{ user_id }] and returns [{ userId, name }].
- */
-async function enrichParticipants(participantRows) {
-  if (!participantRows || participantRows.length === 0) return [];
-  const userIds = participantRows.map(p => p.user_id);
-  const { data: users } = await supabase
+const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at, read_at';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const STAFF_ROLES = new Set(['admin', 'customer_support']);
+
+function isDatabaseUserId(id) {
+  return typeof id === 'string' && UUID_PATTERN.test(id);
+}
+
+function currentParticipant(user) {
+  return {
+    userId: user.id,
+    name: user.name || getFullName(user),
+    role: user.role || user.roles?.[0] || null,
+  };
+}
+
+function otherParticipant(user) {
+  return {
+    userId: user.id,
+    name: getFullName(user),
+    role: user.role || null,
+  };
+}
+
+async function loadUser(userId) {
+  return supabase
     .from('users_table')
-    .select('id, first_name, last_name')
-    .in('id', userIds);
-  const nameMap = {};
-  if (users) users.forEach(u => { nameMap[u.id] = getFullName(u); });
-  return participantRows.map(p => ({
-    userId: p.user_id,
-    name: nameMap[p.user_id] || null,
-  }));
+    .select('id, first_name, middle_name, last_name, email, role')
+    .eq('id', userId)
+    .maybeSingle();
+}
+
+async function loadMessagesForPair(firstUserId, secondUserId) {
+  const [firstToSecond, secondToFirst] = await Promise.all([
+    supabase.from('messages').select(MESSAGE_COLUMNS)
+      .eq('sender_id', firstUserId).eq('receiver_id', secondUserId),
+    supabase.from('messages').select(MESSAGE_COLUMNS)
+      .eq('sender_id', secondUserId).eq('receiver_id', firstUserId),
+  ]);
+
+  if (firstToSecond.error) return { data: null, error: firstToSecond.error };
+  if (secondToFirst.error) return { data: null, error: secondToFirst.error };
+
+  const messages = [...(firstToSecond.data || []), ...(secondToFirst.data || [])];
+  messages.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  return { data: messages, error: null };
+}
+
+function serializeMessage(message) {
+  return {
+    id: message.message_id,
+    senderId: message.sender_id,
+    receiverId: message.receiver_id,
+    text: message.message_text,
+    createdAt: message.created_at,
+  };
+}
+
+function threadForUser(user, admin, messages) {
+  const latest = messages[messages.length - 1];
+  return {
+    id: user.id,
+    lastMessage: latest?.message_text || '',
+    lastMessageAt: latest?.created_at || null,
+    unread: messages.some(message => message.receiver_id === admin.id && !message.read_at),
+    createdAt: latest?.created_at || null,
+    participants: [currentParticipant(admin), otherParticipant(user)],
+  };
 }
 
 async function listConversations(req, res) {
-  const { page = 1, limit = 20, userId } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
-  let query = supabase.from('conversations').select('id, last_message, last_message_at, unread, created_at', { count: 'exact' });
-
-  if (userId) {
-    const { data: participations } = await supabase
-      .from('conversation_participants')
-      .select('conversation_id')
-      .eq('user_id', userId);
-
-    if (!participations || participations.length === 0) {
-      return res.json({ data: [], pagination: { total: 0, page: +page, limit: +limit, totalPages: 0 } });
-    }
-
-    const convIds = participations.map(p => p.conversation_id);
-    query = query.in('id', convIds);
+  if (!isDatabaseUserId(req.user?.id)) {
+    return res.status(400).json({ error: 'Messaging requires a registered admin account.' });
   }
 
-  const { data, error, count } = await query.order('last_message_at', { ascending: false }).range(offset, offset + +limit - 1);
-  if (error) return res.status(500).json({ error: error.message });
+  const [sent, received] = await Promise.all([
+    supabase.from('messages').select(MESSAGE_COLUMNS).eq('sender_id', req.user.id),
+    supabase.from('messages').select(MESSAGE_COLUMNS).eq('receiver_id', req.user.id),
+  ]);
+  if (sent.error) return res.status(500).json({ error: sent.error.message });
+  if (received.error) return res.status(500).json({ error: received.error.message });
 
-  if (!data || data.length === 0) {
-    return res.json({ data: [], pagination: { total: 0, page: +page, limit: +limit, totalPages: 0 } });
+  const byUser = new Map();
+  for (const message of [...(sent.data || []), ...(received.data || [])]) {
+    const userId = message.sender_id === req.user.id ? message.receiver_id : message.sender_id;
+    if (userId === req.user.id) continue;
+    if (!byUser.has(userId)) byUser.set(userId, []);
+    byUser.get(userId).push(message);
   }
 
-  // Batch-load all participants for all conversations in a single query
-  const convIds = data.map(c => c.id);
-  const { data: allParticipants } = await supabase
-    .from('conversation_participants')
-    .select('conversation_id, user_id')
-    .in('conversation_id', convIds);
+  const userIds = [...byUser.keys()];
+  if (userIds.length === 0) {
+    return res.json({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
+  }
 
-  // Group participants by conversation
-  const participantsByConv = {};
-  (allParticipants || []).forEach(p => {
-    if (!participantsByConv[p.conversation_id]) participantsByConv[p.conversation_id] = [];
-    participantsByConv[p.conversation_id].push({ user_id: p.user_id });
-  });
-
-  // Collect all unique user IDs for a single batch name lookup
-  const allUserIds = [...new Set((allParticipants || []).map(p => p.user_id))];
-  const { data: users } = await supabase
+  const { data: users, error: usersError } = await supabase
     .from('users_table')
-    .select('id, first_name, last_name')
-    .in('id', allUserIds);
-  const nameMap = {};
-  if (users) users.forEach(u => { nameMap[u.id] = getFullName(u); });
+    .select('id, first_name, middle_name, last_name, email, role')
+    .in('id', userIds);
+  if (usersError) return res.status(500).json({ error: usersError.message });
 
-  // Enrich each conversation with participant info
-  const enriched = (data || []).map((conv) => {
-    const participants = (participantsByConv[conv.id] || []).map(p => ({
-      userId: p.user_id,
-      name: nameMap[p.user_id] || null,
-    }));
-    return {
-      id: conv.id,
-      lastMessage: conv.last_message,
-      lastMessageAt: conv.last_message_at,
-      unread: conv.unread,
-      createdAt: conv.created_at,
-      participants,
-    };
-  });
+  const userMap = new Map((users || []).map(user => [user.id, user]));
+  const conversations = userIds
+    .filter(userId => userMap.has(userId))
+    .map(userId => {
+      const messages = byUser.get(userId).sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      return threadForUser(userMap.get(userId), req.user, messages);
+    })
+    .sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt));
 
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+  const offset = (page - 1) * limit;
   res.json({
-    data: enriched,
-    pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
+    data: conversations.slice(offset, offset + limit),
+    pagination: { total: conversations.length, page, limit, totalPages: Math.ceil(conversations.length / limit) },
   });
 }
 
 async function getConversation(req, res) {
-  const { data: conv, error: convErr } = await supabase
-    .from('conversations')
-    .select('id, last_message, last_message_at, unread, created_at')
-    .eq('id', req.params.id)
-    .single();
+  const adminId = req.user?.id;
+  const userId = req.params.id;
+  if (!isDatabaseUserId(adminId)) {
+    return res.status(400).json({ error: 'Messaging requires a registered admin account.' });
+  }
+  if (!isDatabaseUserId(userId) || userId === adminId) {
+    return res.status(400).json({ error: 'Invalid message recipient.' });
+  }
 
-  if (convErr || !conv) return res.status(404).json({ error: 'Conversation not found' });
+  const { data: user, error: userError } = await loadUser(userId);
+  if (userError) return res.status(500).json({ error: userError.message });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
 
-  // Verify requesting user is a participant
-  const { data: participant } = await supabase
-    .from('conversation_participants')
-    .select('user_id')
-    .eq('conversation_id', req.params.id)
-    .eq('user_id', req.user.id)
-    .maybeSingle();
+  const { data: messages, error: messagesError } = await loadMessagesForPair(adminId, userId);
+  if (messagesError) return res.status(500).json({ error: messagesError.message });
 
-  if (!participant) return res.status(403).json({ error: 'You are not a participant in this conversation' });
+  const { error: readError } = await supabase.from('messages')
+    .update({ read_at: new Date().toISOString() })
+    .eq('sender_id', userId)
+    .eq('receiver_id', adminId)
+    .is('read_at', null);
+  if (readError) return res.status(500).json({ error: readError.message });
 
-  const { data: msgs } = await supabase
-    .from('messages')
-    .select('id, conversation_id, sender_id, text, created_at')
-    .eq('conversation_id', req.params.id)
-    .order('created_at', { ascending: true });
-
-  const { data: participants } = await supabase
-    .from('conversation_participants')
-    .select('user_id')
-    .eq('conversation_id', req.params.id);
-
-  await supabase
-    .from('conversations')
-    .update({ unread: false })
-    .eq('id', req.params.id);
-
+  const conversation = threadForUser(user, req.user, messages);
+  conversation.unread = false;
   res.json({
     data: {
-      id: conv.id,
-      lastMessage: conv.last_message,
-      lastMessageAt: conv.last_message_at,
-      unread: conv.unread,
-      createdAt: conv.created_at,
-      participants: await enrichParticipants(participants || []),
-      messages: (msgs || []).map(m => ({
-        id: m.id,
-        conversationId: m.conversation_id,
-        senderId: m.sender_id,
-        text: m.text,
-        createdAt: m.created_at,
-      })),
+      ...conversation,
+      messages: messages.map(serializeMessage),
     },
   });
 }
 
 async function sendMessage(req, res) {
-  const { conversationId, text } = req.body;
-  const { data: conv, error: convErr } = await supabase
-    .from('conversations')
-    .select('id, last_message, last_message_at, unread, created_at')
-    .eq('id', conversationId)
-    .single();
+  const adminId = req.user?.id;
+  const userId = req.body.conversationId;
+  const text = req.body.text.trim();
+  if (!isDatabaseUserId(adminId)) {
+    return res.status(400).json({ error: 'Messaging requires a registered admin account.' });
+  }
+  if (!isDatabaseUserId(userId) || userId === adminId) {
+    return res.status(400).json({ error: 'Invalid message recipient.' });
+  }
 
-  if (convErr || !conv) return res.status(404).json({ error: 'Conversation not found' });
+  const { data: user, error: userError } = await loadUser(userId);
+  if (userError) return res.status(500).json({ error: userError.message });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
 
-  // Verify requesting user is a participant
-  const { data: participant } = await supabase
-    .from('conversation_participants')
-    .select('user_id')
-    .eq('conversation_id', conversationId)
-    .eq('user_id', req.user.id)
-    .maybeSingle();
-
-  if (!participant) return res.status(403).json({ error: 'You are not a participant in this conversation' });
-
-  const { data: msg, error: msgErr } = await supabase
+  const createdAt = new Date().toISOString();
+  const messageHash = createHash('sha256').update(text).digest('hex');
+  const { data: message, error: messageError } = await supabase
     .from('messages')
     .insert({
-      conversation_id: conversationId,
-      sender_id: req.user?.id || null,
-      text,
-      created_at: new Date().toISOString(),
+      sender_id: adminId,
+      receiver_id: userId,
+      message_text: text,
+      message_hash: messageHash,
+      created_at: createdAt,
     })
-    .select()
+    .select(MESSAGE_COLUMNS)
     .single();
+  if (messageError) return res.status(500).json({ error: messageError.message });
 
-  if (msgErr) return res.status(500).json({ error: msgErr.message });
-
-  await supabase
-    .from('conversations')
-    .update({
-      last_message: text,
-      last_message_at: msg.created_at,
-      unread: true,
-    })
-    .eq('id', conversationId);
-
-  res.json({
-    data: {
-      id: msg.id,
-      conversationId: msg.conversation_id,
-      senderId: msg.sender_id,
-      text: msg.text,
-      createdAt: msg.created_at,
-    },
+  res.status(201).json({
+    data: serializeMessage(message),
     message: 'Message sent',
   });
 }
 
-async function createConversation(req, res) {
-  const { participantIds } = req.body;
-  if (!participantIds || !Array.isArray(participantIds) || participantIds.length < 2) {
-    return res.status(400).json({ error: 'At least 2 participant IDs are required' });
-  }
-
-  // Check if a conversation already exists between these participants
-  const { data: existingParticipation } = await supabase
-    .from('conversation_participants')
-    .select('conversation_id')
-    .in('user_id', participantIds);
-
-  if (existingParticipation && existingParticipation.length >= participantIds.length) {
-    const convCounts = {};
-    for (const p of existingParticipation) {
-      convCounts[p.conversation_id] = (convCounts[p.conversation_id] || 0) + 1;
-    }
-    for (const [convId, count] of Object.entries(convCounts)) {
-      if (count >= participantIds.length) {
-        const { data: existingConv } = await supabase
-          .from('conversations')
-          .select('*')
-          .eq('id', convId)
-          .single();
-        if (existingConv) {
-          const { data: participants } = await supabase
-            .from('conversation_participants')
-            .select('user_id')
-            .eq('conversation_id', convId);
-          return res.json({
-            data: {
-              id: existingConv.id,
-              lastMessage: existingConv.last_message,
-              lastMessageAt: existingConv.last_message_at,
-              unread: existingConv.unread,
-              createdAt: existingConv.created_at,
-              participants: await enrichParticipants(participants || []),
-            },
-            message: 'Using existing conversation',
-          });
-        }
-      }
-    }
-  }
-
-  // Create new conversation
-  const { data: conv, error: convErr } = await supabase
-    .from('conversations')
-    .insert({ last_message: null, last_message_at: null, unread: false })
-    .select()
-    .single();
-
-  if (convErr) return res.status(500).json({ error: convErr.message });
-
-  // Add participants
-  const participants = participantIds.map(userId => ({
-    conversation_id: conv.id,
-    user_id: userId,
-  }));
-
-  const { error: partErr } = await supabase
-    .from('conversation_participants')
-    .insert(participants);
-
-  if (partErr) return res.status(500).json({ error: partErr.message });
-
-  // Fetch and return enriched conversation
-  const { data: freshParticipants } = await supabase
-    .from('conversation_participants')
-    .select('user_id')
-    .eq('conversation_id', conv.id);
-
-  res.status(201).json({
-    data: {
-      id: conv.id,
-      lastMessage: conv.last_message,
-      lastMessageAt: conv.last_message_at,
-      unread: conv.unread,
-      createdAt: conv.created_at,
-      participants: await enrichParticipants(freshParticipants || []),
-    },
-    message: 'Conversation created',
-  });
-}
-
-module.exports = { listConversations, getConversation, sendMessage, createConversation };
+module.exports = { listConversations, getConversation, sendMessage };

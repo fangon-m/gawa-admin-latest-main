@@ -12,6 +12,9 @@ function createSupabaseClient() {
 
     console.warn('[Supabase] Supabase credentials not configured; running without live database client');
     return {
+      rpc() {
+        return Promise.resolve({ data: null, error: { message: 'Supabase credentials are required for RPC actions' } });
+      },
       from() {
         return {
           select() { return this; },

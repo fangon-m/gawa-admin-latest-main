@@ -23,6 +23,11 @@ CREATE TABLE public.users_table (
   archived_at timestamp with time zone,
   archived_by text,
   archive_reason text,
+  suspension_status text NOT NULL DEFAULT 'none'::text CHECK (suspension_status = ANY (ARRAY['none'::text, 'active'::text, 'resolved'::text, 'expired'::text, 'escalated'::text])),
+  suspended_until timestamp with time zone,
+  suspension_reason text,
+  suspension_updated_at timestamp with time zone,
+  escalated_to_deletion boolean NOT NULL DEFAULT false,
   CONSTRAINT users_table_pkey PRIMARY KEY (id),
   CONSTRAINT users_table_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
@@ -42,6 +47,8 @@ CREATE TABLE public.job_posts (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   job_trades ARRAY NOT NULL DEFAULT '{}'::text[],
   budget numeric,
+  job_latitude double precision,
+  job_longitude double precision,
   CONSTRAINT job_posts_pkey PRIMARY KEY (job_post_id),
   CONSTRAINT job_posts_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.users_table(id)
 );
@@ -96,30 +103,12 @@ CREATE TABLE public.job_matches (
   status text NOT NULL DEFAULT 'pending'::text,
   agreed_price numeric,
   matched_at timestamp with time zone,
-  completed_at timestamp with time zone,
-  confirmed_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT job_matches_pkey PRIMARY KEY (job_match_id),
   CONSTRAINT job_matches_job_post_id_fkey FOREIGN KEY (job_post_id) REFERENCES public.job_posts(job_post_id),
   CONSTRAINT job_matches_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.users_table(id),
   CONSTRAINT job_matches_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users_table(id)
-);
-CREATE TABLE public.check_ins (
-  check_in_id uuid NOT NULL DEFAULT gen_random_uuid(),
-  job_match_id uuid NOT NULL,
-  client_id uuid NOT NULL,
-  user_id uuid NOT NULL,
-  location_lat numeric,
-  location_lng numeric,
-  checked_in_at timestamp with time zone,
-  confirmed_at timestamp with time zone,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT check_ins_pkey PRIMARY KEY (check_in_id),
-  CONSTRAINT check_ins_job_match_id_fkey FOREIGN KEY (job_match_id) REFERENCES public.job_matches(job_match_id),
-  CONSTRAINT check_ins_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.users_table(id),
-  CONSTRAINT check_ins_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users_table(id)
 );
 CREATE TABLE public.job_completion (
   job_completion_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -154,10 +143,12 @@ CREATE TABLE public.reviews (
   rating numeric NOT NULL CHECK (rating >= 1::numeric AND rating <= 5::numeric),
   comment text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  equipment_rental_request_id uuid,
   CONSTRAINT reviews_pkey PRIMARY KEY (review_id),
   CONSTRAINT reviews_job_completion_id_fkey FOREIGN KEY (job_completion_id) REFERENCES public.job_completion(job_completion_id),
   CONSTRAINT reviews_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES public.users_table(id),
-  CONSTRAINT reviews_reviewee_id_fkey FOREIGN KEY (reviewee_id) REFERENCES public.users_table(id)
+  CONSTRAINT reviews_reviewee_id_fkey FOREIGN KEY (reviewee_id) REFERENCES public.users_table(id),
+  CONSTRAINT reviews_equipment_rental_request_id_fkey FOREIGN KEY (equipment_rental_request_id) REFERENCES public.equipment_requests(request_id)
 );
 CREATE TABLE public.equipment_listing_skills (
   listing_id uuid NOT NULL,
@@ -178,11 +169,13 @@ CREATE TABLE public.activity_log (
   related_user_id uuid,
   amount numeric,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  related_payment_request_id uuid,
   CONSTRAINT activity_log_pkey PRIMARY KEY (activity_id),
   CONSTRAINT activity_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users_table(id),
   CONSTRAINT activity_log_related_listing_id_fkey FOREIGN KEY (related_listing_id) REFERENCES public.equipment_listings(listing_id),
   CONSTRAINT activity_log_related_job_post_id_fkey FOREIGN KEY (related_job_post_id) REFERENCES public.job_posts(job_post_id),
-  CONSTRAINT activity_log_related_user_id_fkey FOREIGN KEY (related_user_id) REFERENCES public.users_table(id)
+  CONSTRAINT activity_log_related_user_id_fkey FOREIGN KEY (related_user_id) REFERENCES public.users_table(id),
+  CONSTRAINT activity_log_related_payment_request_id_fkey FOREIGN KEY (related_payment_request_id) REFERENCES public.job_payment_requests(request_id)
 );
 CREATE TABLE public.id_verifications (
   verification_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -235,10 +228,14 @@ CREATE TABLE public.equipment_rentals (
   rental_status text NOT NULL DEFAULT 'active'::text CHECK (rental_status = ANY (ARRAY['active'::text, 'completed'::text, 'cancelled'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  request_id uuid,
+  return_condition text CHECK (return_condition IS NULL OR (return_condition = ANY (ARRAY['no_damage'::text, 'damaged'::text]))),
+  return_damage_images_url ARRAY NOT NULL DEFAULT '{}'::text[],
   CONSTRAINT equipment_rentals_pkey PRIMARY KEY (rental_id),
   CONSTRAINT equipment_rentals_listing_id_fkey FOREIGN KEY (listing_id) REFERENCES public.equipment_listings(listing_id),
   CONSTRAINT equipment_rentals_renter_id_fkey FOREIGN KEY (renter_id) REFERENCES public.users_table(id),
-  CONSTRAINT equipment_rentals_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.users_table(id)
+  CONSTRAINT equipment_rentals_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.users_table(id),
+  CONSTRAINT equipment_rentals_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.equipment_requests(request_id)
 );
 CREATE TABLE public.equipment_requests (
   request_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -335,9 +332,11 @@ CREATE TABLE public.equipment_reviews (
   rating smallint NOT NULL CHECK (rating >= 1 AND rating <= 5),
   review_text text NOT NULL CHECK (length(btrim(review_text)) > 0),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  rental_request_id uuid,
   CONSTRAINT equipment_reviews_pkey PRIMARY KEY (review_id),
   CONSTRAINT equipment_reviews_reviewer_id_fkey FOREIGN KEY (reviewer_id) REFERENCES public.users_table(id),
-  CONSTRAINT equipment_reviews_listing_id_fkey FOREIGN KEY (listing_id) REFERENCES public.equipment_listings(listing_id)
+  CONSTRAINT equipment_reviews_listing_id_fkey FOREIGN KEY (listing_id) REFERENCES public.equipment_listings(listing_id),
+  CONSTRAINT equipment_reviews_rental_request_id_fkey FOREIGN KEY (rental_request_id) REFERENCES public.equipment_requests(request_id)
 );
 CREATE TABLE public.skill_assessments (
   assessment_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -450,6 +449,8 @@ CREATE TABLE public.job_assignments (
   payment_confirmed_at timestamp with time zone,
   payment_method ARRAY NOT NULL DEFAULT '{}'::text[],
   payment_method_used text,
+  job_latitude double precision,
+  job_longitude double precision,
   CONSTRAINT job_assignments_pkey PRIMARY KEY (assignment_id),
   CONSTRAINT job_assignments_proposal_id_fkey FOREIGN KEY (proposal_id) REFERENCES public.job_proposals(proposal_id),
   CONSTRAINT job_assignments_job_post_id_fkey FOREIGN KEY (job_post_id) REFERENCES public.job_posts(job_post_id),
@@ -502,4 +503,80 @@ CREATE TABLE public.equipment_security_deposit_escrow (
   CONSTRAINT equipment_security_deposit_escrow_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.equipment_requests(request_id),
   CONSTRAINT equipment_security_deposit_escrow_renter_id_fkey FOREIGN KEY (renter_id) REFERENCES auth.users(id),
   CONSTRAINT equipment_security_deposit_escrow_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.job_payment_requests (
+  request_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  assignment_id uuid NOT NULL,
+  period_key text NOT NULL,
+  milestone_index integer,
+  amount numeric NOT NULL,
+  status text NOT NULL DEFAULT 'requested'::text CHECK (status = ANY (ARRAY['requested'::text, 'sent'::text, 'confirmed'::text])),
+  payment_requested_at timestamp with time zone NOT NULL DEFAULT now(),
+  payment_sent_at timestamp with time zone,
+  payment_confirmed_at timestamp with time zone,
+  payment_method_used text,
+  payment_request_message text,
+  payment_request_images_url ARRAY,
+  CONSTRAINT job_payment_requests_pkey PRIMARY KEY (request_id),
+  CONSTRAINT job_payment_requests_assignment_id_fkey FOREIGN KEY (assignment_id) REFERENCES public.job_assignments(assignment_id)
+);
+CREATE TABLE public.issue_reports (
+  report_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  reporter_id uuid NOT NULL,
+  target_type text NOT NULL CHECK (target_type = ANY (ARRAY['profile'::text, 'job_post'::text, 'job_proposal'::text, 'job_match'::text, 'equipment_listing'::text, 'equipment_rental'::text, 'equipment_request'::text])),
+  target_id uuid NOT NULL,
+  issue_type text NOT NULL CHECK (length(TRIM(BOTH FROM issue_type)) > 0),
+  comment text NOT NULL CHECK (length(TRIM(BOTH FROM comment)) > 0),
+  attachment_paths ARRAY NOT NULL DEFAULT '{}'::text[],
+  status text NOT NULL DEFAULT 'open'::text CHECK (status = ANY (ARRAY['open'::text, 'under_review'::text, 'resolved'::text, 'dismissed'::text])),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT issue_reports_pkey PRIMARY KEY (report_id),
+  CONSTRAINT issue_reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES public.users_table(id)
+);
+CREATE TABLE public.notifications (
+  notification_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  recipient_id uuid NOT NULL,
+  actor_id uuid,
+  event_type text NOT NULL CHECK (length(btrim(event_type)) > 0),
+  title text NOT NULL CHECK (length(btrim(title)) > 0),
+  body text NOT NULL CHECK (length(btrim(body)) > 0),
+  entity_type text NOT NULL CHECK (entity_type = ANY (ARRAY['job_proposal'::text, 'job_assignment'::text, 'equipment_request'::text, 'verification'::text])),
+  entity_id uuid,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  read_at timestamp with time zone,
+  CONSTRAINT notifications_pkey PRIMARY KEY (notification_id),
+  CONSTRAINT notifications_recipient_id_fkey FOREIGN KEY (recipient_id) REFERENCES auth.users(id),
+  CONSTRAINT notifications_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.messages (
+  message_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  sender_id uuid NOT NULL,
+  receiver_id uuid NOT NULL,
+  message_text text NOT NULL CHECK (length(btrim(message_text)) > 0 AND length(message_text) <= 10000),
+  message_hash text NOT NULL CHECK (message_hash ~ '^[0-9a-f]{64}$'::text),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  read_at timestamp with time zone,
+  delivered_at timestamp with time zone,
+  CONSTRAINT messages_pkey PRIMARY KEY (message_id),
+  CONSTRAINT messages_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.users_table(id),
+  CONSTRAINT messages_receiver_id_fkey FOREIGN KEY (receiver_id) REFERENCES public.users_table(id)
+);
+CREATE TABLE public.issue_report_action_events (
+  action_event_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  report_id uuid NOT NULL,
+  target_type text NOT NULL,
+  target_id uuid NOT NULL,
+  actor_id uuid NOT NULL,
+  actor_role text NOT NULL CHECK (actor_role = ANY (ARRAY['admin'::text, 'customer_support'::text])),
+  action_id text NOT NULL,
+  reason text NOT NULL CHECK (length(btrim(reason)) > 0),
+  idempotency_key uuid NOT NULL,
+  request_hash text NOT NULL CHECK (request_hash ~ '^[0-9a-f]{64}$'::text),
+  before_state jsonb NOT NULL DEFAULT '{}'::jsonb,
+  after_state jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result jsonb NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT issue_report_action_events_pkey PRIMARY KEY (action_event_id),
+  CONSTRAINT issue_report_action_events_report_id_fkey FOREIGN KEY (report_id) REFERENCES public.issue_reports(report_id)
 );

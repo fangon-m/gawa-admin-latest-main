@@ -125,8 +125,8 @@ export function get(path) {
   return request(path);
 }
 
-export function post(path, body) {
-  return request(path, { method: 'POST', body: JSON.stringify(body) });
+export function post(path, body, headers = {}) {
+  return request(path, { method: 'POST', body: JSON.stringify(body), headers });
 }
 
 function sendFile(path, formData, authToken, onProgress) {

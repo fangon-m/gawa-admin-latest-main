@@ -49,7 +49,6 @@ const PERMISSIONS = {
   resolveDispute: { admin: true, customer_support: true },
   escalateDispute: { admin: true, customer_support: true },
   dismissDispute: { admin: true, customer_support: true },
-  moderateReport: { admin: true, customer_support: true },
   sendMessage: { admin: true, customer_support: true },
   issuePoints: { admin: true, customer_support: false },
   deductPoints: { admin: true, customer_support: false },

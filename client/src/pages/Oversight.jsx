@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -6,7 +6,7 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { get, post } from '../api/client';
 import { list as listDisputes } from '../api/disputes';
-import { list as listReports } from '../api/reports';
+import { list as listReports, getActions as getReportActions, executeAction as executeReportAction } from '../api/reports';
 import { list as listAppeals } from '../api/appeals';
 import { list as listReviews } from '../api/reviews';
 import { list as listUserIncidents } from '../api/userIncidents';
@@ -22,10 +22,11 @@ import DetailPanel from '../components/common/DetailPanel';
 import ConfirmModal from '../components/common/ConfirmModal';
 import EvidenceGallery from '../components/common/EvidenceGallery';
 import CaseTimeline from '../components/common/CaseTimeline';
-import { ShieldAlert, CheckCircle, XCircle, User, Briefcase, ExternalLink, FileText, Star, Skull, Clock, AlertTriangle } from 'lucide-react';
+import { ShieldAlert, CheckCircle, XCircle, User, Briefcase, ExternalLink, FileText, Star, Skull, Clock, AlertTriangle, X } from 'lucide-react';
 
 const oversightTabs = [
-  { key: 'disputes', label: 'Disputes & Reports' },
+  { key: 'disputes', label: 'Disputes & Incidents' },
+  { key: 'issue-reports', label: 'Issue Reports' },
   { key: 'reviews', label: 'Reviews' },
   { key: 'appeals', label: 'Appeals' },
   { key: 'job-review-queue', label: 'Job Review Queue' },
@@ -35,15 +36,10 @@ const oversightTabs = [
 const unifiedFilters = [
   { key: 'source', label: 'Source', placeholder: 'All Sources', options: [
     { value: 'dispute', label: 'Dispute' },
-    { value: 'report', label: 'Report' },
     { value: 'incident', label: 'Incident' },
   ]},
   { key: 'type', label: 'Type', placeholder: 'All Types', options: [
     { value: 'job_dispute', label: 'Job Dispute' },
-    { value: 'damage_report', label: 'Damage Report' },
-    { value: 'fraud_report', label: 'Fraud Report' },
-    { value: 'abuse_report', label: 'Abuse Report' },
-    { value: 'report', label: 'Report' },
     { value: 'violation', label: 'Violation' },
     { value: 'fraud', label: 'Fraud' },
     { value: 'damage', label: 'Damage' },
@@ -74,6 +70,15 @@ const appealFilters = [
   ]},
 ];
 
+const issueReportFilters = [
+  { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
+    { value: 'open', label: 'Open' },
+    { value: 'under_review', label: 'Under Review' },
+    { value: 'resolved', label: 'Resolved' },
+    { value: 'dismissed', label: 'Dismissed' },
+  ]},
+];
+
 const unifiedColumns = [
   { key: 'title', label: 'Case', render: (row) => <span className="cell-link">{row.jobTitle || row.jobPostId || row.id}</span> },
   {
@@ -89,6 +94,46 @@ const unifiedColumns = [
   { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
   { key: 'createdAt', label: 'Filed', render: (row) => timeAgo(row.createdAt) },
 ];
+
+const issueReportColumns = [
+  { key: 'reporterName', label: 'Reporter' },
+  { key: 'targetType', label: 'Target Type', render: (row) => <StatusBadge status={row.targetType} /> },
+  { key: 'targetId', label: 'Target ID', render: (row) => <span className="text-xs text-muted font-mono">{row.targetId}</span> },
+  { key: 'issueType', label: 'Issue Type' },
+  { key: 'comment', label: 'Comment', render: (row) => <span className="truncate" style={{ maxWidth: 260, display: 'inline-block' }}>{row.comment}</span> },
+  { key: 'attachmentPaths', label: 'Attachments', render: (row) => row.attachmentPaths?.length || 0 },
+  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+  { key: 'createdAt', label: 'Filed', render: (row) => timeAgo(row.createdAt) },
+];
+
+const issueReportActionLabels = {
+  mark_irrelevant: 'Mark as irrelevant',
+  resolve_target_unavailable: 'Resolve — target unavailable',
+  relist: 'Relist job',
+  flag_job_match: 'Flag job match',
+  warn: 'Record warning',
+  suspend: 'Suspend profile',
+};
+
+const issueReportActionErrors = {
+  TARGET_DELETED: 'The target no longer exists. Refresh the report before trying again.',
+  TARGET_STILL_EXISTS: 'The target is available again. Refresh the report to load its actions.',
+  TARGET_CHANGED: 'The target changed while this report was open. Review the latest state and try again.',
+  REPORT_ALREADY_HANDLED: 'This report has already been handled.',
+  IDEMPOTENCY_CONFLICT: 'This action key was already used for a different request. Start a new action.',
+  ACTION_NOT_ALLOWED_FOR_TARGET: "This action is not available for the target's current type or state.",
+  ALREADY_FLAGGED: 'This job match has already been flagged.',
+  ACTION_FORBIDDEN: 'Your role is not allowed to perform this action.',
+  INVALID_TARGET_VERSION: 'The target version is invalid. Refresh the report before trying again.',
+  INVALID_ACTION_INPUT: 'Review the action details and try again.',
+  RATE_LIMITED: 'Too many moderation actions were attempted. Wait before trying again.',
+  ACTION_FAILED: 'The action could not be completed. No success was recorded.',
+  REPORT_ACTIONS_UNAVAILABLE: 'Permitted actions could not be loaded. Refresh the report or contact an administrator.',
+};
+
+const issueReportActionUnavailableReasons = {
+  SUSPENSION_STORAGE_UNAVAILABLE: 'Suspension is disabled because the user_suspensions table is not installed.',
+};
 
 const reviewColumns = [
   { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.id}</span> },
@@ -380,13 +425,26 @@ export default function Oversight() {
   const [tab, setTab] = useState('disputes');
   const [uFil, uSetFil] = useState({ source: '', type: '', severity: '', status: '' });
   const [aFil, aSetFil] = useState({ status: '' });
+  const [reportFilter, setReportFilter] = useState({ status: '' });
   const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedReport, setSelectedReport] = useState(null);
   const [selectedReview, setSelectedReview] = useState(null);
+  const [reportActions, setReportActions] = useState([]);
+  const [reportActionTarget, setReportActionTarget] = useState(null);
+  const [reportActionsLoading, setReportActionsLoading] = useState(false);
+  const [reportActionsError, setReportActionsError] = useState('');
+  const [reportActionPrompt, setReportActionPrompt] = useState(null);
+  const [reportActionReason, setReportActionReason] = useState('');
+  const [reportActionDuration, setReportActionDuration] = useState(7);
+  const [reportActionSubmitting, setReportActionSubmitting] = useState(false);
+  const [reportActionError, setReportActionError] = useState('');
+  const [reportActionIdempotencyKey, setReportActionIdempotencyKey] = useState('');
+  const reportActionButtonRef = useRef(null);
 
   const { data: disputes } = useApiData(() => listDisputes({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
-  const { data: allReports } = useApiData(() => listReports({ limit: 100 }), [], {
+  const { data: allReports, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useApiData(() => listReports({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
   const { data: reviews, refetch: refetchReviews } = useApiData(() => listReviews({ limit: 100 }), [], {
@@ -398,6 +456,129 @@ export default function Oversight() {
   const { data: appeals } = useApiData(() => listAppeals({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
+
+  useEffect(() => {
+    if (!selectedReport) {
+      setReportActions([]);
+      setReportActionTarget(null);
+      setReportActionsError('');
+      return undefined;
+    }
+
+    let current = true;
+    setReportActionsLoading(true);
+    setReportActions([]);
+    setReportActionTarget(null);
+    setReportActionsError('');
+    setReportActionPrompt(null);
+    setReportActionReason('');
+    setReportActionIdempotencyKey('');
+    getReportActions(selectedReport.id)
+      .then((result) => {
+        if (!current) return;
+        setReportActions(result.actions || []);
+        setReportActionTarget(result.target || null);
+      })
+      .catch((error) => {
+        if (!current) return;
+        setReportActions([]);
+        setReportActionsError(issueReportActionErrors[error?.error] || 'Unable to load permitted actions.');
+      })
+      .finally(() => {
+        if (current) setReportActionsLoading(false);
+      });
+
+    return () => { current = false; };
+  }, [selectedReport?.id]);
+
+  useEffect(() => {
+    if (reportActionPrompt) return undefined;
+    reportActionButtonRef.current?.focus();
+    return undefined;
+  }, [reportActionPrompt]);
+
+  useEffect(() => {
+    if (!reportActionPrompt) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !reportActionSubmitting) {
+        setReportActionPrompt(null);
+        setReportActionReason('');
+        setReportActionError('');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [reportActionPrompt, reportActionSubmitting]);
+
+  const closeReportActionPrompt = () => {
+    if (reportActionSubmitting) return;
+    setReportActionPrompt(null);
+    setReportActionReason('');
+    setReportActionError('');
+    setReportActionIdempotencyKey('');
+  };
+
+  const submitReportAction = async (event) => {
+    event.preventDefault();
+    if (!reportActionPrompt || reportActionSubmitting || !reportActionReason.trim()) return;
+
+    const idempotencyKey = reportActionIdempotencyKey || crypto.randomUUID();
+    setReportActionIdempotencyKey(idempotencyKey);
+    setReportActionSubmitting(true);
+    setReportActionError('');
+    const actionPrompt = reportActionPrompt;
+    let result;
+    try {
+      const payload = {
+        reason: reportActionReason.trim(),
+      };
+      if (actionPrompt.id === 'suspend') payload.durationDays = Number(reportActionDuration);
+
+      result = await executeReportAction(
+        selectedReport.id,
+        actionPrompt.id,
+        payload,
+        idempotencyKey,
+        reportActionTarget?.version || null
+      );
+    } catch (error) {
+      const errorCode = error?.error;
+      setReportActionError(issueReportActionErrors[errorCode] || 'The action failed. Please try again.');
+      setReportActionSubmitting(false);
+      if (error?.status === 409) {
+        getReportActions(selectedReport.id).then((latestActions) => {
+          setReportActions(latestActions.actions || []);
+          setReportActionTarget(latestActions.target || null);
+          setReportActionsError('');
+        }).catch(() => {
+          setReportActionsError('The report changed and available actions could not be refreshed.');
+        });
+      }
+      return;
+    }
+
+    setReportActionSubmitting(false);
+    setSelectedReport(report => ({ ...report, status: result.reportStatus || report.status }));
+    setReportActionPrompt(null);
+    setReportActionReason('');
+    setReportActionIdempotencyKey('');
+    addNotification(
+      'moderation_decision',
+      'Issue Report Action Recorded',
+      `${issueReportActionLabels[actionPrompt.id]} — ${selectedReport.issueType}`,
+      '/oversight'
+    );
+    refetchReports();
+    getReportActions(selectedReport.id)
+      .then((latestActions) => {
+        setReportActions(latestActions.actions || []);
+        setReportActionTarget(latestActions.target || null);
+        setReportActionsError('');
+      })
+      .catch(() => {
+        setReportActionsError('Action completed, but the available actions could not be refreshed.');
+      });
+  };
 
   // Escalation queue state
   const [escTab, setEscTab] = useState('expired');
@@ -441,12 +622,14 @@ export default function Oversight() {
 
   const unifiedData = useMemo(() => {
     const d = (disputes || []).map(r => ({ ...r, _source: 'dispute' }));
-    const r = (allReports || [])
-      .filter(r => r.status === 'pending' || r.status === 'under-review')
-      .map(r => ({ ...r, _source: 'report' }));
     const i = (incidents || []).map(r => ({ ...r, _source: 'incident' }));
-    return [...d, ...r, ...i];
-  }, [disputes, allReports, incidents]);
+    return [...d, ...i];
+  }, [disputes, incidents]);
+
+  const filteredReports = useMemo(() => {
+    if (!reportFilter.status) return allReports;
+    return allReports.filter(report => report.status === reportFilter.status);
+  }, [allReports, reportFilter.status]);
 
   const filteredUnified = useMemo(() => {
     let data = [...unifiedData];
@@ -513,7 +696,7 @@ export default function Oversight() {
                 <FilterBar filters={unifiedFilters} values={uFil} onChange={(key, value) => uSetFil((p) => ({ ...p, [key]: value }))} />
               </div>
               <div className="card-body p-0">
-                <DataTable columns={unifiedColumns} data={filteredUnified} onRowClick={(row) => setSelectedItem(row)} pageSize={10} emptyMessage="No disputes, reports, or incidents found." />
+                <DataTable columns={unifiedColumns} data={filteredUnified} onRowClick={(row) => setSelectedItem(row)} pageSize={10} emptyMessage="No disputes or incidents found." />
               </div>
             </div>
             <DetailPanel open={!!selectedItem} onClose={() => setSelectedItem(null)} title={selectedItem?.title || 'Details'}>
@@ -525,11 +708,10 @@ export default function Oversight() {
                     <div className="detail-field"><div className="detail-label">Title</div><div className="detail-value">{selectedItem.title || '-'}</div></div>
                     <div className="detail-field"><div className="detail-label">Source</div><div className="detail-value"><StatusBadge status={selectedItem._source} /></div></div>
                     <div className="detail-field"><div className="detail-label">Type</div><div className="detail-value"><StatusBadge status={selectedItem.type} /></div></div>
-                    <div className="detail-field"><div className="detail-label">Severity</div><div className="detail-value"><SeverityBadge severity={selectedItem.severity} /></div></div>
+                    {selectedItem.severity && <div className="detail-field"><div className="detail-label">Severity</div><div className="detail-value"><SeverityBadge severity={selectedItem.severity} /></div></div>}
                     <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedItem.status} /></div></div>
                     {selectedItem.description && <div className="detail-field"><div className="detail-label">Description</div><div className="detail-value">{selectedItem.description}</div></div>}
                     {selectedItem.reporterName && <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedItem.reporterName}</div></div>}
-                    {selectedItem.reporter && <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedItem.reporter}</div></div>}
                     {selectedItem.respondentName && <div className="detail-field"><div className="detail-label">Respondent</div><div className="detail-value">{selectedItem.respondentName}</div></div>}
                     {selectedItem.targetType && <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedItem.targetType}</div></div>}
                     {selectedItem.assignedName && <div className="detail-field"><div className="detail-label">Assigned To</div><div className="detail-value">{selectedItem.assignedName}</div></div>}
@@ -570,6 +752,182 @@ export default function Oversight() {
                 </div>
               )}
             </DetailPanel>
+          </div>
+        )}
+        {tab === 'issue-reports' && (
+          <div>
+            <div className="card">
+              <div className="card-header">
+                <FilterBar
+                  filters={issueReportFilters}
+                  values={reportFilter}
+                  onChange={(key, value) => setReportFilter(previous => ({ ...previous, [key]: value }))}
+                />
+              </div>
+              {reportsError && <div className="alert alert-error" role="alert">Unable to load issue reports: {reportsError}</div>}
+              <div className="card-body p-0">
+                <DataTable
+                  columns={issueReportColumns}
+                  data={filteredReports}
+                  onRowClick={setSelectedReport}
+                  pageSize={10}
+                  loading={reportsLoading}
+                  emptyMessage="No issue reports found."
+                />
+              </div>
+            </div>
+            <DetailPanel
+              open={!!selectedReport}
+              onClose={() => setSelectedReport(null)}
+              title={selectedReport?.issueType || 'Issue Report'}
+            >
+              {selectedReport && (
+                <div className="detail-panel-section">
+                  <h4>Issue Report</h4>
+                  <div className="detail-field"><div className="detail-label">Report ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.id}</div></div>
+                  <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedReport.reporterName}</div></div>
+                  <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedReport.targetType}</div></div>
+                  <div className="detail-field"><div className="detail-label">Target ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.targetId}</div></div>
+                  <div className="detail-field"><div className="detail-label">Issue Type</div><div className="detail-value">{selectedReport.issueType}</div></div>
+                  <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReport.comment}</div></div>
+                  <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedReport.status} /></div></div>
+                  <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDateTime(selectedReport.createdAt)}</div></div>
+                  <div className="detail-field">
+                    <div className="detail-label">Attachments</div>
+                    <div className="detail-value">
+                      {selectedReport.attachmentPaths?.length
+                        ? selectedReport.attachmentPaths.map((path, index) => <div key={`${path}-${index}`}>{path}</div>)
+                        : 'None'}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {selectedReport && (
+                <div className="detail-panel-section">
+                  <h4>Available Actions</h4>
+                  {!reportActionsLoading && reportActionTarget && !reportActionTarget.exists && (
+                    <p className="text-muted text-sm" role="status">The reported target no longer exists. Resolve the report with a reason; actions on the missing target are disabled.</p>
+                  )}
+                  {reportActionsError && <div className="alert alert-error" role="alert">{reportActionsError}</div>}
+                  {reportActionsLoading ? (
+                    <p className="text-muted text-sm" role="status">Loading permitted actions...</p>
+                  ) : reportActions.length ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                      {reportActions.map((availableAction) => (
+                        <button
+                          key={availableAction.id}
+                          type="button"
+                          className={`btn btn-sm ${availableAction.id === 'suspend' ? 'btn-danger' : 'btn-outline'}`}
+                          disabled={!availableAction.allowed}
+                          title={
+                            issueReportActionUnavailableReasons[availableAction.unavailableReason]
+                            || (!availableAction.allowed ? 'Administrator role required' : availableAction.description)
+                          }
+                          aria-describedby={`issue-action-description-${availableAction.id}`}
+                          onClick={(event) => {
+                            reportActionButtonRef.current = event.currentTarget;
+                            setReportActionPrompt(availableAction);
+                            setReportActionReason('');
+                            setReportActionDuration(7);
+                            setReportActionError('');
+                            setReportActionIdempotencyKey('');
+                          }}
+                        >
+                          {issueReportActionLabels[availableAction.id] || availableAction.id}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    !reportActionsError && <p className="text-muted text-sm">No actions are currently available for this report.</p>
+                  )}
+                  {reportActions.map(availableAction => (
+                    <p
+                      key={`${availableAction.id}-description`}
+                      id={`issue-action-description-${availableAction.id}`}
+                      className="text-muted text-xs"
+                    >
+                      {availableAction.description}
+                      {!availableAction.allowed && availableAction.adminOnly && !availableAction.unavailableReason && ' Administrator role required.'}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </DetailPanel>
+            {reportActionPrompt && (
+              <div className="modal-overlay" onClick={closeReportActionPrompt}>
+                <section
+                  className="modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="issue-report-action-title"
+                  aria-describedby="issue-report-action-description"
+                  onClick={event => event.stopPropagation()}
+                  onKeyDown={event => {
+                    if (event.key !== 'Tab') return;
+                    const focusable = event.currentTarget.querySelectorAll('button:not(:disabled), textarea:not(:disabled), input:not(:disabled)');
+                    if (!focusable.length) return;
+                    const first = focusable[0];
+                    const last = focusable[focusable.length - 1];
+                    if (event.shiftKey && document.activeElement === first) {
+                      event.preventDefault();
+                      last.focus();
+                    } else if (!event.shiftKey && document.activeElement === last) {
+                      event.preventDefault();
+                      first.focus();
+                    }
+                  }}
+                >
+                  <div className="modal-header">
+                    <h3 id="issue-report-action-title">{issueReportActionLabels[reportActionPrompt.id] || 'Confirm action'}</h3>
+                    <button type="button" className="modal-close" aria-label="Close confirmation" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}><X size={18} /></button>
+                  </div>
+                  <form onSubmit={submitReportAction}>
+                    <div className="modal-body">
+                      <p id="issue-report-action-description" style={{ color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                        {reportActionPrompt.description} This action will be recorded in the immutable moderation audit log.
+                      </p>
+                      <div className="form-group">
+                        <label className="form-label" htmlFor="issue-report-action-reason">Reason (required)</label>
+                        <textarea
+                          id="issue-report-action-reason"
+                          className="form-textarea"
+                          rows={4}
+                          maxLength={1000}
+                          required
+                          autoFocus
+                          value={reportActionReason}
+                          onChange={event => setReportActionReason(event.target.value)}
+                          disabled={reportActionSubmitting}
+                        />
+                      </div>
+                      {reportActionPrompt.id === 'suspend' && (
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="issue-report-action-duration">Suspension duration (days)</label>
+                          <input
+                            id="issue-report-action-duration"
+                            className="form-input"
+                            type="number"
+                            min="1"
+                            max="90"
+                            required
+                            value={reportActionDuration}
+                            onChange={event => setReportActionDuration(event.target.value)}
+                            disabled={reportActionSubmitting}
+                          />
+                        </div>
+                      )}
+                      {reportActionError && <div className="alert alert-error" role="alert">{reportActionError}</div>}
+                    </div>
+                    <div className="modal-footer">
+                      <button type="button" className="btn btn-outline" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}>Cancel</button>
+                      <button type="submit" className={`btn ${reportActionPrompt.id === 'suspend' ? 'btn-danger' : 'btn-accent'}`} disabled={reportActionSubmitting || !reportActionReason.trim()}>
+                        {reportActionSubmitting ? 'Applying...' : 'Confirm action'}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            )}
           </div>
         )}
         {tab === 'reviews' && renderReviews()}

@@ -20,6 +20,7 @@ function queryReturning(result) {
   const query = {
     select: jest.fn(() => query),
     eq: jest.fn(() => query),
+    maybeSingle: jest.fn(() => Promise.resolve(result)),
     single: jest.fn(() => Promise.resolve(result)),
     then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
   };
@@ -53,7 +54,46 @@ describe('authenticate archive enforcement', () => {
 
   it('continues authentication for users who are not archived', async () => {
     serviceClient.from.mockImplementation((table) => table === 'users_table'
-      ? queryReturning({ data: { id: 'user-uuid', is_archived: false }, error: null })
+      ? queryReturning({ data: { id: 'user-uuid', is_archived: false, suspension_status: 'none' }, error: null })
+      : queryReturning({ data: [], error: null }));
+
+    await authenticate(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('denies API access for users with an active suspension', async () => {
+    serviceClient.from.mockImplementation((table) => table === 'users_table'
+      ? queryReturning({
+        data: {
+          id: 'user-uuid',
+          is_archived: false,
+          suspension_status: 'active',
+          suspended_until: new Date(Date.now() + 60_000).toISOString(),
+        },
+        error: null,
+      })
+      : queryReturning({ data: [], error: null }));
+
+    await authenticate(req, res, next);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({ error: 'This account is suspended and cannot access the application' });
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('allows API access after a timed suspension expires', async () => {
+    serviceClient.from.mockImplementation((table) => table === 'users_table'
+      ? queryReturning({
+        data: {
+          id: 'user-uuid',
+          is_archived: false,
+          suspension_status: 'active',
+          suspended_until: new Date(Date.now() - 60_000).toISOString(),
+        },
+        error: null,
+      })
       : queryReturning({ data: [], error: null }));
 
     await authenticate(req, res, next);

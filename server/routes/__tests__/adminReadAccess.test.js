@@ -33,7 +33,6 @@ jest.mock('../../controllers/users', () => ({
 }));
 jest.mock('../../controllers/reports', () => ({
   listReports: mockRouteResponse,
-  moderateReport: mockRouteResponse,
 }));
 jest.mock('../../controllers/reviews', () => ({
   listReviews: mockRouteResponse,

@@ -113,7 +113,7 @@ async function rejectVerification(req, res) {
 }
 
 async function reviewVerification(req, res, { status, isVerified, remarks, message }) {
-  const reviewerId = req.user?.id && req.user.id !== 'local-admin' ? req.user.id : null;
+  const reviewerId = req.user?.id || null;
 
   const { data: verification, error: verificationError } = await supabase
     .from('id_verifications')

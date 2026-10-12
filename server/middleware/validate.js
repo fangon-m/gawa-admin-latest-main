@@ -70,6 +70,10 @@ const schemas = {
   archiveUser: z.object({
     reason: z.string().trim().min(1, 'Archive reason is required').max(500),
   }),
+  issueReportAction: z.object({
+    reason: z.string().trim().min(1, 'A reason is required').max(1000),
+    durationDays: z.coerce.number().int().min(1).max(90).optional(),
+  }),
 
   // Verifications
   reviewVerification: z.object({
@@ -91,11 +95,7 @@ const schemas = {
   // Messages
   sendMessage: z.object({
     conversationId: z.string().uuid('Invalid conversation ID'),
-    text: z.string().min(1, 'Message text is required').max(5000),
-  }),
-
-  createConversation: z.object({
-    participantIds: z.array(z.string().uuid()).min(2, 'At least 2 participant IDs are required'),
+    text: z.string().trim().min(1, 'Message text is required').max(10000),
   }),
 
   // Notes

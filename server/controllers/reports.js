@@ -1,64 +1,53 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
-
-async function enrichReports(reports) {
-  if (!reports || reports.length === 0) return [];
-  const userIds = new Set();
-  reports.forEach(r => { if (r.reporter_id) userIds.add(r.reporter_id); });
-
-  let userMap = {};
-  if (userIds.size > 0) {
-    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name').in('id', [...userIds]);
-    if (users) users.forEach(u => { userMap[u.id] = getFullName(u); });
-  }
-
-  return reports.map(r => ({
-    ...toCamelCase(r),
-    reporterName: userMap[r.reporter_id] || r.reporter_id,
-  }));
-}
+const { getFullName } = require('../utilities/helpers');
 
 async function listReports(req, res) {
-  const { page = 1, limit = 20, status, type, severity } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+  const offset = (page - 1) * limit;
 
-  let query = supabase.from('reports').select('*', { count: 'exact' });
-  if (status) query = query.eq('status', status);
-  if (type) query = query.eq('type', type);
-  if (severity) query = query.eq('severity', severity);
+  let query = supabase.from('issue_reports').select(
+    'report_id, reporter_id, target_type, target_id, issue_type, comment, attachment_paths, status, created_at',
+    { count: 'exact' }
+  );
+  if (req.query.status) query = query.eq('status', req.query.status);
 
   const { data, error, count } = await query
     .order('created_at', { ascending: false })
-    .range(offset, offset + +limit - 1);
-
+    .range(offset, offset + limit - 1);
   if (error) return res.status(500).json({ error: error.message });
+
+  const reporterIds = [...new Set((data || []).map(report => report.reporter_id).filter(Boolean))];
+  let reporterNames = new Map();
+  if (reporterIds.length) {
+    const { data: users, error: usersError } = await supabase
+      .from('users_table')
+      .select('id, first_name, middle_name, last_name, email')
+      .in('id', reporterIds);
+    if (usersError) return res.status(500).json({ error: usersError.message });
+    reporterNames = new Map((users || []).map(user => [user.id, getFullName(user)]));
+  }
+
   res.json({
-    data: await enrichReports(data || []),
-    pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
+    data: (data || []).map(report => ({
+      id: report.report_id,
+      reporterId: report.reporter_id,
+      reporterName: reporterNames.get(report.reporter_id) || report.reporter_id,
+      targetType: report.target_type,
+      targetId: report.target_id,
+      issueType: report.issue_type,
+      comment: report.comment,
+      attachmentPaths: report.attachment_paths || [],
+      status: report.status,
+      createdAt: report.created_at,
+    })),
+    pagination: {
+      total: count || 0,
+      page,
+      limit,
+      totalPages: Math.ceil((count || 0) / limit),
+    },
   });
 }
 
-async function moderateReport(req, res) {
-  const { decision, decisionNotes } = req.body;
-  if (!decision || !['keep', 'remove', 'warn'].includes(decision)) {
-    return res.status(400).json({ error: 'Decision must be keep, remove, or warn' });
-  }
-
-  const { data, error } = await supabase
-    .from('reports')
-    .update({
-      status: 'resolved',
-      decision,
-      decision_notes: decisionNotes || '',
-      resolved_at: new Date().toISOString(),
-    })
-    .eq('id', req.params.id)
-    .select()
-    .single();
-
-  if (error || !data) return res.status(404).json({ error: 'Report not found' });
-  const enriched = await enrichReports([data]);
-  res.json({ data: enriched[0], message: `Report moderated: ${decision}` });
-}
-
-module.exports = { listReports, moderateReport };
+module.exports = { listReports };

@@ -24,8 +24,8 @@ export default function LoginPage() {
       } else {
         setError('Invalid email or password');
       }
-    } catch {
-      setError('An error occurred. Please try again.');
+    } catch (err) {
+      setError(err?.error || err?.message || 'An error occurred. Please try again.');
     } finally {
       setLoading(false);
     }

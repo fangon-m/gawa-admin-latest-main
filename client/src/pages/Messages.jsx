@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { listConversations, getConversation, sendMessage, createConversation } from '../api/messages';
+import { listConversations, getConversation, sendMessage } from '../api/messages';
 import * as usersApi from '../api/users';
 import { timeAgo, getInitials, capitalizeWords } from '../utils/helpers';
 import Header from '../components/layout/Header';
@@ -11,16 +11,23 @@ import MessageComposer from '../components/common/MessageComposer';
 import { Mail, SquarePen, X } from 'lucide-react';
 import styles from './Messages.module.css';
 
+function getRequestError(error, fallback) {
+  const details = error?.details?.map(({ field, message }) => `${field}: ${message}`).join('; ');
+  return details || error?.error || error?.message || fallback;
+}
+
 export default function Messages() {
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState('');
   const [activeConv, setActiveConv] = useState(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [newSearch, setNewSearch] = useState('');
+  const [messageError, setMessageError] = useState('');
+  const [sending, setSending] = useState(false);
 
   const currentUserId = currentUser?.id;
 
-  const { data: conversations, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
+  const { data: conversations, error: conversationsError, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
@@ -28,14 +35,13 @@ export default function Messages() {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  const { data: activeData, refetch: refetchConv } = useApiData(
+  const { data: activeData, error: activeError, refetch: refetchConv } = useApiData(
     () => activeConv ? getConversation(activeConv) : Promise.resolve({ data: null }),
     [activeConv],
     { defaultValue: null, transform: (r) => r?.data ?? r, immediate: !!activeConv }
   );
 
   const [doSendMessage] = useMutation(sendMessage);
-  const [doCreateConversation] = useMutation(createConversation);
 
   const filteredConvs = useMemo(() => {
     let data = [...conversations];
@@ -76,42 +82,37 @@ export default function Messages() {
     ? (activeData.participants || []).find((p) => p.userId !== currentUserId)
     : null;
 
-  const handleStartConversation = useCallback(async (selectedUser) => {
-    const existing = conversations.find((c) =>
-      (c.participants || []).some((p) => p.userId === selectedUser.id)
-    );
-    if (existing) {
-      setActiveConv(existing.id);
-    } else if (currentUserId) {
-      try {
-        const res = await doCreateConversation({
-          participantIds: [currentUserId, selectedUser.id],
-        });
-        const conv = res?.data ?? res;
-        if (conv?.id) {
-          setActiveConv(conv.id);
-          refetchConvs();
-        }
-      } catch {
-        // unable to create conversation
-      }
-    }
+  const handleStartConversation = useCallback((selectedUser) => {
+    setMessageError('');
+    setActiveConv(selectedUser.id);
     setShowNewMessage(false);
     setNewSearch('');
-  }, [conversations, currentUserId, doCreateConversation, refetchConvs]);
+  }, []);
 
   const handleSend = async (text) => {
-    if (!activeConv) return;
+    if (!activeConv || sending) return false;
+    setMessageError('');
+    setSending(true);
     try {
       await doSendMessage({ conversationId: activeConv, text });
-      refetchConv();
-      refetchConvs();
-    } catch (err) { console.error('Send message failed:', err); }
+      await Promise.all([refetchConv(), refetchConvs()]);
+      return true;
+    } catch (err) {
+      setMessageError(getRequestError(err, 'Unable to send message.'));
+      return false;
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
     <div>
       <Header title="Messages" />
+      {(messageError || conversationsError || activeError) && (
+        <div className="alert alert-error" role="alert">
+          {messageError || conversationsError || activeError}
+        </div>
+      )}
       <div className="messages-layout">
         <div className="messages-list">
           <div className="messages-list-header">
@@ -215,7 +216,7 @@ export default function Messages() {
               <div className="messages-thread-body">
                 <MessageThread messages={activeData.messages || []} currentUserId={currentUserId} />
               </div>
-              <MessageComposer onSend={handleSend} />
+              <MessageComposer onSend={handleSend} disabled={sending} />
             </>
           )}
         </div>
