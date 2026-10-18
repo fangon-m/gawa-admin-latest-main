@@ -1,7 +1,6 @@
 const path = require('path');
 const XLSX = require('@e965/xlsx');
 const supabase = require('../db/supabase');
-const { createAuditLog } = require('../middleware/auditLogger');
 
 const MAX_ROWS = 500;
 const MAX_CHOICES = 10;
@@ -96,37 +95,19 @@ function parseAssessmentRows(rows) {
   return { questions, errors };
 }
 
-async function logImportFailure(req, assessmentId, description) {
-  await createAuditLog({
-    agentId: req.user?.id,
-    agentName: req.user?.name,
-    action: 'ASSESSMENT_QUESTION_IMPORT_FAILED',
-    module: 'assessment-questions',
-    targetId: assessmentId || null,
-    targetType: 'skill_assessment',
-    description,
-    ipAddress: req.ip,
-    userAgent: req.headers?.['user-agent'],
-  });
-}
-
 async function importAssessmentQuestions(req, res) {
   const assessmentId = typeof req.body?.assessmentId === 'string' ? req.body.assessmentId : '';
   const skillId = typeof req.body?.skillId === 'string' ? req.body.skillId : '';
   if (assessmentId && !UUID_PATTERN.test(assessmentId)) {
-    await logImportFailure(req, assessmentId, 'Import rejected: invalid assessment ID.');
     return res.status(400).json({ error: 'The assessment ID is invalid.' });
   }
   if (!assessmentId && !UUID_PATTERN.test(skillId)) {
-    await logImportFailure(req, null, 'Import rejected: assessment and skill IDs are missing or invalid.');
     return res.status(400).json({ error: 'A valid skill ID is required when creating an assessment from an import.' });
   }
   if (!req.file) {
-    await logImportFailure(req, assessmentId, 'Import rejected: no workbook uploaded.');
     return res.status(400).json({ error: 'Choose an Excel or CSV file to import.' });
   }
   if (!/\.(xlsx|xls|csv)$/i.test(path.extname(req.file.originalname || ''))) {
-    await logImportFailure(req, assessmentId, 'Import rejected: unsupported file extension.');
     return res.status(400).json({ error: 'Only .xlsx, .xls, and .csv files are supported.' });
   }
 
@@ -146,13 +127,11 @@ async function importAssessmentQuestions(req, res) {
     }
     rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false, blankrows: false });
   } catch (error) {
-    await logImportFailure(req, assessmentId, `Import rejected: workbook parsing failed (${error.message}).`);
     return res.status(400).json({ error: error.validationMessage || 'The uploaded workbook could not be read.' });
   }
 
   const parsed = parseAssessmentRows(rows);
   if (parsed.errors.length) {
-    await logImportFailure(req, assessmentId, `Import rejected: ${parsed.errors.length} validation error(s).`);
     return res.status(400).json({ error: 'The workbook contains invalid rows.', details: parsed.errors });
   }
 
@@ -165,15 +144,12 @@ async function importAssessmentQuestions(req, res) {
       .maybeSingle();
     if (assessmentError) {
       console.error('[Assessment import] Assessment lookup failed:', assessmentError.message);
-      await logImportFailure(req, assessmentId, 'Import failed: assessment lookup failed.');
       return res.status(500).json({ error: 'Unable to verify the target assessment.' });
     }
     if (!assessment) {
-      await logImportFailure(req, assessmentId, 'Import rejected: target assessment does not exist.');
       return res.status(404).json({ error: 'The target assessment was not found.' });
     }
     if (skillId && assessment.skill_id !== skillId) {
-      await logImportFailure(req, assessmentId, 'Import rejected: assessment does not belong to the selected skill.');
       return res.status(400).json({ error: 'The assessment does not belong to the selected skill.' });
     }
   } else {
@@ -184,11 +160,9 @@ async function importAssessmentQuestions(req, res) {
       .maybeSingle();
     if (skillError) {
       console.error('[Assessment import] Skill lookup failed:', skillError.message);
-      await logImportFailure(req, null, 'Import failed: skill lookup failed.');
       return res.status(500).json({ error: 'Unable to verify the target skill.' });
     }
     if (!skill) {
-      await logImportFailure(req, null, 'Import rejected: target skill does not exist.');
       return res.status(404).json({ error: 'The target skill was not found.' });
     }
     assessmentTitle = `${skill.skill_name} Assessment`.slice(0, 200);
@@ -202,7 +176,6 @@ async function importAssessmentQuestions(req, res) {
   });
   if (error) {
     console.error('[Assessment import] Transaction failed:', error.message);
-    await logImportFailure(req, assessmentId || null, 'Import failed: transactional database insert rolled back.');
     if (error.code === 'PGRST202' || error.code === '42883') {
       return res.status(500).json({
         error: 'The assessment import database migration is missing or outdated. Apply server/db/migrations/20261005_import_assessment_questions.sql, then retry.',

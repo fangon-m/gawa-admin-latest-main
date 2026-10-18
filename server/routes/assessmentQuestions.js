@@ -4,7 +4,6 @@ const ctrl = require('../controllers/assessmentQuestions');
 const importCtrl = require('../controllers/assessmentQuestionImport');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
-const { createAuditLog } = require('../middleware/auditLogger');
 const multer = require('multer');
 
 const upload = multer({
@@ -23,17 +22,6 @@ async function handleUploadError(error, req, res, next) {
   const tooLarge = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE';
   const status = tooLarge ? 413 : 400;
   const message = tooLarge ? 'The uploaded file must be 5 MB or smaller.' : error.message;
-  await createAuditLog({
-    agentId: req.user?.id,
-    agentName: req.user?.name,
-    action: 'ASSESSMENT_QUESTION_IMPORT_FAILED',
-    module: 'assessment-questions',
-    targetId: req.body?.assessmentId || null,
-    targetType: 'skill_assessment',
-    description: `Import rejected: ${message}`,
-    ipAddress: req.ip,
-    userAgent: req.headers?.['user-agent'],
-  });
   return res.status(status).json({ error: message });
 }
 

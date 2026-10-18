@@ -9,8 +9,7 @@ import Header from '../components/layout/Header';
 import StatCard from '../components/common/StatCard';
 import ChartCard from '../components/common/ChartCard';
 import StatusBadge from '../components/common/StatusBadge';
-import SeverityBadge from '../components/common/SeverityBadge';
-import { Users, UserRoundCheck, Briefcase, Building2, ShieldAlertIcon, AlertTriangle, ArrowLeftRightIcon, Star, Sword, RotateCcw, Activity, TrendingUp } from 'lucide-react';
+import { Users, UserRoundCheck, Briefcase, Building2, AlertTriangle, ArrowLeftRightIcon, Star, Activity, TrendingUp } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import styles from './Dashboard.module.css';
 
@@ -32,7 +31,6 @@ export default function Dashboard() {
     verifiedUsers: dashStats.verifiedUsers || 0,
     activeJobs: dashStats.activeJobs || 0,
     activeRentals: dashStats.activeRentals || 0,
-    pendingDisputes: dashStats.pendingDisputes || 0,
     flaggedContent: dashStats.flaggedContent || 0,
     totalTransactions: dashStats.totalTransactions || 0,
     pendingVerifications: dashStats.pendingVerifications || 0,
@@ -40,7 +38,6 @@ export default function Dashboard() {
   };
 
   const pendingV = (dashStats.pendingVerificationsList || []).slice(0, 5);
-  const openD = (dashStats.openDisputesList || []).slice(0, 4);
   const recentActions = dashStats.recentActions || [];
 
   // Backend already excludes admin + customer_support from role queries.
@@ -56,7 +53,6 @@ export default function Dashboard() {
     { label: 'Verified Users', value: formatNumber(stats.verifiedUsers), icon: <UserRoundCheck size={20} />, color: 'var(--color-success)', trend: undefined, path: '/users' },
     { label: 'Active Jobs', value: formatNumber(stats.activeJobs), icon: <Briefcase size={20} />, color: 'var(--color-text)', trend: dashStats.activeJobsGrowth, path: '/jobs' },
     { label: 'Active Rentals', value: formatNumber(stats.activeRentals), icon: <Building2 size={20} />, color: 'var(--color-accent)', trend: undefined, path: '/rentals' },
-    { label: 'Pending Disputes', value: formatNumber(stats.pendingDisputes), icon: <ShieldAlertIcon size={20} />, color: 'var(--color-warning)', trend: dashStats.pendingDisputesGrowth, path: '/oversight' },
     { label: 'Flagged Content', value: formatNumber(stats.flaggedContent), icon: <AlertTriangle size={20} />, color: 'var(--color-error)', trend: undefined, path: '/oversight' },
     { label: 'Total Transactions', value: formatNumber(stats.totalTransactions), icon: <ArrowLeftRightIcon size={20} />, color: 'var(--color-success)', trend: dashStats.totalTransactionsGrowth, path: '/transactions' },
     { label: 'Pending Verifications', value: formatNumber(stats.pendingVerifications), icon: <UserRoundCheck size={20} />, color: 'var(--color-text-muted)', trend: undefined, path: '/verifications' },
@@ -65,9 +61,6 @@ export default function Dashboard() {
 
   const quickActions = [
     { label: 'Review Verifications', icon: <UserRoundCheck size={18} />, path: '/verifications', permission: 'viewVerifications' },
-    { label: 'View Disputes', icon: <ShieldAlertIcon size={18} />, path: '/oversight', permission: 'viewDisputes' },
-    { label: 'Moderate Content', icon: <Sword size={18} />, path: '/oversight', permission: 'viewDisputes' },
-    { label: 'Check Appeals', icon: <RotateCcw size={18} />, path: '/oversight', permission: 'viewDisputes' },
     { label: 'Monitor Transactions', icon: <ArrowLeftRightIcon size={18} />, path: '/transactions', permission: 'viewTransactions' },
     { label: 'Manage Gawa Points', icon: <Star size={18} />, path: '/gawa-points', permission: 'viewGawaPoints' },
   ];
@@ -157,10 +150,6 @@ export default function Dashboard() {
                   <div className={styles.overviewItemLabel}>Outstanding</div>
                   <div className={styles.overviewItemValue}>{formatNumber(dashStats.outstandingGawaPoints || 0)}</div>
                 </div>
-                <div className={styles.overviewItem}>
-                  <div className={styles.overviewItemLabel}>Incidents</div>
-                  <div className={styles.overviewItemValue}>{dashStats.incidentsThisMonth || 0}</div>
-                </div>
               </div>
               <div style={{ marginTop: '0.75rem', paddingTop: '0.75rem', borderTop: '1px solid var(--color-divider)' }}>
                 <div className={styles.metricsList}>
@@ -203,29 +192,6 @@ export default function Dashboard() {
                         <div className="recent-item-sub">{formatDate(v.submittedAt || v.createdAt)}</div>
                       </div>
                       <StatusBadge status="pending" />
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="card">
-              <div className="card-header">
-                <h3>Recent Disputes & Reports</h3>
-              </div>
-              <div className="card-body">
-                {openD.length === 0 ? (
-                  <div className="empty-state">
-                    <div className="empty-state-text">No open disputes</div>
-                  </div>
-                ) : (
-                  openD.map((d) => (
-                    <div key={d.id} className="recent-item clickable" onClick={() => navigate(`/disputes/${d.id}`)}>
-                      <div className="recent-item-info">
-                        <div className="recent-item-title">{d.title}</div>
-                        <div className="recent-item-sub">{d.type} - {timeAgo(d.createdAt)}</div>
-                      </div>
-                      <SeverityBadge severity={d.severity} />
                     </div>
                   ))
                 )}
@@ -296,13 +262,6 @@ export default function Dashboard() {
                   User Growth
                 </span>
                 <span className={styles.statusItemValue}>{dashStats.userGrowth || 0}%</span>
-              </div>
-              <div className={styles.statusItem}>
-                <span className={styles.statusItemLabel}>
-                  <span className={styles.statusItemDot} style={{ background: 'var(--color-warning)' }} />
-                  Dispute Growth
-                </span>
-                <span className={styles.statusItemValue}>{dashStats.disputeGrowth || 0}%</span>
               </div>
               <div className={styles.statusItem}>
                 <span className={styles.statusItemLabel}>

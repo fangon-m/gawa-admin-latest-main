@@ -43,7 +43,10 @@ function createSupabaseClient() {
         signInWithPassword: async () => ({ data: null, error: null }),
         resetPasswordForEmail: async () => ({ data: null, error: null }),
         admin: {
+          createUser: async () => ({ data: null, error: { message: 'Supabase credentials are required to create users' } }),
           updateUserById: async () => ({ data: null, error: null }),
+          deleteUser: async () => ({ data: null, error: { message: 'Supabase credentials are required to delete users' } }),
+          listUsers: async () => ({ data: { users: [] }, error: { message: 'Supabase credentials are required to list users' } }),
         },
       },
     };

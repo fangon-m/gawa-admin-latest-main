@@ -35,9 +35,11 @@ describe('updateUser controller', () => {
 
     const mockUpdatedUser = {
       id: 'user-uuid-123',
-      name: 'New Name',
+      first_name: 'New',
+      last_name: 'Name',
       phone: '+63 912 345 6789',
       location: 'Manila',
+      complete_address: 'Manila',
       email: 'user@email.com',
       role: 'client',
       created_at: '2025-01-01T00:00:00Z',
@@ -53,9 +55,10 @@ describe('updateUser controller', () => {
 
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'New Name',
+        first_name: 'New',
+        last_name: 'Name',
+        complete_address: 'Manila',
         phone: '+63 912 345 6789',
-        location: 'Manila',
       })
     );
     expect(res.json).toHaveBeenCalledWith(
@@ -75,7 +78,8 @@ describe('updateUser controller', () => {
 
     const mockUpdatedUser = {
       id: 'user-uuid-123',
-      name: 'Just Name',
+      first_name: 'Just',
+      last_name: 'Name',
       phone: '+63 912 345 6789',
       location: 'Manila',
       email: 'user@email.com',
@@ -92,7 +96,8 @@ describe('updateUser controller', () => {
 
     expect(mockUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'Just Name',
+        first_name: 'Just',
+        last_name: 'Name',
         updated_at: expect.any(String),
       })
     );

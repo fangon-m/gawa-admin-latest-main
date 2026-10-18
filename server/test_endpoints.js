@@ -37,20 +37,16 @@ async function main() {
     { name: 'DASHBOARD', path: '/dashboard/stats' },
     { name: 'USERS', path: '/users?limit=2' },
     { name: 'JOBS', path: '/jobs?limit=2' },
-    { name: 'DISPUTES', path: '/disputes?limit=2' },
     { name: 'TRANSACTIONS', path: '/transactions?limit=2' },
     { name: 'VERIFICATIONS', path: '/verifications?limit=2' },
     { name: 'LISTINGS', path: '/listings?limit=2' },
     { name: 'RENTALS', path: '/rentals?limit=2' },
-    { name: 'INCIDENTS', path: '/incidents' },
-    { name: 'APPEALS', path: '/appeals' },
     { name: 'MESSAGES', path: '/messages' },
-    { name: 'CATEGORIES', path: '/categories' },
-    { name: 'MODERATION', path: '/moderation' },
     { name: 'GAWA POINTS PACKS', path: '/gawa-points/packs' },
     { name: 'FEE CONFIG', path: '/fee-config' },
-    { name: 'QUESTIONS', path: '/questions' },
-    { name: 'ASSESSMENTS', path: '/assessments' },
+    { name: 'SKILLS', path: '/skills' },
+    { name: 'SKILL ASSESSMENTS', path: '/skill-assessments' },
+    { name: 'ASSESSMENT QUESTIONS', path: '/assessment-questions' },
   ];
 
   let passed = 0;

@@ -11,13 +11,8 @@ const PERMISSIONS = {
   viewListingDetail: { admin: true, customer_support: true },
   viewTransactions: { admin: true, customer_support: false },
   viewTransactionDetail: { admin: true, customer_support: false },
-  viewDisputes: { admin: true, customer_support: true },
-  viewDisputeDetail: { admin: true, customer_support: true },
-  viewModeration: { admin: true, customer_support: true },
-  viewIncidents: { admin: true, customer_support: false },
+  viewOversight: { admin: true, customer_support: true },
   viewGawaPoints: { admin: true, customer_support: false },
-  viewAppeals: { admin: true, customer_support: true },
-  viewAppealDetail: { admin: true, customer_support: true },
   viewMessages: { admin: true, customer_support: true },
   viewSettings: { admin: true, customer_support: true },
   viewSupportDashboard: { admin: true, customer_support: true },
@@ -46,9 +41,6 @@ const PERMISSIONS = {
   removeJob: { admin: true, customer_support: false },
   flagListing: { admin: true, customer_support: true },
   removeListing: { admin: true, customer_support: false },
-  resolveDispute: { admin: true, customer_support: true },
-  escalateDispute: { admin: true, customer_support: true },
-  dismissDispute: { admin: true, customer_support: true },
   sendMessage: { admin: true, customer_support: true },
   issuePoints: { admin: true, customer_support: false },
   deductPoints: { admin: true, customer_support: false },
@@ -60,21 +52,18 @@ const PERMISSIONS = {
   completeJob: { admin: true, customer_support: false },
 
   manageTasks: { admin: true, customer_support: false },
-  exportIncidents: { admin: true, customer_support: false },
   viewFinance: { admin: true, customer_support: false },
   viewAuditLogs: { admin: true, customer_support: false },
   manageSettings: { admin: true, customer_support: false },
 
   viewAssessments: { admin: true, customer_support: true },
   manageQuestions: { admin: true, customer_support: false },
-  takeAssessment: { admin: true, customer_support: false },
   gradeAssessment: { admin: true, customer_support: false },
 
   viewEscalatedJobs: { admin: true, customer_support: true },
   resolveEscalatedJob: { admin: true, customer_support: false },
 
   viewAssessmentAttempts: { admin: true, customer_support: true },
-  grantRetakeException: { admin: true, customer_support: false },
 
   // Skills & Assessment System
   viewSkills: { admin: true, customer_support: true },

@@ -2,6 +2,7 @@ import { get, post, patch, del } from './client';
 import { toQueryString } from '../utils/helpers';
 
 export const list = (params) => get(`/users${toQueryString(params)}`);
+export const listTeam = () => get('/users/team');
 export const getById = (id) => get(`/users/${id}`);
 export const invite = (body) => post('/users/invite', body);
 export const update = (id, body) => patch(`/users/${id}`, body);

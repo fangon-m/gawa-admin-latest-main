@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { logAdminActivity } = require('../utilities/activityLogger');
 
 async function enrichWithUser(items, userIdKey = 'user_id') {
   if (!items || items.length === 0) return [];
@@ -120,6 +121,15 @@ async function issuePoints(req, res) {
   }
 
   res.json({ data: txn, message: `${pts} points issued to user ${userId}` });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'points_topped_up',
+    category: 'wallet',
+    relatedUserId: userId,
+    amount: +pts,
+    description: `Admin issued ${pts} points to user ${userId}: ${reason || 'no reason'}`,
+  });
 }
 
 async function deductPoints(req, res) {

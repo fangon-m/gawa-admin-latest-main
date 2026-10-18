@@ -1,31 +1,21 @@
 const supabase = require('../db/supabase');
 const crypto = require('crypto');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { logAdminActivity } = require('../utilities/activityLogger');
 
-const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
+const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, suspension_status, suspended_until, suspension_reason, suspension_updated_at, escalated_to_deletion, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
 
 function mapUser(u) {
+  const suspensionActive = u.suspension_status === 'active' || u.suspension_status === 'escalated';
   return {
     ...toCamelCase(u),
     name: getFullName(u),
     fullName: getFullName(u),
-    status: u.is_archived ? 'archived' : (u.status || (u.is_verified ? 'verified' : 'unverified')),
+    status: u.is_archived ? 'archived' : suspensionActive ? 'suspended' : (u.status || (u.is_verified ? 'verified' : 'unverified')),
     location: u.complete_address,
     avatarUrl: u.profile_image_url,
     joinedAt: u.created_at,
   };
-}
-
-async function fetchSuspensionData(userIds) {
-  if (!userIds || userIds.length === 0) return {};
-  const { data } = await supabase
-    .from('user_suspensions')
-    .select('user_id, suspended_until, suspension_reason, escalated_to_deletion, suspension_status')
-    .in('user_id', userIds)
-    .in('suspension_status', ['active', 'escalated']);
-  const map = {};
-  (data || []).forEach(s => { map[s.user_id] = s; });
-  return map;
 }
 
 async function listUsers(req, res) {
@@ -57,12 +47,10 @@ async function listUsers(req, res) {
     });
   }
 
-  const suspensionMap = await fetchSuspensionData(userIds);
   const skillsMap = await fetchEntitySkills(userIds, 'profile');
 
   res.json({
     data: (data || []).map(u => {
-      const susp = suspensionMap[u.id] || {};
       return {
         ...mapUser(u),
         displayId: u.id?.slice(0, 8),
@@ -70,13 +58,38 @@ async function listUsers(req, res) {
         roles: rolesByUser[u.id] || [],
         roleProfiles: [],
         skills: skillsMap[u.id] || [],
-        suspendedUntil: susp.suspended_until || null,
-        suspensionReason: susp.suspension_reason || null,
-        archivedAt: u.archived_at || null,
-        archiveReason: u.archive_reason || null,
       };
     }),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
+  });
+}
+
+async function listTeamMembers(req, res) {
+  const { data, error } = await supabase
+    .from('users_table')
+    .select(USER_SELECT)
+    .in('role', ['admin', 'customer_support'])
+    .order('created_at', { ascending: true });
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const userIds = (data || []).map(u => u.id);
+  const rolesByUser = {};
+  if (userIds.length > 0) {
+    const { data: rolesRes } = await supabase.from('user_roles').select('user_id, roles(role_name)').in('user_id', userIds);
+    (rolesRes || []).forEach(r => {
+      if (!rolesByUser[r.user_id]) rolesByUser[r.user_id] = [];
+      rolesByUser[r.user_id].push(r.roles?.role_name);
+    });
+  }
+
+  res.json({
+    data: (data || []).map(u => ({
+      ...mapUser(u),
+      status: u.is_archived ? 'archived' : 'active',
+      roles: rolesByUser[u.id] || [],
+      isSelf: u.id === req.user?.id,
+    })),
   });
 }
 
@@ -89,10 +102,9 @@ async function getUserById(req, res) {
 
   if (error || !user) return res.status(404).json({ error: 'User not found' });
 
-  const [notesRes, rolesRes, suspensionRes] = await Promise.all([
+  const [notesRes, rolesRes] = await Promise.all([
     supabase.from('user_notes').select('*').eq('user_id', req.params.id),
     supabase.from('user_roles').select('*, roles(role_name)').eq('user_id', req.params.id),
-    supabase.from('user_suspensions').select('*').eq('user_id', req.params.id).in('suspension_status', ['active', 'escalated']).maybeSingle(),
   ]);
 
   const rawNotes = notesRes.data || [];
@@ -106,7 +118,6 @@ async function getUserById(req, res) {
 
   const skillsMap = await fetchEntitySkills([req.params.id], 'profile');
 
-  const susp = suspensionRes.data || {};
   res.json({
     data: {
       ...mapUser(user),
@@ -114,10 +125,9 @@ async function getUserById(req, res) {
       roles: (rolesRes.data || []).map(r => ({ ...r, roleName: r.roles?.role_name })),
       roleProfiles: [],
       skills: skillsMap[req.params.id] || [],
-      suspendedUntil: susp.suspended_until || null,
-      suspensionReason: susp.suspension_reason || null,
-      escalatedToDeletion: susp.escalated_to_deletion || false,
-      status: user.is_archived ? 'archived' : susp.escalated_to_deletion ? 'archived' : susp.suspension_status ? 'suspended' : (user.is_verified ? 'verified' : 'unverified'),
+      suspendedUntil: user.suspended_until || null,
+      suspensionReason: user.suspension_reason || null,
+      escalatedToDeletion: user.escalated_to_deletion || false,
     },
   });
 }
@@ -125,60 +135,85 @@ async function getUserById(req, res) {
 async function suspendUser(req, res) {
   const { duration = 7, reason = '' } = req.body;
   const days = Math.max(1, Math.min(90, Math.round(+duration || 7)));
-  const suspendedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date();
+  const suspendedUntil = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: existingSusp } = await supabase
-    .from('user_suspensions')
-    .select('suspension_id')
-    .eq('user_id', req.params.id)
-    .eq('suspension_status', 'active')
+  const { data: existingUser, error: fetchErr } = await supabase
+    .from('users_table')
+    .select('id, is_archived, suspension_status, suspended_until')
+    .eq('id', req.params.id)
     .maybeSingle();
 
-  const { data: existingUser } = await supabase
-    .from('users_table')
-    .select('id')
-    .eq('id', req.params.id)
-    .single();
-
+  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
   if (!existingUser) return res.status(404).json({ error: 'User not found' });
 
-  if (existingSusp) {
-    const { error: updateErr } = await supabase
-      .from('user_suspensions')
-      .update({ suspended_until: suspendedUntil, suspension_reason: reason || null })
-      .eq('suspension_id', existingSusp.suspension_id);
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-  } else {
-    const { error: insertErr } = await supabase
-      .from('user_suspensions')
-      .insert({
-        user_id: req.params.id,
-        suspended_until: suspendedUntil,
-        suspension_reason: reason || null,
-        suspension_status: 'active',
-      });
-    if (insertErr) return res.status(500).json({ error: insertErr.message });
+  if (existingUser.is_archived) {
+    return res.status(409).json({ error: 'Archived accounts cannot be suspended. Unarchive the account first.' });
   }
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  const { data: suspension } = await supabase.from('user_suspensions').select('*').eq('user_id', req.params.id).eq('suspension_status', 'active').maybeSingle();
+  const alreadySuspended = existingUser.suspension_status === 'active'
+    && (existingUser.suspended_until === null || new Date(existingUser.suspended_until) > now);
+  if (alreadySuspended) {
+    return res.status(409).json({ error: 'User is already suspended' });
+  }
+
+  const { data: user, error: updateErr } = await supabase
+    .from('users_table')
+    .update({
+      suspension_status: 'active',
+      suspended_until: suspendedUntil,
+      suspension_reason: reason || null,
+      suspension_updated_at: now.toISOString(),
+      escalated_to_deletion: false,
+      updated_at: now.toISOString(),
+    })
+    .eq('id', req.params.id)
+    .select(USER_SELECT)
+    .single();
+
+  if (updateErr || !user) return res.status(500).json({ error: updateErr?.message || 'Could not suspend user' });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_suspended',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin suspended user ${req.params.id} for ${days} day(s): ${reason || 'no reason'}`,
+  });
 
   res.json({
-    data: { ...mapUser(user), status: 'suspended', suspendedUntil: suspension?.suspended_until, suspensionReason: suspension?.suspension_reason },
+    data: { ...mapUser(user), status: 'suspended', suspendedUntil: user.suspended_until, suspensionReason: user.suspension_reason },
     message: `User suspended for ${days} day(s)`,
   });
 }
 
 async function reinstateUser(req, res) {
-  await Promise.all([
-    supabase.from('user_suspensions')
-      .update({ suspension_status: 'resolved', resolved_at: new Date().toISOString() })
-      .eq('user_id', req.params.id)
-      .eq('suspension_status', 'active'),
-  ]);
+  const now = new Date().toISOString();
+  const { data: user, error } = await supabase
+    .from('users_table')
+    .update({
+      suspension_status: 'resolved',
+      suspended_until: null,
+      suspension_reason: null,
+      suspension_updated_at: now,
+      escalated_to_deletion: false,
+      updated_at: now,
+    })
+    .eq('id', req.params.id)
+    .select(USER_SELECT)
+    .single();
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user), status: user?.is_verified ? 'verified' : 'unverified' }, message: 'User reinstated' });
+  if (error || !user) return res.status(404).json({ error: 'User not found' });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_reinstated',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin reinstated user ${req.params.id}`,
+  });
+
+  res.json({ data: mapUser(user), message: 'User reinstated' });
 }
 
 async function flagUser(req, res) {
@@ -197,12 +232,30 @@ async function flagUser(req, res) {
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_flagged',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin flagged user ${req.params.id}`,
+  });
+
   res.json({ data: { ...mapUser(user), status: 'flagged', flag: data }, message: 'User flagged' });
 }
 
 async function deleteUser(req, res) {
   const { error } = await supabase.auth.admin.deleteUser(req.params.id);
   if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_deleted',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin deleted user ${req.params.id}`,
+  });
+
   res.json({ message: 'User deleted' });
 }
 
@@ -260,6 +313,14 @@ async function archiveUser(req, res) {
     return res.status(502).json({ error: banError.message });
   }
 
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_archived',
+    category: 'user',
+    relatedUserId: userId,
+    description: `Admin archived and banned user ${userId}: ${req.body.reason || 'no reason'}`,
+  });
+
   res.json({ data: mapUser(archivedUser), message: 'User archived and banned from signing in' });
 }
 
@@ -304,93 +365,15 @@ async function unarchiveUser(req, res) {
     return res.status(502).json({ error: unbanError.message });
   }
 
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_unarchived',
+    category: 'user',
+    relatedUserId: userId,
+    description: `Admin unarchived and restored access for user ${userId}`,
+  });
+
   res.json({ data: mapUser(restoredUser), message: 'User unarchived and sign-in restored' });
-}
-
-async function listEscalatedUsers(req, res) {
-  const now = new Date().toISOString();
-
-  const { data: expired, error: expiredErr } = await supabase
-    .from('user_suspensions')
-    .select('*, users_table!inner(*)')
-    .eq('suspension_status', 'active')
-    .lt('suspended_until', now)
-    .not('suspended_until', 'is', null)
-    .order('suspended_until', { ascending: false });
-
-  if (expiredErr) return res.status(500).json({ error: expiredErr.message });
-
-  const { data: escalated, error: escalatedErr } = await supabase
-    .from('user_suspensions')
-    .select('*, users_table!inner(*)')
-    .eq('escalated_to_deletion', true);
-
-  if (escalatedErr) return res.status(500).json({ error: escalatedErr.message });
-
-  const mapUser = (s) => ({
-    ...mapUser(s.users_table),
-    suspendedUntil: s.suspended_until,
-    suspensionReason: s.suspension_reason,
-  });
-
-  res.json({
-    data: {
-      expiredSuspensions: (expired || []).map(mapUser),
-      escalatedToDeletion: (escalated || []).map(mapUser),
-    },
-    pagination: { total: (expired?.length || 0) + (escalated?.length || 0) },
-  });
-}
-
-async function escalateToDeletion(req, res) {
-  const { data: susp, error: fetchErr } = await supabase
-    .from('user_suspensions')
-    .select('suspension_id, user_id')
-    .eq('user_id', req.params.id)
-    .eq('suspension_status', 'active')
-    .maybeSingle();
-
-  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-  if (!susp) return res.status(400).json({ error: 'User is not suspended' });
-
-  await Promise.all([
-    supabase.from('user_suspensions')
-      .update({ escalated_to_deletion: true, suspension_status: 'escalated' })
-      .eq('suspension_id', susp.suspension_id),
-  ]);
-
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user) }, message: 'User escalated to deletion queue' });
-}
-
-async function removeFromEscalation(req, res) {
-  const { action } = req.body;
-
-  if (action === 'delete_permanently') {
-    const { error } = await supabase.auth.admin.deleteUser(req.params.id);
-    if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
-    return res.json({ message: 'User permanently deleted' });
-  }
-
-  if (action === 'reinstate') {
-    await Promise.all([
-      supabase.from('user_suspensions')
-        .update({ escalated_to_deletion: false, suspension_status: 'resolved', resolved_at: new Date().toISOString() })
-        .eq('user_id', req.params.id)
-        .eq('escalated_to_deletion', true),
-    ]);
-  } else {
-    await supabase.from('user_suspensions')
-      .update({ escalated_to_deletion: false, suspension_status: 'expired' })
-      .eq('user_id', req.params.id)
-      .eq('escalated_to_deletion', true);
-    await supabase.from('users_table')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', req.params.id);
-  }
-
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user) }, message: action === 'reinstate' ? 'User reinstated from escalation' : 'User removed from escalation queue' });
 }
 
 async function updateUser(req, res) {
@@ -426,15 +409,31 @@ async function adminResetPassword(req, res) {
   res.json({ message: 'Password reset successful' });
 }
 
+async function findAuthUserByEmail(email) {
+  if (typeof supabase.auth.admin.listUsers !== 'function') return null;
+  const target = (email || '').toLowerCase();
+  for (let page = 1; page <= 10; page++) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) return null;
+    const users = data?.users || [];
+    const hit = users.find((u) => (u.email || '').toLowerCase() === target);
+    if (hit) return hit;
+    if (users.length < 1000) return null;
+  }
+  return null;
+}
+
 async function inviteUser(req, res) {
   const { name, email, role } = req.body;
   if (!name || !email || !role) return res.status(400).json({ error: 'Name, email, and role are required' });
   if (!['admin', 'customer_support'].includes(role)) return res.status(400).json({ error: 'Role must be admin or customer_support' });
 
+  const normalizedEmail = email.toLowerCase().trim();
+
   const { data: existing } = await supabase
     .from('users_table')
     .select('id')
-    .eq('email', email.toLowerCase())
+    .eq('email', normalizedEmail)
     .maybeSingle();
 
   if (existing) return res.status(409).json({ error: 'User with this email already exists' });
@@ -445,20 +444,77 @@ async function inviteUser(req, res) {
   const lastName = nameParts.slice(1).join(' ') || '';
 
   const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-    email,
+    email: normalizedEmail,
     password: generatedPassword,
     email_confirm: true,
     user_metadata: { name, first_name: firstName, last_name: lastName, role },
   });
-  if (authError) return res.status(500).json({ error: authError.message });
+
+  let userId;
+  if (authError) {
+    // An auth account with this email may already exist without a users_table
+    // profile (e.g. created before the profile row was written). Recover it.
+    const alreadyExists = /already (been )?registered|already exists/i.test(authError.message || '');
+    const recovered = alreadyExists ? await findAuthUserByEmail(normalizedEmail) : null;
+    if (!recovered) return res.status(500).json({ error: authError.message });
+    userId = recovered.id;
+    await supabase.auth.admin.updateUserById(userId, { password: generatedPassword, email_confirm: true });
+  } else if (authUser?.user?.id) {
+    userId = authUser.user.id;
+  } else {
+    return res.status(500).json({ error: 'Failed to create the authentication account' });
+  }
+
+  // The auth account and the users_table profile are separate rows; create the
+  // profile explicitly instead of relying on a DB trigger, or login fails with
+  // "No application profile is linked to this account."
+  const { data: existingProfile } = await supabase
+    .from('users_table')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (!existingProfile) {
+    const { error: profileError } = await supabase.from('users_table').insert({
+      id: userId,
+      email: normalizedEmail,
+      first_name: firstName,
+      last_name: lastName,
+      role,
+      is_verified: true,
+    });
+    if (profileError) {
+      // Roll back the orphan auth account so the email can be reused
+      await supabase.auth.admin.deleteUser(userId);
+      return res.status(500).json({ error: profileError.message });
+    }
+  }
+
+  // loginWithSupabase resolves the effective role from user_roles, so assign it here too
+  const { data: roleRow } = await supabase
+    .from('roles')
+    .select('role_id')
+    .eq('role_name', role)
+    .maybeSingle();
+  if (roleRow?.role_id) {
+    await supabase.from('user_roles').insert({ user_id: userId, role_id: roleRow.role_id });
+  }
 
   const { data: profile } = await supabase
     .from('users_table')
     .select('*')
-    .eq('id', authUser.user.id)
+    .eq('id', userId)
     .single();
 
-  res.status(201).json({ data: { ...profile, generatedPassword, name: getFullName(profile) }, message: 'User invited successfully' });
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_invited',
+    category: 'user',
+    relatedUserId: userId,
+    description: `Admin created ${role} account for ${getFullName(profile) || normalizedEmail}`,
+  });
+
+  res.status(201).json({ data: { ...profile, generatedPassword, name: getFullName(profile) }, message: 'Team member created successfully' });
 }
 
 async function fetchEntitySkills(entityIds, entityType = 'profile') {
@@ -534,5 +590,5 @@ async function listUserProposals(req, res) {
 }
 
 module.exports = { listUsers, getUserById, updateUser, suspendUser, reinstateUser, deleteUser, inviteUser, flagUser,
-  listEscalatedUsers, escalateToDeletion, removeFromEscalation, archiveUser, unarchiveUser, adminResetPassword, listUserProposals,
+  archiveUser, unarchiveUser, adminResetPassword, listUserProposals, listTeamMembers,
 };

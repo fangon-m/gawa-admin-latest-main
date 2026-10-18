@@ -6,7 +6,6 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const config = require('./config');
 const routes = require('./routes');
-const { auditMiddleware } = require('./middleware/auditLogger');
 
 const app = express();
 
@@ -50,9 +49,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api', apiLimiter);
 app.use('/api/assessment-questions/import', assessmentImportLimiter);
 app.use('/api/auth', authLimiter);
-
-// Audit logging middleware for non-GET requests
-app.use(auditMiddleware);
 
 // API routes
 app.use('/api', routes);
@@ -147,6 +143,55 @@ function scheduleAutoProcessExpiredReviews({ startupDelayMs = 30_000, intervalMs
   return { startupDelayMs, intervalMs };
 }
 
+// Auto-resolve expired user suspensions every 5 minutes
+async function autoResolveExpiredSuspensions() {
+  try {
+    await supabase.ensureConnection();
+
+    const now = new Date().toISOString();
+    const { data: expired, error } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name, email, suspended_until')
+      .eq('suspension_status', 'active')
+      .not('suspended_until', 'is', null)
+      .lt('suspended_until', now);
+
+    if (error) throw error;
+    if (!expired || expired.length === 0) return;
+
+    for (const user of expired) {
+      try {
+        await supabase
+          .from('users_table')
+          .update({
+            suspension_status: 'resolved',
+            suspended_until: null,
+            suspension_reason: null,
+            suspension_updated_at: now,
+            updated_at: now,
+          })
+          .eq('id', user.id);
+        console.log(`[Auto-resolve] Suspension expired for user ${user.id} (${user.email})`);
+      } catch (err) {
+        console.error(`[Auto-resolve] Failed for user ${user.id}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('[Auto-resolve] Error:', err.message);
+  }
+}
+
+function scheduleAutoResolveExpiredSuspensions({ startupDelayMs = 30_000, intervalMs = 5 * 60 * 1000, onTick = autoResolveExpiredSuspensions } = {}) {
+  setTimeout(() => {
+    onTick();
+    setInterval(() => {
+      onTick();
+    }, intervalMs);
+  }, startupDelayMs);
+
+  return { startupDelayMs, intervalMs };
+}
+
 function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempts = 10) {
   const candidatePort = port + attempt;
   const server = app.listen(candidatePort, () => {
@@ -159,6 +204,7 @@ function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempt
     console.log(`  ${'='.repeat(30)}\n`);
 
     scheduleAutoProcessExpiredReviews();
+    scheduleAutoResolveExpiredSuspensions();
     console.log(`  Auto-complete: starting after a 30s warm-up and then running every 5 minutes`);
   });
 

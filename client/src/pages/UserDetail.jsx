@@ -9,9 +9,7 @@ import * as notesApi from '../api/notes';
 import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
 import * as listingsApi from '../api/listings';
-import * as disputesApi from '../api/disputes';
 import * as proposalsApi from '../api/proposals';
-import * as assessmentsApi from '../api/assessments';
 import * as assessmentAttemptsApi from '../api/assessmentAttempts';
 import { formatDate, formatDateTime, formatCurrency, getInitials, capitalizeWords, timeAgo } from '../utils/helpers';
 import Header from '../components/layout/Header';
@@ -20,7 +18,7 @@ import Tabs from '../components/common/Tabs';
 import NotesPanel from '../components/common/NotesPanel';
 import ConfirmModal from '../components/common/ConfirmModal';
 import DataTable from '../components/common/DataTable';
-import { Mail, Phone, Ban, RotateCcw, Flag, MapPin, ClipboardCheck, RefreshCw, Award, XCircle, Gavel } from 'lucide-react';
+import { Mail, Phone, Ban, RotateCcw, Flag, MapPin, ClipboardCheck, RefreshCw, XCircle, Gavel } from 'lucide-react';
 
 export default function UserDetail() {
   const { id } = useParams();
@@ -83,11 +81,10 @@ export default function UserDetail() {
       transform: (r) => r?.data ?? r ?? [],
     }
   );
-  const { data: userDisputes, loading: disputesLoading } = useApiData(() => disputesApi.list({ limit: 50 }).then(r => (r?.data || r || []).filter(d => d.reporterId === id || d.respondentId === id)), [id]);
-
   const [activeTab, setActiveTab] = useState('profile');
   const [showConfirm, setShowConfirm] = useState(null);
   const [suspensionDays, setSuspensionDays] = useState(7);
+  const [suspensionCustom, setSuspensionCustom] = useState('');
   const [suspensionReason, setSuspensionReason] = useState('');
   const [archiveReason, setArchiveReason] = useState('');
   const [userActionError, setUserActionError] = useState('');
@@ -96,10 +93,6 @@ export default function UserDetail() {
   const [pwConfirm, setPwConfirm] = useState('');
   const [pwError, setPwError] = useState('');
   const [pwProcessing, setPwProcessing] = useState(false);
-
-  const [showOverrideModal, setShowOverrideModal] = useState({ open: false, assessmentId: '' });
-  const [overrideReason, setOverrideReason] = useState('');
-  const [processingOverride, setProcessingOverride] = useState(false);
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
     () => assessmentAttemptsApi.getUserAttempts(id),
@@ -110,17 +103,10 @@ export default function UserDetail() {
     }
   );
 
-  const { data: activeOverrides, refetch: refetchOverrides } = useApiData(
-    () => assessmentAttemptsApi.getActiveOverrides(id),
-    [id],
-    { defaultValue: [], immediate: false }
-  );
-
-  // Auto-load attempts + overrides when assessments tab becomes active
+  // Auto-load attempts when the assessments tab becomes active
   useEffect(() => {
     if (activeTab === 'assessments') {
       refetchAttempts();
-      refetchOverrides();
     }
   }, [activeTab]);
 
@@ -157,14 +143,18 @@ export default function UserDetail() {
     );
   }
 
-  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'disputes', 'assessments', 'notes'];
+  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes'];
 
   const resetPwForm = () => { setPwNew(''); setPwConfirm(''); setPwError(''); };
 
   const handleAction = async (action) => {
     try {
       if (action === 'suspend') {
-        await suspend(id, { duration: suspensionDays, reason: suspensionReason });
+        const duration =
+          suspensionDays === 'custom'
+            ? Math.max(1, Math.min(90, Number(suspensionCustom) || 7))
+            : suspensionDays;
+        await suspend(id, { duration, reason: suspensionReason });
       } else if (action === 'reinstate') {
         await reinstate(id);
       } else if (action === 'archive') {
@@ -179,6 +169,7 @@ export default function UserDetail() {
       refetch();
       setShowConfirm(null);
       setSuspensionDays(7);
+      setSuspensionCustom('');
       setSuspensionReason('');
       setArchiveReason('');
     } catch (err) {
@@ -379,38 +370,11 @@ export default function UserDetail() {
           </div>
         )}
 
-        {activeTab === 'disputes' && (
-          <div className="card">
-            <div className="card-body p-0">
-              <DataTable
-                columns={[
-                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs font-mono">{row.id?.slice(0, 8)}</span> },
-                  { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
-                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-                  { key: 'severity', label: 'Severity', render: (row) => <StatusBadge status={row.severity} /> },
-                  { key: 'reporterName', label: 'Reporter' },
-                  { key: 'respondentName', label: 'Respondent' },
-                  { key: 'createdAt', label: 'Date', render: (row) => formatDate(row.createdAt) },
-                ]}
-                data={userDisputes}
-                loading={disputesLoading}
-                emptyMessage="No disputes found for this user."
-                pageSize={5}
-              />
-            </div>
-          </div>
-        )}
-
         {activeTab === 'assessments' && (
           <div className="card">
             <div className="card-header">
               <h3>Assessment Attempt History</h3>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                {can('grantRetakeException') && (
-                  <button className="btn btn-outline btn-sm" onClick={() => setShowOverrideModal({ open: true, assessmentId: '' })}>
-                    <RefreshCw size={14} /> Grant Retake Exception
-                  </button>
-                )}
                 <button className="btn btn-ghost btn-sm" onClick={() => refetchAttempts()}>
                   <RefreshCw size={13} />
                 </button>
@@ -448,24 +412,6 @@ export default function UserDetail() {
                   <div style={{ fontSize: 11, color: 'var(--color-text-muted)' }}>Last Result</div>
                 </div>
               </div>
-
-              {/* Active Overrides */}
-              {activeOverrides?.length > 0 && (
-                <div style={{ marginBottom: 'var(--space-3)', padding: '0.75rem', background: 'var(--color-warning-subtle, #fef3c7)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-warning)' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-warning)', marginBottom: 4 }}>
-                    <Award size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                    Active Retake Exceptions
-                  </div>
-                  {activeOverrides.map((ov) => (
-                    <div key={ov.id} style={{ fontSize: 12, color: 'var(--color-text)', marginTop: 4 }}>
-                      <span>Granted by {ov.grantedByName}: "{ov.reason}"</span>
-                      <span style={{ color: 'var(--color-text-muted)', marginLeft: 8 }}>
-                        Expires {timeAgo(ov.expiresAt)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
 
               {/* Attempt History Table */}
               <div className="p-0">
@@ -588,7 +534,7 @@ export default function UserDetail() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Suspend Account</h3>
-              <button className="modal-close" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>
+              <button className="modal-close" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionCustom(''); setSuspensionReason(''); }}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
@@ -599,8 +545,16 @@ export default function UserDetail() {
               <div style={{ marginBottom: '1rem' }}>
                 <label className="detail-label" style={{ marginBottom: '0.375rem', display: 'block' }}>Suspension Duration</label>
                 <select
-                  value={suspensionDays}
-                  onChange={(e) => setSuspensionDays(Number(e.target.value))}
+                  value={suspensionDays === 'custom' ? 'custom' : suspensionDays}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'custom') {
+                      setSuspensionDays('custom');
+                    } else {
+                      setSuspensionDays(Number(val));
+                      setSuspensionCustom('');
+                    }
+                  }}
                   style={{
                     width: '100%',
                     padding: '0.5rem 0.75rem',
@@ -617,7 +571,28 @@ export default function UserDetail() {
                   <option value={30}>30 days (1 month)</option>
                   <option value={60}>60 days (2 months)</option>
                   <option value={90}>90 days (3 months)</option>
+                  <option value="custom">Custom — enter days</option>
                 </select>
+                {suspensionDays === 'custom' && (
+                  <input
+                    type="number"
+                    min="1"
+                    max="90"
+                    placeholder="Days"
+                    value={suspensionCustom}
+                    onChange={(e) => setSuspensionCustom(e.target.value)}
+                    style={{
+                      width: '100%',
+                      marginTop: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: '0.5rem',
+                      border: '1px solid var(--color-border)',
+                      background: 'var(--color-bg)',
+                      color: 'var(--color-text)',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                )}
               </div>
               <div style={{ marginBottom: '1rem' }}>
                 <label className="detail-label" style={{ marginBottom: '0.375rem', display: 'block' }}>Reason for Suspension</label>
@@ -641,7 +616,7 @@ export default function UserDetail() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>Cancel</button>
+              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionCustom(''); setSuspensionReason(''); }}>Cancel</button>
               <button className="btn btn-danger" onClick={() => handleAction('suspend')}>
                 Suspend {suspensionDays} Days
               </button>
@@ -716,106 +691,6 @@ export default function UserDetail() {
         </div>
       )}
 
-      {/* Grant Retake Exception Modal */}
-      {showOverrideModal.open && (
-        <div className="modal-overlay" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-            <div className="modal-header">
-              <h3>Grant Retake Exception</h3>
-              <button className="modal-close" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <div style={{ padding: '0.75rem', background: 'var(--color-warning-subtle, #fef3c7)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--color-warning)', color: 'var(--color-warning)', fontSize: 13, lineHeight: 1.5 }}>
-                <RefreshCw size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                <strong>Override daily retake limit?</strong>
-                <br />
-                This will allow <strong>{user.name}</strong> to retake the selected assessment immediately, bypassing the once-per-day restriction. The exception expires at the end of today (Philippine Time).
-              </div>
-
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">Assessment</label>
-                {attemptHistory?.data?.length > 0 ? (
-                  <select
-                    className="form-select"
-                    value={showOverrideModal.assessmentId}
-                    onChange={(e) => setShowOverrideModal((prev) => ({ ...prev, assessmentId: e.target.value }))}
-                    style={{ width: '100%' }}
-                  >
-                    <option value="">Select an assessment category...</option>
-                    {[...new Set(attemptHistory.data.map(a => a.assessmentId))].map((aid) => {
-                      const info = attemptHistory.data.find(a => a.assessmentId === aid)?.assessmentInfo;
-                      return (
-                        <option key={aid} value={aid}>
-                          {info?.categoryName || aid?.slice(0, 8)}
-                        </option>
-                      );
-                    })}
-                  </select>
-                ) : (
-                  <input
-                    className="form-input"
-                    placeholder="Assessment ID or Category name..."
-                    value={showOverrideModal.assessmentId}
-                    onChange={(e) => setShowOverrideModal((prev) => ({ ...prev, assessmentId: e.target.value }))}
-                    style={{ width: '100%' }}
-                  />
-                )}
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">
-                  Reason <span style={{ color: 'var(--color-error)' }}>*</span>
-                </label>
-                <textarea
-                  className="form-textarea"
-                  rows={3}
-                  placeholder="Explain why this retake exception is needed..."
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  style={{ width: '100%' }}
-                  disabled={processingOverride}
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }} disabled={processingOverride}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-accent"
-                disabled={!showOverrideModal.assessmentId || !overrideReason.trim() || processingOverride}
-                onClick={async () => {
-                  setProcessingOverride(true);
-                  try {
-                    await assessmentAttemptsApi.grantOverride(id, {
-                      assessmentId: showOverrideModal.assessmentId,
-                      reason: overrideReason.trim(),
-                    });
-                    addNotification('moderation_decision', 'Retake Exception Granted', `Retake exception granted for ${user.name}`);
-                    setShowOverrideModal({ open: false, assessmentId: '' });
-                    setOverrideReason('');
-                    refetchAttempts();
-                    refetchOverrides();
-                  } catch (err) { console.error('Grant override failed:', err); }
-                  setProcessingOverride(false);
-                }}
-              >
-                {processingOverride ? (
-                  <>
-                    <div className="page-loading__spinner" style={{ width: 14, height: 14, borderWidth: 2, display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }} />
-                    Processing...
-                  </>
-                ) : (
-                  <><Award size={15} /> Grant Exception</>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

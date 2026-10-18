@@ -1,6 +1,5 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
-const { createAuditLog } = require('../middleware/auditLogger');
 
 async function enrichRentals(rentals) {
   if (!rentals || rentals.length === 0) return [];
@@ -69,31 +68,16 @@ async function flagRental(req, res) {
   const { reason } = req.body;
   const rentalId = req.params.id;
 
-  // Try entity_flags (PostgREST cache may not have it)
-  let flagged = false;
-  const flagInsert = await supabase
+  const { error: flagError } = await supabase
     .from('entity_flags')
     .insert({
       entity_type: 'equipment_rental',
       entity_id: rentalId,
       flagged_by: req.user?.id,
       reason: reason || 'Flagged by admin',
-    })
-    .select()
-    .single();
-
-  if (flagInsert.error) {
-    // Fallback: use audit log
-    await createAuditLog({
-      req,
-      action: 'flag_rental',
-      targetType: 'equipment_rental',
-      targetId: rentalId,
-      description: `Rental flagged: ${reason || 'Flagged by admin'}`,
     });
-  } else {
-    flagged = true;
-  }
+
+  if (flagError) return res.status(500).json({ error: flagError.message });
 
   const { data: rental, error: fetchErr } = await supabase
     .from('equipment_rentals')
@@ -106,30 +90,12 @@ async function flagRental(req, res) {
   const enriched = await enrichRentals([rental]);
   res.json({ 
     data: enriched[0], 
-    message: flagged ? 'Rental flagged' : 'Rental flagged (logged to audit)' 
+    message: 'Rental flagged' 
   });
 }
 
 async function removeRental(req, res) {
   const rentalId = req.params.id;
-
-  // Audit log before deletion
-  const { data: rental } = await supabase
-    .from('equipment_rentals')
-    .select('*')
-    .eq('rental_id', rentalId)
-    .single();
-
-  if (rental) {
-    await createAuditLog({
-      req,
-      action: 'remove_rental',
-      targetType: 'equipment_rental',
-      targetId: rentalId,
-      description: `Rental removed: ${rental.listing_id} by ${rental.renter_id}, total: ${rental.total_price}`,
-      metadata: rental,
-    });
-  }
 
   const { error } = await supabase
     .from('equipment_rentals')

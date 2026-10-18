@@ -4,12 +4,22 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Settings from './Settings';
 
+const { mockUser, mockSearchParams, mockRefetch } = vi.hoisted(() => ({
+  mockUser: { id: 'admin-uuid', name: 'Admin User', email: 'admin@gawa.ph', phone: '+63 912 345 6789', location: 'Manila', role: 'admin' },
+  mockSearchParams: new URLSearchParams(),
+  mockRefetch: vi.fn(),
+}));
+
 // Mock all dependencies
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({
-    user: { id: 'admin-uuid', name: 'Admin User', email: 'admin@gawa.ph', phone: '+63 912 345 6789', location: 'Manila', role: 'admin' },
+    user: mockUser,
     refetchUser: vi.fn(),
   }),
+}));
+
+vi.mock('react-router-dom', () => ({
+  useSearchParams: () => [mockSearchParams, vi.fn()],
 }));
 
 vi.mock('../context/NotificationContext', () => ({
@@ -42,12 +52,8 @@ vi.mock('../api/settings', () => ({
   upsert: vi.fn(),
 }));
 
-vi.mock('../api/incidents', () => ({
-  list: vi.fn().mockResolvedValue({ data: [] }),
-}));
-
 vi.mock('../utils/useApiData', () => ({
-  useApiData: () => ({ data: [], loading: false, error: null, refetch: vi.fn() }),
+  useApiData: () => ({ data: [], loading: false, error: null, refetch: mockRefetch }),
   useMutation: () => [vi.fn(), { loading: false, error: null, data: null }],
 }));
 

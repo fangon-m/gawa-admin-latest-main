@@ -63,7 +63,7 @@ Adding an action requires all of them, or it silently disappears for `customer_s
 
 - Route file = `require` a controller, chain `authenticate` → `authorize(...)` → `validate(schemas.x)` → handler. See `server/routes/rentals.js`.
 - `server/middleware/validate.js` holds a shared Zod `schemas` object; `validate` parses **body**, `validateQuery` parses **query**. Schemas are registered there, not in the route file.
-- Every non-GET response is auto-logged to `incident_logs` by `auditMiddleware`. You do not add audit calls by hand; controllers may log additionally.
+- Admin actions are recorded in `public.activity_log` by `server/utilities/activityLogger.js` (`logAdminActivity`, fire-and-forget). There is no global audit middleware — controllers call the helper explicitly where an activity record is wanted.
 - Background timers run inside the server process: auto-process expired job reviews every 5 min after a 30s warmup (`server.js`), and a 4-min Supabase reconnect check (`server/db/supabase.js`). Set `DISABLE_AUTO_REVIEWS=true` to stop the first. These keep the process alive and hit the live DB — relevant when scripting against the server.
 - Rate limits: `/api` = 100 req / 15 min, `/api/auth` = 20 req / 15 min, per IP. Repeated manual API testing will trip these.
 

@@ -1,6 +1,5 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
-const { createAuditLog } = require('../middleware/auditLogger');
 
 async function listEscalatedJobs(req, res) {
   const { page = 1, limit = 20 } = req.query;
@@ -144,18 +143,6 @@ async function resolveEscalatedJob(req, res) {
       await supabase.from('job_matches').update({ status: 'verified', updated_at: new Date().toISOString() }).eq('job_match_id', acceptedMatch.job_match_id);
     }
 
-    await createAuditLog({
-      agentId: req.user.id,
-      agentName: req.user.name,
-      action: 'approve_payment',
-      module: 'escalated-jobs',
-      targetId: id,
-      targetType: 'job_post',
-      description: `Approved payment release for escalated job "${post.job_title}". Note: ${adminNote.trim()}`,
-      ipAddress: req.ip,
-      userAgent: req.headers?.['user-agent'],
-    });
-
     res.json({
       data: toCamelCase(updatedPost),
       message: `Payment approved for job "${post.job_title}". Funds released to ${talentProfile?.name || 'talent'}.`,
@@ -177,24 +164,15 @@ async function resolveEscalatedJob(req, res) {
       reason: `Escalated job rejected: ${adminNote.trim()}`,
     });
 
-    await createAuditLog({
-      agentId: req.user.id,
-      agentName: req.user.name,
-      action: 'reject_investigation',
-      module: 'escalated-jobs',
-      targetId: id,
-      targetType: 'job_post',
-      description: `Rejected escalated job "${post.job_title}" — flagged for investigation. Note: ${adminNote.trim()}`,
-      ipAddress: req.ip,
-      userAgent: req.headers?.['user-agent'],
-    });
-
     await supabase.from('notifications').insert({
-      type: 'moderation_decision',
+      recipient_id: post.client_id,
+      actor_id: req.user.id,
+      event_type: 'moderation_decision',
       title: 'Escalated Job Rejected',
-      description: `Job "${post.job_title}" has been flagged for investigation. Admin note: ${adminNote.trim()}`,
-      link: `/jobs/${id}`,
-      actor_name: req.user.name,
+      body: `Job "${post.job_title}" has been flagged for investigation. Admin note: ${adminNote.trim()}`,
+      entity_type: 'job_proposal',
+      entity_id: id,
+      data: { link: `/jobs/${id}` },
     });
 
     res.json({

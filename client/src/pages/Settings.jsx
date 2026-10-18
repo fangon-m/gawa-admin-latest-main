@@ -1,24 +1,39 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import * as usersApi from '../api/users';
 import * as settingsApi from '../api/settings';
-import * as incidentsApi from '../api/incidents';
+import * as activityLogApi from '../api/activityLog';
 import * as authApi from '../api/auth';
-import { formatDateTime } from '../utils/helpers';
+import { formatDate, formatDateTime, formatLabel } from '../utils/helpers';
+import { Copy, Check } from 'lucide-react';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
-import StatusBadge from '../components/common/StatusBadge';
 import DataTable from '../components/common/DataTable';
+import StatusBadge from '../components/common/StatusBadge';
+import ConfirmModal from '../components/common/ConfirmModal';
 
 export default function Settings() {
   const { user, refetchUser } = useAuth();
   const { can } = usePermissions(user?.role);
   const { preferences, togglePreference } = useNotifications();
-  const [tab, setTab] = useState('profile');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
   const [twoFA, setTwoFA] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get('tab')) {
+      setTab(searchParams.get('tab') || 'profile');
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (nextTab) => {
+    setTab(nextTab);
+    setSearchParams({ tab: nextTab });
+  };
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', location: '' });
@@ -66,9 +81,26 @@ export default function Settings() {
   const [inviteForm, setInviteForm] = useState({ name: '', email: '', role: 'admin' });
   const [inviteMsg, setInviteMsg] = useState('');
 
-  const { data: incidents } = useApiData(() => incidentsApi.list({ limit: 50 }), [], {
+  const { data: activityLogs, refetch: refetchActivityLogs } = useApiData(() => activityLogApi.list({ limit: 50, scope: 'admin' }), [], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
+  });
+
+  useEffect(() => {
+    if (tab === 'activity') {
+      refetchActivityLogs();
+    }
+  }, [tab, refetchActivityLogs]);
+
+  // Team members (admin-managed staff accounts)
+  const [inviteResult, setInviteResult] = useState(null);
+  const [copiedPw, setCopiedPw] = useState(false);
+  const [removingMember, setRemovingMember] = useState(null);
+
+  const { data: teamMembers, refetch: refetchTeam } = useApiData(() => usersApi.listTeam(), [], {
+    defaultValue: [],
+    transform: (r) => r?.data ?? r ?? [],
+    immediate: can('manageSettings'),
   });
 
   const tabs = [
@@ -114,23 +146,50 @@ export default function Settings() {
       return;
     }
     try {
-      await usersApi.invite({
+      const res = await usersApi.invite({
         name: inviteForm.name,
         email: inviteForm.email,
         role: inviteForm.role,
       });
-      setInviteMsg(`Invitation sent to ${inviteForm.email}`);
+      const created = res?.data ?? res ?? {};
+      setInviteResult({ email: inviteForm.email, password: created.generatedPassword || null });
+      setCopiedPw(false);
+      setInviteMsg(`Invitation created successfully for ${inviteForm.email}`);
       setInviteForm({ name: '', email: '', role: 'admin' });
-    } catch {
-      setInviteMsg('Failed to send invitation');
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to send invitation');
     }
-    setTimeout(() => setInviteMsg(''), 5000);
+    setTimeout(() => setInviteMsg(''), 6000);
+  };
+
+  const handleRemoveMember = async () => {
+    if (!removingMember) return;
+    try {
+      await usersApi.remove(removingMember.id);
+      setRemovingMember(null);
+      refetchTeam();
+    } catch (err) {
+      setRemovingMember(null);
+      setInviteMsg(err?.error || 'Failed to remove team member');
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const copyPassword = async (password) => {
+    try {
+      await navigator.clipboard.writeText(password);
+      setCopiedPw(true);
+      setTimeout(() => setCopiedPw(false), 2000);
+    } catch {
+      setCopiedPw(false);
+    }
   };
 
   return (
     <div>
       <Header title="Settings" />
-      <Tabs tabs={tabs} activeTab={tab} onChange={setTab} />
+      <Tabs tabs={tabs} activeTab={tab} onChange={handleTabChange} />
       <div className="tab-content">
         {tab === 'profile' && (
           <div className="settings-card">
@@ -312,14 +371,22 @@ export default function Settings() {
             <div className="card-body" style={{ padding: 0 }}>
               <DataTable
                 columns={[
-                  { key: 'id', label: 'ID' },
                   { key: 'agentName', label: 'Agent' },
-                  { key: 'action', label: 'Action', render: (row) => <StatusBadge status={row.action} /> },
-                  { key: 'module', label: 'Module', render: (row) => <StatusBadge status={row.module} /> },
-                  { key: 'description', label: 'Description' },
+                  { key: 'activityTypeLabel', label: 'Activity Type' },
+                  { key: 'category', label: 'Category' },
+                  {
+                    key: 'description',
+                    label: 'Description',
+                    render: (row) => {
+                      const name = row.relatedUserName;
+                      const id = row.relatedUserId;
+                      if (!name || !id || typeof row.description !== 'string') return row.description;
+                      return row.description.split(id).join(name);
+                    },
+                  },
                   { key: 'createdAt', label: 'Timestamp', render: (row) => formatDateTime(row.createdAt) },
                 ]}
-                data={incidents}
+                data={activityLogs}
                 pageSize={15}
                 emptyMessage="No activity logs."
                 sortable={false}
@@ -331,15 +398,52 @@ export default function Settings() {
         {tab === 'team' && can('manageSettings') && (
           <div className="settings-card">
             <div className="settings-card-title">Team Members</div>
-            <div style={{ marginBottom: 24 }}>
-              {/* Team members list will show real data when the API supports it */}
-              <div style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
-                Team member management coming soon.
-              </div>
-            </div>
+            <DataTable
+              columns={[
+                { key: 'name', label: 'Name', render: (row) => row.name || '—' },
+                { key: 'email', label: 'Email' },
+                { key: 'role', label: 'Role', render: (row) => formatLabel(row.role) },
+                { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+                { key: 'createdAt', label: 'Added', render: (row) => formatDate(row.createdAt) },
+                {
+                  key: 'actions',
+                  label: '',
+                  render: (row) => (
+                    row.isSelf
+                      ? <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>You</span>
+                      : <button className="btn btn-danger btn-sm" onClick={() => setRemovingMember(row)}>Remove</button>
+                  ),
+                },
+              ]}
+              data={teamMembers}
+              pageSize={10}
+              emptyMessage="No team members."
+              sortable={false}
+            />
 
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 20 }}>
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 20, marginTop: 20 }}>
               <div style={{ fontWeight: 600, marginBottom: 16, color: 'var(--color-text)' }}>Invite New Team Member</div>
+
+              {inviteResult && (
+                <div style={{ background: 'var(--color-bg-subtle, #f8f9fa)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md, 8px)', padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, marginBottom: 10 }}>
+                    Account created for <strong>{inviteResult.email}</strong>. Share this temporary password now — it is shown only once:
+                  </div>
+                  {inviteResult.password ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <code style={{ flex: 1, minWidth: 200, padding: '8px 12px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm, 6px)', fontSize: 14 }}>{inviteResult.password}</code>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={() => copyPassword(inviteResult.password)}>
+                        {copiedPw ? <Check size={14} /> : <Copy size={14} />}
+                        {copiedPw ? 'Copied' : 'Copy'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>No temporary password was returned by the server.</div>
+                  )}
+                  <button type="button" className="btn btn-outline btn-sm" style={{ marginTop: 12 }} onClick={() => setInviteResult(null)}>Dismiss</button>
+                </div>
+              )}
+
               <form onSubmit={handleInvite}>
                 <div className="form-row">
                   <div className="form-group">
@@ -376,11 +480,11 @@ export default function Settings() {
                   </select>
                 </div>
                 {inviteMsg && (
-                  <div style={{ fontSize: 13, color: inviteMsg.includes('success') ? 'var(--color-success)' : 'var(--color-warning)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, color: inviteMsg.includes('success') ? 'var(--color-success)' : 'var(--color-error)', marginBottom: 12 }}>
                     {inviteMsg}
                   </div>
                 )}
-                <button type="submit" className="btn btn-primary">Send Invitation</button>
+                <button type="submit" className="btn btn-primary">Create Account</button>
               </form>
             </div>
           </div>
@@ -450,6 +554,16 @@ export default function Settings() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={!!removingMember}
+        title="Remove Team Member"
+        message={removingMember ? `Permanently delete ${removingMember.name || removingMember.email}? They will lose access immediately and this cannot be undone.` : ''}
+        confirmLabel="Remove"
+        variant="danger"
+        onConfirm={handleRemoveMember}
+        onCancel={() => setRemovingMember(null)}
+      />
     </div>
   );
 }

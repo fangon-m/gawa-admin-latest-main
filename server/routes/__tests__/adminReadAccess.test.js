@@ -16,9 +16,9 @@ const mockRouteResponse = (req, res) => res.json({ reachedController: true });
 
 jest.mock('../../controllers/users', () => ({
   listUsers: mockRouteResponse,
+  listTeamMembers: mockRouteResponse,
   getUserById: mockRouteResponse,
   listUserProposals: mockRouteResponse,
-  listEscalatedUsers: mockRouteResponse,
   inviteUser: mockRouteResponse,
   updateUser: mockRouteResponse,
   suspendUser: mockRouteResponse,
@@ -27,8 +27,6 @@ jest.mock('../../controllers/users', () => ({
   unarchiveUser: mockRouteResponse,
   flagUser: mockRouteResponse,
   adminResetPassword: mockRouteResponse,
-  escalateToDeletion: mockRouteResponse,
-  removeFromEscalation: mockRouteResponse,
   deleteUser: mockRouteResponse,
 }));
 jest.mock('../../controllers/reports', () => ({
@@ -70,17 +68,6 @@ jest.mock('../../controllers/rentals', () => ({
   flagRental: mockRouteResponse,
   removeRental: mockRouteResponse,
 }));
-jest.mock('../../controllers/appeals', () => ({
-  listAppeals: mockRouteResponse,
-  getAppealById: mockRouteResponse,
-  forwardAppeal: mockRouteResponse,
-  decideAppeal: mockRouteResponse,
-}));
-jest.mock('../../controllers/disputes', () => ({
-  listDisputes: mockRouteResponse,
-  getDisputeById: mockRouteResponse,
-  updateDisputeStatus: mockRouteResponse,
-}));
 jest.mock('../../controllers/messages', () => ({
   listConversations: mockRouteResponse,
   getConversation: mockRouteResponse,
@@ -97,8 +84,6 @@ const verifications = require('../verifications');
 const jobs = require('../jobs');
 const listings = require('../listings');
 const rentals = require('../rentals');
-const appeals = require('../appeals');
-const disputes = require('../disputes');
 const messages = require('../messages');
 
 const app = express();
@@ -109,8 +94,6 @@ app.use('/verifications', verifications);
 app.use('/jobs', jobs);
 app.use('/listings', listings);
 app.use('/rentals', rentals);
-app.use('/appeals', appeals);
-app.use('/disputes', disputes);
 app.use('/messages', messages);
 
 describe('admin data read route authorization', () => {
@@ -129,10 +112,6 @@ describe('admin data read route authorization', () => {
     '/listings/listing-id',
     '/rentals',
     '/rentals/rental-id',
-    '/appeals',
-    '/appeals/appeal-id',
-    '/disputes',
-    '/disputes/dispute-id',
     '/messages',
     '/messages/conversation-id',
   ];

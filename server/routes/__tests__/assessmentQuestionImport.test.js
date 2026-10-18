@@ -28,9 +28,6 @@ jest.mock('../../db/supabase', () => {
     }),
   };
 });
-jest.mock('../../middleware/auditLogger', () => ({
-  createAuditLog: jest.fn().mockResolvedValue({}),
-}));
 
 const request = require('supertest');
 const express = require('express');

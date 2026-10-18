@@ -17,18 +17,14 @@ const ListingDetail = lazy(() => import('./pages/ListingDetail'));
 const Transactions = lazy(() => import('./pages/Transactions'));
 const TransactionDetail = lazy(() => import('./pages/TransactionDetail'));
 const Oversight = lazy(() => import('./pages/Oversight'));
-const DisputeDetail = lazy(() => import('./pages/DisputeDetail'));
 const GawaPoints = lazy(() => import('./pages/GawaPoints'));
-const AppealDetail = lazy(() => import('./pages/AppealDetail'));
 const Messages = lazy(() => import('./pages/Messages'));
 const Settings = lazy(() => import('./pages/Settings'));
 const SupportDashboard = lazy(() => import('./pages/SupportDashboard'));
 const Rentals = lazy(() => import('./pages/Rentals'));
 const RentalDetail = lazy(() => import('./pages/RentalDetail'));
 const Assessments = lazy(() => import('./pages/Assessments'));
-const TakeAssessment = lazy(() => import('./pages/TakeAssessment'));
 const TrustLedger = lazy(() => import('./pages/TrustLedger'));
-const JobReviewQueue = lazy(() => import('./pages/JobReviewQueue'));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 
 function ProtectedRoute({ children, requiredPermission }) {
@@ -80,14 +76,10 @@ export default function App() {
           {can('viewTransactionDetail') && <Route path="/transactions/:id" element={<TransactionDetail />} />}
           <Route path="/rentals" element={<ProtectedRoute requiredPermission="viewRentals"><Rentals /></ProtectedRoute>} />
           <Route path="/rentals/:id" element={<ProtectedRoute requiredPermission="viewRentalDetail"><RentalDetail /></ProtectedRoute>} />
-          <Route path="/oversight" element={<ProtectedRoute requiredPermission="viewDisputes"><Oversight /></ProtectedRoute>} />
-          <Route path="/job-review-queue" element={<ProtectedRoute requiredPermission="viewDisputes"><JobReviewQueue /></ProtectedRoute>} />
-          <Route path="/disputes/:id" element={<ProtectedRoute requiredPermission="viewDisputeDetail"><DisputeDetail /></ProtectedRoute>} />
+          <Route path="/oversight" element={<ProtectedRoute requiredPermission="viewOversight"><Oversight /></ProtectedRoute>} />
           {can('viewGawaPoints') && <Route path="/gawa-points" element={<GawaPoints />} />}
-          <Route path="/appeals/:id" element={<ProtectedRoute requiredPermission="viewAppealDetail"><AppealDetail /></ProtectedRoute>} />
           <Route path="/messages" element={<ProtectedRoute requiredPermission="viewMessages"><Messages /></ProtectedRoute>} />
           <Route path="/assessments" element={<ProtectedRoute requiredPermission="viewAssessments"><Assessments /></ProtectedRoute>} />
-          <Route path="/assessments/take/:categoryId" element={<ProtectedRoute requiredPermission="takeAssessment"><TakeAssessment /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute requiredPermission="viewSettings"><Settings /></ProtectedRoute>} />
           <Route path="/support" element={<ProtectedRoute requiredPermission="viewSupportDashboard"><SupportDashboard /></ProtectedRoute>} />
           {can('viewTransactions') && <Route path="/trust-ledger" element={<TrustLedger />} />}

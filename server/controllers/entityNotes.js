@@ -1,7 +1,7 @@
 const supabase = require('../db/supabase');
 
 // Entity types that support inline notes (notes stored as JSON in the entity's text field)
-const INLINE_ENTITIES = ['disputes', 'appeals'];
+const INLINE_ENTITIES = [];
 
 /**
  * Parse notes from an entity's text field — handles JSON arrays, plain text, or null.

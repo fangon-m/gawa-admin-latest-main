@@ -4,16 +4,13 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listVerifications } from '../api/verifications';
-import { list as listDisputes } from '../api/disputes';
-import { list as listAppeals } from '../api/appeals';
 import { list as listReports } from '../api/reports';
 import { list as listReviews } from '../api/reviews';
-import { timeAgo, formatNumber, capitalizeWords } from '../utils/helpers';
+import { timeAgo, formatNumber } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatCard from '../components/common/StatCard';
 import StatusBadge from '../components/common/StatusBadge';
-import SeverityBadge from '../components/common/SeverityBadge';
-import { Check, Scale, RotateCcw, Sword, Smile } from 'lucide-react';
+import { Check, Smile, Star } from 'lucide-react';
 
 export default function SupportDashboard() {
   const navigate = useNavigate();
@@ -21,12 +18,6 @@ export default function SupportDashboard() {
   const { can } = usePermissions(user?.role);
 
   const { data: verifications } = useApiData(() => listVerifications({ limit: 50 }), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
-  const { data: disputes } = useApiData(() => listDisputes({ limit: 50 }), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
-  const { data: appeals } = useApiData(() => listAppeals({ limit: 50 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
   const { data: reports } = useApiData(() => listReports({ limit: 50 }), [], {
@@ -37,14 +28,10 @@ export default function SupportDashboard() {
   });
 
   const pendingVerifications = useMemo(() => verifications.filter((v) => v.status === 'pending'), [verifications]);
-  const openDisputes = useMemo(() => disputes.filter((d) => d.status !== 'resolved' && d.status !== 'dismissed'), [disputes]);
-  const pendingAppeals = useMemo(() => appeals.filter((a) => a.status === 'pending'), [appeals]);
   const pendingReports = useMemo(() => reports.filter((r) => r.status === 'open' || r.status === 'under_review'), [reports]);
 
   const stats = [
     { label: 'Pending Verifications', value: formatNumber(pendingVerifications.length), icon: <Check size={20} />, color: 'var(--color-blue)' },
-    { label: 'Open Disputes', value: formatNumber(openDisputes.length), icon: <Scale size={20} />, color: 'var(--color-warning)' },
-    { label: 'Pending Appeals', value: formatNumber(pendingAppeals.length), icon: <RotateCcw size={20} />, color: 'var(--color-accent)' },
     { label: 'Recent Reviews', value: formatNumber(reviews?.length || 0), icon: <Star size={20} />, color: 'var(--color-warning)' },
   ];
 
@@ -65,22 +52,10 @@ export default function SupportDashboard() {
               <div className="quick-action-text">Review Verifications</div>
             </div>
           )}
-          {can('viewDisputes') && (
+          {can('viewOversight') && (
             <div className="quick-action-card" onClick={() => navigate('/oversight')}>
-              <div className="quick-action-icon"><Scale size={18} /></div>
-              <div className="quick-action-text">View Disputes</div>
-            </div>
-          )}
-          {can('viewDisputes') && (
-            <div className="quick-action-card" onClick={() => navigate('/oversight')}>
-              <div className="quick-action-icon"><Sword size={18} /></div>
-              <div className="quick-action-text">Moderate Content</div>
-            </div>
-          )}
-          {can('viewDisputes') && (
-            <div className="quick-action-card" onClick={() => navigate('/oversight')}>
-              <div className="quick-action-icon"><RotateCcw size={18} /></div>
-              <div className="quick-action-text">Review Appeals</div>
+              <div className="quick-action-icon"><Star size={18} /></div>
+              <div className="quick-action-text">Review Reports</div>
             </div>
           )}
           {can('viewUsers') && (
@@ -113,26 +88,7 @@ export default function SupportDashboard() {
         </div>
 
         <div className="card">
-          <div className="card-header"><h3>Open Disputes</h3></div>
-          <div className="card-body">
-            {openDisputes.length === 0 ? (
-              <div className="empty-state" style={{ padding: '1rem' }}><div className="empty-state-text">No open disputes</div></div>
-            ) : (
-              openDisputes.slice(0, 4).map((d) => (
-                <div key={d.id} className="recent-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`/disputes/${d.id}`)}>
-                  <div className="recent-item-info">
-                    <div className="recent-item-title">{d.title}</div>
-                    <div className="recent-item-sub">{capitalizeWords(d.type)} - {timeAgo(d.createdAt)}</div>
-                  </div>
-                  <SeverityBadge severity={d.severity} />
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header"><h3>Recent Reviews</h3></div>
+          <div className="card-header"><h3>Recent Reviews & Reports</h3></div>
           <div className="card-body">
             {(reviews || []).length === 0 && pendingReports.length === 0 ? (
               <div className="empty-state" style={{ padding: '1rem' }}><div className="empty-state-text">No reviews or reports</div></div>
@@ -160,32 +116,13 @@ export default function SupportDashboard() {
             )}
           </div>
         </div>
-
-        <div className="card">
-          <div className="card-header"><h3>Pending Appeals</h3></div>
-          <div className="card-body">
-            {pendingAppeals.length === 0 ? (
-              <div className="empty-state" style={{ padding: '1rem' }}><div className="empty-state-text">No pending appeals</div></div>
-            ) : (
-              pendingAppeals.map((a) => (
-                <div key={a.id} className="recent-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`/appeals/${a.id}`)}>
-                  <div className="recent-item-info">
-                    <div className="recent-item-title">{a.userName}</div>
-                    <div className="recent-item-sub">{a.suspensionReason?.substring(0, 60)}...</div>
-                  </div>
-                  <StatusBadge status="pending" />
-                </div>
-              ))
-            )}
-          </div>
-        </div>
       </div>
 
       <div className="card">
         <div className="card-body" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
           <div><strong>Support Agent:</strong> {user?.name}</div>
           <div><strong>Role:</strong> Customer Support</div>
-          <div><strong>Permissions:</strong> Verification, Disputes, Moderation, Appeals (forward only)</div>
+          <div><strong>Permissions:</strong> Verification, Reports, Reviews</div>
           <div><strong>Restricted:</strong> Financial records, audit logs, account governance actions</div>
         </div>
       </div>

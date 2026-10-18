@@ -19,7 +19,6 @@ const SUPPORT_RESTRICTED_ACTIONS = [
   'deductPoints',
   'managePacks',
   'finalizeAppeal',
-  'exportIncidents',
   'viewFinance',
   'viewAuditLogs',
 ];

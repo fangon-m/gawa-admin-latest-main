@@ -6,13 +6,9 @@ jest.mock('../../db/supabase', () => ({
   from: jest.fn(),
   rpc: jest.fn(),
 }));
-jest.mock('../../middleware/auditLogger', () => ({
-  createAuditLog: jest.fn().mockResolvedValue({}),
-}));
 
 const XLSX = require('@e965/xlsx');
 const supabase = require('../../db/supabase');
-const { createAuditLog } = require('../../middleware/auditLogger');
 const { importAssessmentQuestions, parseAssessmentRows } = require('../assessmentQuestionImport');
 
 const assessmentId = '123e4567-e89b-42d3-a456-426614174000';
@@ -108,7 +104,7 @@ describe('assessment question import controller', () => {
     expect(res.body.data.assessmentCreated).toBe(true);
   });
 
-  it('rejects invalid workbook rows and logs the failure without calling the database RPC', async () => {
+  it('rejects invalid workbook rows and does not call the database RPC', async () => {
     req.file.buffer = workbookBuffer([
       ['Question', 'Option 1', 'Option 2', 'Correct Answer'],
       ['Broken question', 'Same', 'same', 'missing'],
@@ -119,10 +115,6 @@ describe('assessment question import controller', () => {
     expect(res.statusCode).toBe(400);
     expect(res.body.details).toHaveLength(2);
     expect(supabase.rpc).not.toHaveBeenCalled();
-    expect(createAuditLog).toHaveBeenCalledWith(expect.objectContaining({
-      action: 'ASSESSMENT_QUESTION_IMPORT_FAILED',
-      targetId: assessmentId,
-    }));
   });
 
   it('rejects duplicate headers and invalid answer mappings in the shared parsing contract', () => {
@@ -141,7 +133,6 @@ describe('assessment question import controller', () => {
 
     expect(res.statusCode).toBe(500);
     expect(res.body.error).toContain('no questions were committed');
-    expect(createAuditLog).toHaveBeenCalled();
   });
 
   it('explains when the assessment import migration is missing or outdated', async () => {

@@ -2,9 +2,8 @@ const supabase = require('../db/supabase');
 const { toCamelCase } = require('../utilities/helpers');
 
 async function listSkills(req, res) {
-  const { isActive, search } = req.query;
+  const { search } = req.query;
   let query = supabase.from('skills').select('*');
-  if (isActive !== undefined) query = query.eq('is_active', isActive === 'true');
   if (search) query = query.ilike('skill_name', `%${search}%`);
   query = query.order('skill_name', { ascending: true });
 
@@ -42,11 +41,10 @@ async function createSkill(req, res) {
 }
 
 async function updateSkill(req, res) {
-  const { skillName, icon, isActive } = req.body;
+  const { skillName, icon } = req.body;
   const updates = {};
   if (skillName) updates.skill_name = skillName;
   if (icon !== undefined) updates.icon = icon;
-  if (isActive !== undefined) updates.is_active = isActive;
   updates.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase

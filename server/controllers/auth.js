@@ -53,11 +53,13 @@ async function loginWithSupabase(email, password, res) {
   if (profileError) return res.status(500).json({ error: profileError.message });
   if (!profile) return res.status(403).json({ error: 'No application profile is linked to this account.' });
 
+  // user_roles is optional in some deployments; fall back to the legacy
+  // users_table.role column when the table (or the join) is unavailable.
   const { data: roleRows, error: rolesError } = await supabase
     .from('user_roles')
     .select('roles(role_name)')
     .eq('user_id', data.user.id);
-  if (rolesError) return res.status(500).json({ error: rolesError.message });
+  if (rolesError) console.warn('[Auth] user_roles lookup failed; using users_table.role:', rolesError.message);
   const roles = (roleRows || []).map(row => row.roles?.role_name).filter(Boolean);
 
   res.json({
