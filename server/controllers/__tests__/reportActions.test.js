@@ -2,8 +2,12 @@ jest.mock('../../db/supabase', () => ({
   from: jest.fn(),
   rpc: jest.fn(),
 }));
+jest.mock('../../utilities/activityLogger', () => ({
+  logAdminActivity: jest.fn(),
+}));
 
 const supabase = require('../../db/supabase');
+const { logAdminActivity } = require('../../utilities/activityLogger');
 const { getReportActions, executeReportAction } = require('../reportActions');
 
 const reportId = '11111111-1111-4111-8111-111111111111';
@@ -221,7 +225,7 @@ describe('issue report moderation actions', () => {
     expect(actions.map(item => item.id)).not.toContain('suspend');
   });
 
-  it('executes with a validated idempotency key and returns the atomic RPC result', async () => {
+  it('executes the audited warning and sends its message to the reported user', async () => {
     supabase.rpc.mockResolvedValue({
       data: {
         result: { reportId, action: 'warn', reportStatus: 'open' },
@@ -229,29 +233,108 @@ describe('issue report moderation actions', () => {
       },
       error: null,
     });
+    const report = reportQuery({
+      report_id: reportId,
+      target_type: 'profile',
+      target_id: targetId,
+      issue_type: 'Harassment',
+    });
+    const recipientQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { id: targetId, role: 'client' },
+        error: null,
+      }),
+    };
+    const warningMessage = {
+      message_id: '44444444-4444-4444-8444-444444444444',
+      sender_id: '55555555-5555-4555-8555-555555555555',
+      receiver_id: targetId,
+      message_text: `Please reply to report #${reportId} to appeal.`,
+      created_at: '2026-10-12T00:00:00.000Z',
+    };
+    const messages = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue({ data: [], error: null }),
+      insert: jest.fn().mockReturnThis(),
+      single: jest.fn().mockResolvedValue({ data: warningMessage, error: null }),
+    };
+    supabase.from.mockImplementation(table => {
+      if (table === 'issue_reports') return report;
+      if (table === 'users_table') return recipientQuery;
+      return messages;
+    });
     const res = response();
 
     await executeReportAction({
       params: { id: reportId, actionId: 'warn' },
-      body: { reason: 'Verified policy violation' },
-      user: { id: targetId, role: 'customer_support' },
+      body: { messageText: warningMessage.message_text },
+      user: { id: '55555555-5555-4555-8555-555555555555', role: 'customer_support' },
       get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : targetVersion),
     }, res);
 
     expect(supabase.rpc).toHaveBeenCalledWith('execute_issue_report_action', expect.objectContaining({
       p_report_id: reportId,
       p_action_id: 'warn',
-      p_actor_id: targetId,
+      p_actor_id: '55555555-5555-4555-8555-555555555555',
       p_actor_role: 'customer_support',
+      p_reason: 'Automated warning sent to reported user',
       p_idempotency_key: actionKey,
       p_target_version: targetVersion,
     }));
+    expect(messages.insert).toHaveBeenCalledWith(expect.objectContaining({
+      sender_id: '55555555-5555-4555-8555-555555555555',
+      receiver_id: targetId,
+      message_text: warningMessage.message_text,
+      message_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }));
+    expect(logAdminActivity).toHaveBeenCalledWith({
+      actorId: '55555555-5555-4555-8555-555555555555',
+      activityType: 'user_warned',
+      category: 'user',
+      relatedUserId: targetId,
+      description: `Admin sent a moderation warning for report ${reportId}`,
+    });
     expect(res.json).toHaveBeenCalledWith({
       reportId,
       action: 'warn',
       reportStatus: 'open',
+      warningMessage: { id: warningMessage.message_id, createdAt: warningMessage.created_at },
       replayed: false,
     });
+
+  });
+
+  it('rejects a warning addressed to the moderator before recording the action', async () => {
+    const reports = reportQuery({
+      report_id: reportId,
+      target_type: 'profile',
+      target_id: targetId,
+      issue_type: 'Harassment',
+    });
+    const userQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { id: targetId, role: 'admin' },
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => table === 'issue_reports' ? reports : userQuery);
+    const res = response();
+
+    await executeReportAction({
+      params: { id: reportId, actionId: 'warn' },
+      body: { messageText: 'Please reply to appeal.' },
+      user: { id: targetId, role: 'admin' },
+      get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : undefined),
+    }, res);
+
+    expect(supabase.rpc).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(422);
+    expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_MESSAGE_RECIPIENT' });
   });
 
   it('returns the resolved report status after a suspension action', async () => {

@@ -11,7 +11,7 @@ import * as jobsApi from '../api/jobs';
 import * as listingsApi from '../api/listings';
 import * as proposalsApi from '../api/proposals';
 import * as assessmentAttemptsApi from '../api/assessmentAttempts';
-import { formatDate, formatDateTime, formatCurrency, getInitials, capitalizeWords, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, formatEntityIdNumeric, getInitials, capitalizeWords, timeAgo } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import Tabs from '../components/common/Tabs';
@@ -283,7 +283,7 @@ export default function UserDetail() {
                 <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
                 <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
                 <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
-                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono">{user.id?.slice(0, 8) || 'N/A'}</span></div></div>
+                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={user.id}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
                 <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
                 {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
                 {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}

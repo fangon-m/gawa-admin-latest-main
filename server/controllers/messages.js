@@ -3,7 +3,7 @@ const supabase = require('../db/supabase');
 const { getFullName } = require('../utilities/helpers');
 
 const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at, read_at';
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const STAFF_ROLES = new Set(['admin', 'customer_support']);
 
 function isDatabaseUserId(id) {

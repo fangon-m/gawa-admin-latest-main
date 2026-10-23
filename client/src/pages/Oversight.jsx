@@ -5,7 +5,7 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listReports, getActions as getReportActions, executeAction as executeReportAction } from '../api/reports';
 import { list as listReviews } from '../api/reviews';
-import { formatDate, formatDateTime, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatEntityIdNumeric, timeAgo } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import FilterBar from '../components/common/FilterBar';
@@ -30,8 +30,13 @@ const issueReportFilters = [
 
 const issueReportColumns = [
   { key: 'reporterName', label: 'Reporter' },
+  { key: 'reportedName', label: 'Reported User', render: (row) => row.reportedName || '—' },
   { key: 'targetType', label: 'Target Type', render: (row) => <StatusBadge status={row.targetType} /> },
-  { key: 'targetId', label: 'Target ID', render: (row) => <span className="text-xs text-muted font-mono">{row.targetId}</span> },
+  { key: 'targetId', label: 'Target ID', render: (row) => (
+    <span className="text-xs text-muted font-mono" title={row.targetId}>
+      {row.targetType === 'profile' ? formatEntityIdNumeric(row.targetId, 'USR-') : row.targetId}
+    </span>
+  ) },
   { key: 'issueType', label: 'Issue Type' },
   { key: 'comment', label: 'Comment', render: (row) => <span className="truncate" style={{ maxWidth: 260, display: 'inline-block' }}>{row.comment}</span> },
   { key: 'attachmentPaths', label: 'Attachments', render: (row) => row.attachmentPaths?.length || 0 },
@@ -44,7 +49,7 @@ const issueReportActionLabels = {
   resolve_target_unavailable: 'Resolve — target unavailable',
   relist: 'Relist job',
   flag_job_match: 'Flag job match',
-  warn: 'Record warning',
+  warn: 'Warn user',
   suspend: 'Suspend profile',
 };
 
@@ -61,6 +66,9 @@ const issueReportActionErrors = {
   INVALID_ACTION_INPUT: 'Review the action details and try again.',
   RATE_LIMITED: 'Too many moderation actions were attempted. Wait before trying again.',
   ACTION_FAILED: 'The action could not be completed. No success was recorded.',
+  WARNING_MESSAGE_FAILED: 'The warning was recorded, but the chat message could not be sent. Retry with the same message, or send it manually from Messages.',
+  INVALID_MESSAGE_RECIPIENT: 'The reported account could not be opened as a chat recipient. Verify the account ID and try again.',
+  WARNING_RECIPIENT_UNAVAILABLE: 'The reported user could not be verified. No warning was sent; refresh the report and try again.',
   REPORT_ACTIONS_UNAVAILABLE: 'Permitted actions could not be loaded. Refresh the report or contact an administrator.',
 };
 
@@ -96,9 +104,11 @@ export default function Oversight() {
   const [reportActionsError, setReportActionsError] = useState('');
   const [reportActionPrompt, setReportActionPrompt] = useState(null);
   const [reportActionReason, setReportActionReason] = useState('');
+  const [reportActionMessage, setReportActionMessage] = useState('');
   const [reportActionDuration, setReportActionDuration] = useState(7);
   const [reportActionCustom, setReportActionCustom] = useState('');
   const [reportActionSubmitting, setReportActionSubmitting] = useState(false);
+  const [reportActionDeliveryPending, setReportActionDeliveryPending] = useState(false);
   const [reportActionError, setReportActionError] = useState('');
   const [reportActionIdempotencyKey, setReportActionIdempotencyKey] = useState('');
   const reportActionButtonRef = useRef(null);
@@ -125,6 +135,8 @@ export default function Oversight() {
     setReportActionsError('');
     setReportActionPrompt(null);
     setReportActionReason('');
+    setReportActionMessage('');
+    setReportActionDeliveryPending(false);
     setReportActionIdempotencyKey('');
     getReportActions(selectedReport.id)
       .then((result) => {
@@ -156,7 +168,10 @@ export default function Oversight() {
       if (event.key === 'Escape' && !reportActionSubmitting) {
         setReportActionPrompt(null);
         setReportActionReason('');
+        setReportActionMessage('');
         setReportActionError('');
+        setReportActionIdempotencyKey('');
+        setReportActionDeliveryPending(false);
         setReportActionDuration(7);
         setReportActionCustom('');
       }
@@ -169,15 +184,22 @@ export default function Oversight() {
     if (reportActionSubmitting) return;
     setReportActionPrompt(null);
     setReportActionReason('');
+    setReportActionMessage('');
     setReportActionError('');
     setReportActionIdempotencyKey('');
+    setReportActionDeliveryPending(false);
     setReportActionDuration(7);
     setReportActionCustom('');
   };
 
   const submitReportAction = async (event) => {
     event.preventDefault();
-    if (!reportActionPrompt || reportActionSubmitting || !reportActionReason.trim()) return;
+    if (
+      !reportActionPrompt
+      || reportActionSubmitting
+      || (reportActionPrompt.id !== 'warn' && !reportActionReason.trim())
+      || (reportActionPrompt.id === 'warn' && !reportActionMessage.trim())
+    ) return;
 
     const idempotencyKey = reportActionIdempotencyKey || crypto.randomUUID();
     setReportActionIdempotencyKey(idempotencyKey);
@@ -186,9 +208,12 @@ export default function Oversight() {
     const actionPrompt = reportActionPrompt;
     let result;
     try {
-      const payload = {
-        reason: reportActionReason.trim(),
-      };
+      const payload = {};
+      if (actionPrompt.id === 'warn') {
+        payload.messageText = reportActionMessage.trim();
+      } else {
+        payload.reason = reportActionReason.trim();
+      }
       if (actionPrompt.id === 'suspend') {
         payload.durationDays =
           reportActionDuration === 'custom'
@@ -206,6 +231,7 @@ export default function Oversight() {
     } catch (error) {
       const errorCode = error?.error;
       setReportActionError(issueReportActionErrors[errorCode] || 'The action failed. Please try again.');
+      setReportActionDeliveryPending(error?.warningRecorded === true);
       setReportActionSubmitting(false);
       if (error?.status === 409) {
         getReportActions(selectedReport.id).then((latestActions) => {
@@ -223,6 +249,8 @@ export default function Oversight() {
     setSelectedReport(report => ({ ...report, status: result.reportStatus || report.status }));
     setReportActionPrompt(null);
     setReportActionReason('');
+    setReportActionMessage('');
+    setReportActionDeliveryPending(false);
     setReportActionIdempotencyKey('');
     addNotification(
       'moderation_decision',
@@ -322,8 +350,18 @@ export default function Oversight() {
                   <h4>Issue Report</h4>
                   <div className="detail-field"><div className="detail-label">Report ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.id}</div></div>
                   <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedReport.reporterName}</div></div>
+                  {selectedReport.targetType === 'profile' && (
+                    <div className="detail-field"><div className="detail-label">Reported User</div><div className="detail-value">{selectedReport.reportedName || selectedReport.targetId}</div></div>
+                  )}
                   <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedReport.targetType}</div></div>
-                  <div className="detail-field"><div className="detail-label">Target ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.targetId}</div></div>
+                  <div className="detail-field">
+                    <div className="detail-label">Target ID</div>
+                    <div className="detail-value text-xs text-muted font-mono" title={selectedReport.targetId}>
+                      {selectedReport.targetType === 'profile'
+                        ? formatEntityIdNumeric(selectedReport.targetId, 'USR-')
+                        : selectedReport.targetId}
+                    </div>
+                  </div>
                   <div className="detail-field"><div className="detail-label">Issue Type</div><div className="detail-value">{selectedReport.issueType}</div></div>
                   <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReport.comment}</div></div>
                   <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedReport.status} /></div></div>
@@ -364,6 +402,12 @@ export default function Oversight() {
                             reportActionButtonRef.current = event.currentTarget;
                             setReportActionPrompt(availableAction);
                             setReportActionReason('');
+                            setReportActionDeliveryPending(false);
+                            setReportActionMessage(
+                              availableAction.id === 'warn'
+                                ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. If you believe this warning is mistaken, reply here to appeal within 7 days.`
+                                : ''
+                            );
                             setReportActionDuration(7);
                             setReportActionError('');
                             setReportActionIdempotencyKey('');
@@ -420,9 +464,33 @@ export default function Oversight() {
                   <form onSubmit={submitReportAction}>
                     <div className="modal-body">
                       <p id="issue-report-action-description" style={{ color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                        {reportActionPrompt.description} This action will be recorded in the immutable moderation audit log.
+                        {reportActionPrompt.id === 'warn'
+                          ? reportActionDeliveryPending
+                            ? 'The warning is recorded. Retry delivery with the same message.'
+                            : reportActionPrompt.description
+                          : reportActionPrompt.description}
+                        {reportActionPrompt.id === 'warn'
+                          ? ' The message will be sent in the existing chat and the moderation action recorded in the audit log.'
+                          : ' This action will be recorded in the immutable moderation audit log.'}
                       </p>
-                      <div className="form-group">
+                      {['warn', 'suspend'].includes(reportActionPrompt.id) && (
+                        <div
+                          role="status"
+                          style={{
+                            padding: 'var(--space-3)',
+                            marginBottom: 'var(--space-3)',
+                            borderLeft: '3px solid var(--color-warning)',
+                            borderRadius: 'var(--radius-md)',
+                            background: 'var(--color-warning-subtle)',
+                          }}
+                        >
+                          Confirming action for <strong>{selectedReport?.reportedName || 'Unknown reported user'}</strong>
+                          <span className="text-xs text-muted" title={selectedReport?.targetId}>
+                            {' '}({formatEntityIdNumeric(selectedReport?.targetId, 'USR-')})
+                          </span>
+                        </div>
+                      )}
+                      {reportActionPrompt.id !== 'warn' && <div className="form-group">
                         <label className="form-label" htmlFor="issue-report-action-reason">Reason (required)</label>
                         <textarea
                           id="issue-report-action-reason"
@@ -433,9 +501,25 @@ export default function Oversight() {
                           autoFocus
                           value={reportActionReason}
                           onChange={event => setReportActionReason(event.target.value)}
-                          disabled={reportActionSubmitting}
+                          disabled={reportActionSubmitting || reportActionDeliveryPending}
                         />
-                      </div>
+                      </div>}
+                      {reportActionPrompt.id === 'warn' && (
+                        <div className="form-group">
+                          <label className="form-label" htmlFor="issue-report-warning-message">Chat message (editable)</label>
+                          <textarea
+                            id="issue-report-warning-message"
+                            className="form-textarea"
+                            rows={5}
+                            maxLength={2000}
+                            required
+                            value={reportActionMessage}
+                            onChange={event => setReportActionMessage(event.target.value)}
+                            disabled={reportActionSubmitting || reportActionDeliveryPending}
+                          />
+                          <p className="text-muted text-xs">This will be sent in the existing chat. Do not include reporter identity or private details.</p>
+                        </div>
+                      )}
                       {reportActionPrompt.id === 'suspend' && (
                         <div className="form-group">
                           <label className="form-label" htmlFor="issue-report-action-duration">Suspension duration</label>
@@ -452,7 +536,7 @@ export default function Oversight() {
                                 setReportActionCustom('');
                               }
                             }}
-                            disabled={reportActionSubmitting}
+                            disabled={reportActionSubmitting || reportActionDeliveryPending}
                             style={{ width: '100%' }}
                           >
                             <option value={7}>7 days (1 week)</option>
@@ -473,7 +557,7 @@ export default function Oversight() {
                               placeholder="Days"
                               value={reportActionCustom}
                               onChange={event => setReportActionCustom(event.target.value)}
-                              disabled={reportActionSubmitting}
+                              disabled={reportActionSubmitting || reportActionDeliveryPending}
                               style={{ width: '100%', marginTop: '0.5rem' }}
                             />
                           )}
@@ -482,9 +566,9 @@ export default function Oversight() {
                       {reportActionError && <div className="alert alert-error" role="alert">{reportActionError}</div>}
                     </div>
                     <div className="modal-footer">
-                      <button type="button" className="btn btn-outline" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}>Cancel</button>
-                      <button type="submit" className={`btn ${reportActionPrompt.id === 'suspend' ? 'btn-danger' : 'btn-accent'}`} disabled={reportActionSubmitting || !reportActionReason.trim()}>
-                        {reportActionSubmitting ? 'Applying...' : 'Confirm action'}
+                      <button type="button" className="btn btn-outline" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}>{reportActionDeliveryPending ? 'Close' : 'Cancel'}</button>
+                      <button type="submit" className={`btn ${reportActionPrompt.id === 'suspend' ? 'btn-danger' : 'btn-accent'}`} disabled={reportActionSubmitting || (reportActionPrompt.id !== 'warn' && !reportActionReason.trim()) || (reportActionPrompt.id === 'warn' && !reportActionMessage.trim())}>
+                        {reportActionSubmitting ? 'Applying...' : reportActionPrompt.id === 'warn' ? reportActionDeliveryPending ? 'Retry delivery' : 'Send warning' : 'Confirm action'}
                       </button>
                     </div>
                   </form>

@@ -1,5 +1,9 @@
 const crypto = require('crypto');
 const supabase = require('../db/supabase');
+const { logAdminActivity } = require('../utilities/activityLogger');
+
+const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at';
+const STAFF_ROLES = new Set(['admin', 'customer_support']);
 
 const TARGETS = {
   profile: {
@@ -28,7 +32,7 @@ function actionDescription(id) {
     resolve_target_unavailable: 'Resolve this report because its reported target no longer exists.',
     relist: 'Reopen this closed job post.',
     flag_job_match: 'Add a moderation flag to this job match.',
-    warn: 'Record a durable moderation warning for this profile.',
+    warn: 'Send a moderation warning to this profile in chat.',
     suspend: 'Suspend this profile for the selected number of days.',
   };
   return descriptions[id];
@@ -183,7 +187,64 @@ function mapActionError(error) {
   return null;
 }
 
+async function loadWarningTarget(reportId, senderId) {
+  const { data: report, error: reportError } = await supabase
+    .from('issue_reports')
+    .select('report_id, target_type, target_id, issue_type')
+    .eq('report_id', reportId)
+    .maybeSingle();
+  if (reportError) throw reportError;
+  if (!report || report.target_type !== 'profile') throw new Error('INVALID_WARNING_TARGET');
+
+  const { data: recipient, error: recipientError } = await supabase
+    .from('users_table')
+    .select('id, role')
+    .eq('id', report.target_id)
+    .maybeSingle();
+  if (recipientError) throw recipientError;
+  if (!recipient || STAFF_ROLES.has(recipient.role) || recipient.id === senderId) {
+    throw new Error('INVALID_MESSAGE_RECIPIENT');
+  }
+  return { report, recipient };
+}
+
+async function sendWarningMessage(report, recipient, senderId, messageText) {
+  const draftedText = messageText
+    || `Automated moderation warning for report #${report.report_id}. Reason: ${report.issue_type}. If you believe this warning is mistaken, reply here to appeal within 7 days.`;
+  const text = draftedText.includes(report.report_id)
+    ? draftedText
+    : `${draftedText}\n\nReport #${report.report_id}`;
+  const messageHash = crypto.createHash('sha256').update(text).digest('hex');
+  const { data: existingMessages, error: existingError } = await supabase
+    .from('messages')
+    .select(MESSAGE_COLUMNS)
+    .eq('sender_id', senderId)
+    .eq('receiver_id', recipient.id)
+    .eq('message_hash', messageHash)
+    .limit(1);
+  if (existingError) throw existingError;
+  if (existingMessages?.length) return { message: existingMessages[0], created: false };
+
+  const { data: message, error: messageError } = await supabase
+    .from('messages')
+    .insert({
+      sender_id: senderId,
+      receiver_id: recipient.id,
+      message_text: text,
+      message_hash: messageHash,
+    })
+    .select(MESSAGE_COLUMNS)
+    .single();
+  if (messageError) throw messageError;
+  return { message, created: true };
+}
+
 async function executeReportAction(req, res) {
+  const reason = req.params.actionId === 'warn'
+    ? 'Automated warning sent to reported user'
+    : req.body.reason;
+  if (!reason) return res.status(400).json({ error: 'INVALID_ACTION_INPUT' });
+
   const idempotencyKey = req.get('Idempotency-Key');
   if (!idempotencyKey || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
     return res.status(400).json({ error: 'INVALID_IDEMPOTENCY_KEY' });
@@ -196,8 +257,9 @@ async function executeReportAction(req, res) {
   const payload = {
     reportId: req.params.id,
     actionId: req.params.actionId,
-    reason: req.body.reason,
+    reason,
     durationDays: req.body.durationDays ?? null,
+    ...(req.params.actionId === 'warn' ? { messageText: req.body.messageText ?? null } : {}),
     targetVersion,
   };
   const requestHash = crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
@@ -209,7 +271,7 @@ async function executeReportAction(req, res) {
       p_report_id: req.params.id,
       p_actor_id: req.user.id,
       p_actor_role: hasRole(req, 'admin') ? 'admin' : 'customer_support',
-      p_reason: req.body.reason,
+      p_reason: reason,
       p_idempotency_key: idempotencyKey,
       p_request_hash: requestHash,
     }
@@ -218,12 +280,32 @@ async function executeReportAction(req, res) {
     p_action_id: req.params.actionId,
     p_actor_id: req.user.id,
     p_actor_role: hasRole(req, 'admin') ? 'admin' : 'customer_support',
-    p_reason: req.body.reason,
+    p_reason: reason,
     p_duration_days: req.body.durationDays ?? null,
     p_target_version: targetVersion,
     p_idempotency_key: idempotencyKey,
     p_request_hash: requestHash,
     };
+
+  let warningTarget;
+  if (req.params.actionId === 'warn') {
+    try {
+      warningTarget = await loadWarningTarget(req.params.id, req.user.id);
+    } catch (targetError) {
+      if (targetError.message === 'INVALID_MESSAGE_RECIPIENT') {
+        return res.status(422).json({ error: 'INVALID_MESSAGE_RECIPIENT' });
+      }
+      if (targetError.message === 'INVALID_WARNING_TARGET') {
+        return res.status(422).json({ error: 'ACTION_NOT_ALLOWED_FOR_TARGET' });
+      }
+      console.error('[IssueReportAction] Could not validate warning recipient:', {
+        reportId: req.params.id,
+        databaseCode: targetError.code || null,
+      });
+      return res.status(500).json({ error: 'WARNING_RECIPIENT_UNAVAILABLE' });
+    }
+  }
+
   const { data, error } = await supabase.rpc(rpcName, rpcArgs);
 
   if (error) {
@@ -248,13 +330,45 @@ async function executeReportAction(req, res) {
   }
 
   const result = data?.result || data;
+  let warningMessage;
+  if (req.params.actionId === 'warn') {
+    try {
+      const delivery = await sendWarningMessage(
+        warningTarget.report,
+        warningTarget.recipient,
+        req.user.id,
+        req.body.messageText
+      );
+      warningMessage = { id: delivery.message.message_id, createdAt: delivery.message.created_at };
+      if (delivery.created) {
+        logAdminActivity({
+          actorId: req.user.id,
+          activityType: 'user_warned',
+          category: 'user',
+          relatedUserId: warningTarget.recipient.id,
+          description: `Admin sent a moderation warning for report ${warningTarget.report.report_id}`,
+        });
+      }
+    } catch (messageError) {
+      console.error('[IssueReportAction] Warning was recorded but chat delivery failed:', {
+        reportId: req.params.id,
+        databaseCode: messageError.code || null,
+      });
+      return res.status(500).json({ error: 'WARNING_MESSAGE_FAILED', warningRecorded: true });
+    }
+  }
+
   console.info(JSON.stringify({
     event: 'moderation.action_succeeded',
     actionId: req.params.actionId,
     role: hasRole(req, 'admin') ? 'admin' : 'customer_support',
     replayed: data?.replayed === true,
   }));
-  res.json({ ...result, replayed: data?.replayed === true });
+  res.json({
+    ...result,
+    ...(warningMessage ? { warningMessage } : {}),
+    replayed: data?.replayed === true,
+  });
 }
 
 module.exports = { getReportActions, executeReportAction };

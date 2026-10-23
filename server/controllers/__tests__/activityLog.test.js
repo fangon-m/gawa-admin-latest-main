@@ -123,7 +123,7 @@ describe('activityLog controller', () => {
 
       expect(query.in).toHaveBeenCalledWith(
         'activity_type',
-        expect.arrayContaining(['user_suspended', 'user_archived', 'points_topped_up']),
+        expect.arrayContaining(['user_suspended', 'user_archived', 'user_warned', 'points_topped_up']),
       );
     });
 

@@ -19,7 +19,7 @@ describe('list issue reports', () => {
     const report = {
       report_id: '11111111-1111-4111-8111-111111111111',
       reporter_id: '22222222-2222-4222-8222-222222222222',
-      target_type: 'job_post',
+      target_type: 'profile',
       target_id: '33333333-3333-4333-8333-333333333333',
       issue_type: 'Fraud',
       comment: 'Reported job contains false information',
@@ -36,7 +36,10 @@ describe('list issue reports', () => {
     const usersQuery = {
       select: jest.fn().mockReturnThis(),
       in: jest.fn().mockResolvedValue({
-        data: [{ id: report.reporter_id, first_name: 'Taylor', last_name: 'User' }],
+        data: [
+          { id: report.reporter_id, first_name: 'Taylor', last_name: 'User' },
+          { id: report.target_id, first_name: 'Reported', last_name: 'Person' },
+        ],
         error: null,
       }),
     };
@@ -53,6 +56,7 @@ describe('list issue reports', () => {
         reporterName: 'Taylor User',
         targetType: report.target_type,
         targetId: report.target_id,
+        reportedName: 'Reported Person',
         issueType: report.issue_type,
         comment: report.comment,
         attachmentPaths: report.attachment_paths,

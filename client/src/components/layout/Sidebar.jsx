@@ -75,6 +75,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose
     'sidebar',
     collapsed ? 'collapsed' : '',
     mobileOpen ? 'open' : '',
+    showNotifications ? 'notifications-open' : '',
   ].filter(Boolean).join(' ');
 
   return (

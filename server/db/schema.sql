@@ -161,8 +161,8 @@ CREATE TABLE public.equipment_listing_skills (
 CREATE TABLE public.activity_log (
   activity_id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
-  activity_type text NOT NULL CHECK (activity_type = ANY (ARRAY['deposit_refunded'::text, 'equipment_returned'::text, 'equipment_paid'::text, 'deposit_paid'::text, 'job_posted'::text, 'talent_hired'::text, 'job_payment_paid'::text, 'points_topped_up'::text, 'proposal_sent'::text, 'proposal_received'::text, 'job_cancelled'::text, 'equipment_listed'::text, 'rental_requested'::text, 'rental_request_received'::text, 'rental_request_approved'::text, 'rental_request_rejected'::text, 'rental_request_cancelled'::text])),
-  category text NOT NULL CHECK (category = ANY (ARRAY['equipment'::text, 'job'::text, 'wallet'::text])),
+  activity_type text NOT NULL CHECK (activity_type = ANY (ARRAY['deposit_refunded'::text, 'equipment_returned'::text, 'equipment_paid'::text, 'deposit_paid'::text, 'job_posted'::text, 'talent_hired'::text, 'job_payment_paid'::text, 'points_topped_up'::text, 'proposal_sent'::text, 'proposal_received'::text, 'job_cancelled'::text, 'equipment_listed'::text, 'rental_requested'::text, 'rental_request_received'::text, 'rental_request_approved'::text, 'rental_request_rejected'::text, 'rental_request_cancelled'::text, 'user_suspended'::text, 'user_reinstated'::text, 'user_archived'::text, 'user_unarchived'::text, 'user_deleted'::text, 'user_flagged'::text, 'user_warned'::text, 'password_reset'::text, 'user_invited'::text, 'points_deducted'::text, 'content_flagged'::text])),
+  category text NOT NULL CHECK (category = ANY (ARRAY['equipment'::text, 'job'::text, 'wallet'::text, 'user'::text])),
   description text NOT NULL,
   related_listing_id uuid,
   related_job_post_id uuid,

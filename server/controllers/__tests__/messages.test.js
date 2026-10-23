@@ -4,6 +4,7 @@ jest.mock('../../db/supabase', () => ({
 
 const supabase = require('../../db/supabase');
 const { sendMessage } = require('../messages');
+const { schemas } = require('../../middleware/validate');
 
 describe('messages controller', () => {
   const adminId = '11111111-1111-4111-8111-111111111111';
@@ -72,5 +73,46 @@ describe('messages controller', () => {
     expect(supabase.from).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'Messaging requires a registered admin account.' });
+  });
+
+  it('accepts canonical PostgreSQL UUIDs with non-RFC variant bits as recipients', async () => {
+    const reportedUserId = 'b2222222-2222-2222-2222-222222222201';
+    req.body.conversationId = reportedUserId;
+    const userQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { id: reportedUserId, first_name: 'Rasti', last_name: 'Lopez', role: 'client' },
+        error: null,
+      }),
+    };
+    const messageQuery = {
+      insert: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      single: jest.fn().mockResolvedValue({
+        data: {
+          message_id: '33333333-3333-4333-8333-333333333333',
+          sender_id: adminId,
+          receiver_id: reportedUserId,
+          message_text: 'Warning notice',
+          created_at: '2026-10-12T00:00:00.000Z',
+        },
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => table === 'users_table' ? userQuery : messageQuery);
+
+    await sendMessage(req, res);
+
+    expect(userQuery.eq).toHaveBeenCalledWith('id', reportedUserId);
+    expect(messageQuery.insert).toHaveBeenCalledWith(expect.objectContaining({
+      sender_id: adminId,
+      receiver_id: reportedUserId,
+    }));
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(schemas.sendMessage.safeParse({
+      conversationId: reportedUserId,
+      text: 'Reply to the warning',
+    }).success).toBe(true);
   });
 });
