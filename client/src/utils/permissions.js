@@ -28,6 +28,8 @@ const PERMISSIONS = {
   approvePayout: { admin: true, customer_support: false },
   resetPassword: { admin: true, customer_support: false },
 
+  warnReport: { admin: true, customer_support: true },
+  markReportCompliant: { admin: true, customer_support: false },
   flagUser: { admin: true, customer_support: true },
   suspendUser: { admin: true, customer_support: false },
   reinstateUser: { admin: true, customer_support: false },

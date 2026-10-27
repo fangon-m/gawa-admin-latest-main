@@ -3,7 +3,11 @@ const config = require('../config');
 const serviceClient = require('../db/supabase'); // service_role client (bypasses RLS)
 const { getFullName } = require('../utilities/helpers');
 
-const anonClient = createClient(config.supabaseUrl, config.supabaseAnonKey);
+// A missing .env must not take the whole server down: the dev shortcut token
+// still works, and every other request fails closed with 401.
+const anonClient = config.supabaseUrl && config.supabaseAnonKey
+  ? createClient(config.supabaseUrl, config.supabaseAnonKey)
+  : null;
 const LOCAL_ADMIN_TOKEN = 'gawa-local-admin-token';
 const LOCAL_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
 
@@ -52,6 +56,10 @@ async function authenticate(req, res, next) {
     return next();
   }
 
+  if (!anonClient) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
   const { data, error } = await anonClient.auth.getUser(token);
   if (error || !data.user) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -85,7 +93,7 @@ async function authenticate(req, res, next) {
 
 function optionalAuth(req, res, next) {
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ') && anonClient) {
     const token = authHeader.split(' ')[1];
     anonClient.auth.getUser(token).then(({ data }) => {
       if (data.user) {

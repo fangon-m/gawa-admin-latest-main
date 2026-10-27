@@ -20,6 +20,9 @@ jest.mock('../../controllers/users', () => ({
   getUserById: mockRouteResponse,
   listUserProposals: mockRouteResponse,
   inviteUser: mockRouteResponse,
+  resendInvite: mockRouteResponse,
+  revokeInvite: mockRouteResponse,
+  sendPasswordResetEmail: mockRouteResponse,
   updateUser: mockRouteResponse,
   suspendUser: mockRouteResponse,
   reinstateUser: mockRouteResponse,
@@ -31,6 +34,8 @@ jest.mock('../../controllers/users', () => ({
 }));
 jest.mock('../../controllers/reports', () => ({
   listReports: mockRouteResponse,
+  getModerationStatus: mockRouteResponse,
+  getModerationMetrics: mockRouteResponse,
 }));
 jest.mock('../../controllers/reviews', () => ({
   listReviews: mockRouteResponse,

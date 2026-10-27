@@ -28,6 +28,8 @@ CREATE TABLE public.users_table (
   suspension_reason text,
   suspension_updated_at timestamp with time zone,
   escalated_to_deletion boolean NOT NULL DEFAULT false,
+  suspended_at timestamp with time zone,
+  suspension_source text NOT NULL DEFAULT 'manual'::text CHECK (suspension_source = ANY (ARRAY['manual'::text, 'auto_warning'::text])),
   CONSTRAINT users_table_pkey PRIMARY KEY (id),
   CONSTRAINT users_table_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
@@ -161,7 +163,7 @@ CREATE TABLE public.equipment_listing_skills (
 CREATE TABLE public.activity_log (
   activity_id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
-  activity_type text NOT NULL CHECK (activity_type = ANY (ARRAY['deposit_refunded'::text, 'equipment_returned'::text, 'equipment_paid'::text, 'deposit_paid'::text, 'job_posted'::text, 'talent_hired'::text, 'job_payment_paid'::text, 'points_topped_up'::text, 'proposal_sent'::text, 'proposal_received'::text, 'job_cancelled'::text, 'equipment_listed'::text, 'rental_requested'::text, 'rental_request_received'::text, 'rental_request_approved'::text, 'rental_request_rejected'::text, 'rental_request_cancelled'::text, 'user_suspended'::text, 'user_reinstated'::text, 'user_archived'::text, 'user_unarchived'::text, 'user_deleted'::text, 'user_flagged'::text, 'user_warned'::text, 'password_reset'::text, 'user_invited'::text, 'points_deducted'::text, 'content_flagged'::text])),
+  activity_type text NOT NULL CHECK (activity_type = ANY (ARRAY['deposit_refunded'::text, 'equipment_returned'::text, 'equipment_paid'::text, 'deposit_paid'::text, 'job_posted'::text, 'talent_hired'::text, 'job_payment_paid'::text, 'points_topped_up'::text, 'proposal_sent'::text, 'proposal_received'::text, 'job_cancelled'::text, 'equipment_listed'::text, 'rental_requested'::text, 'rental_request_received'::text, 'rental_request_approved'::text, 'rental_request_rejected'::text, 'rental_request_cancelled'::text, 'user_suspended'::text, 'user_reinstated'::text, 'user_archived'::text, 'user_unarchived'::text, 'user_deleted'::text, 'user_flagged'::text, 'user_warned'::text, 'user_auto_suspended'::text, 'user_warning_complied'::text, 'password_reset'::text, 'user_invited'::text, 'points_deducted'::text, 'content_flagged'::text, 'invite_accepted'::text, 'invite_resent'::text, 'invite_revoked'::text, 'invite_delivery_failed'::text])),
   category text NOT NULL CHECK (category = ANY (ARRAY['equipment'::text, 'job'::text, 'wallet'::text, 'user'::text])),
   description text NOT NULL,
   related_listing_id uuid,
@@ -528,10 +530,27 @@ CREATE TABLE public.issue_reports (
   issue_type text NOT NULL CHECK (length(TRIM(BOTH FROM issue_type)) > 0),
   comment text NOT NULL CHECK (length(TRIM(BOTH FROM comment)) > 0),
   attachment_paths ARRAY NOT NULL DEFAULT '{}'::text[],
-  status text NOT NULL DEFAULT 'open'::text CHECK (status = ANY (ARRAY['open'::text, 'under_review'::text, 'resolved'::text, 'dismissed'::text])),
+  status text NOT NULL DEFAULT 'open'::text CHECK (status = ANY (ARRAY['open'::text, 'under_review'::text, 'warned'::text, 'resolved'::text, 'dismissed'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  warned_at timestamp with time zone,
+  warning_due_at timestamp with time zone,
+  warning_reminder_at timestamp with time zone,
+  warning_reminder_sent_at timestamp with time zone,
+  warning_window_days integer,
+  warning_compliance_flag boolean NOT NULL DEFAULT false,
+  warning_complied_at timestamp with time zone,
+  warning_complied_by uuid,
+  warning_closed_at timestamp with time zone,
+  warning_issued_by uuid,
+  warning_notified_at timestamp with time zone,
+  auto_suspended_at timestamp with time zone,
+  auto_suspension_until timestamp with time zone,
+  auto_suspension_notified_at timestamp with time zone,
+  auto_suspension_skipped_reason text,
   CONSTRAINT issue_reports_pkey PRIMARY KEY (report_id),
-  CONSTRAINT issue_reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES public.users_table(id)
+  CONSTRAINT issue_reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES public.users_table(id),
+  CONSTRAINT issue_reports_warning_complied_by_fkey FOREIGN KEY (warning_complied_by) REFERENCES public.users_table(id),
+  CONSTRAINT issue_reports_warning_issued_by_fkey FOREIGN KEY (warning_issued_by) REFERENCES public.users_table(id)
 );
 CREATE TABLE public.notifications (
   notification_id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -540,11 +559,12 @@ CREATE TABLE public.notifications (
   event_type text NOT NULL CHECK (length(btrim(event_type)) > 0),
   title text NOT NULL CHECK (length(btrim(title)) > 0),
   body text NOT NULL CHECK (length(btrim(body)) > 0),
-  entity_type text NOT NULL CHECK (entity_type = ANY (ARRAY['job_proposal'::text, 'job_assignment'::text, 'equipment_request'::text, 'verification'::text])),
+  entity_type text NOT NULL CHECK (entity_type = ANY (ARRAY['job_proposal'::text, 'job_assignment'::text, 'equipment_request'::text, 'verification'::text, 'user_account'::text])),
   entity_id uuid,
   data jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   read_at timestamp with time zone,
+  dedupe_key text,
   CONSTRAINT notifications_pkey PRIMARY KEY (notification_id),
   CONSTRAINT notifications_recipient_id_fkey FOREIGN KEY (recipient_id) REFERENCES auth.users(id),
   CONSTRAINT notifications_actor_id_fkey FOREIGN KEY (actor_id) REFERENCES auth.users(id)
@@ -567,8 +587,8 @@ CREATE TABLE public.issue_report_action_events (
   report_id uuid NOT NULL,
   target_type text NOT NULL,
   target_id uuid NOT NULL,
-  actor_id uuid NOT NULL,
-  actor_role text NOT NULL CHECK (actor_role = ANY (ARRAY['admin'::text, 'customer_support'::text])),
+  actor_id uuid,
+  actor_role text NOT NULL CHECK (actor_role = ANY (ARRAY['admin'::text, 'customer_support'::text, 'system'::text])),
   action_id text NOT NULL,
   reason text NOT NULL CHECK (length(btrim(reason)) > 0),
   idempotency_key uuid NOT NULL,
@@ -580,3 +600,57 @@ CREATE TABLE public.issue_report_action_events (
   CONSTRAINT issue_report_action_events_pkey PRIMARY KEY (action_event_id),
   CONSTRAINT issue_report_action_events_report_id_fkey FOREIGN KEY (report_id) REFERENCES public.issue_reports(report_id)
 );
+CREATE TABLE public.team_invites (
+  invite_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  email text NOT NULL,
+  full_name text NOT NULL,
+  role text NOT NULL CHECK (role = ANY (ARRAY['admin'::text, 'customer_support'::text])),
+  token_hash text NOT NULL UNIQUE,
+  invited_by uuid,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'sent'::text, 'failed'::text, 'accepted'::text, 'revoked'::text, 'expired'::text])),
+  delivery_attempts integer NOT NULL DEFAULT 0,
+  last_error_code text,
+  last_sent_at timestamp with time zone,
+  expires_at timestamp with time zone NOT NULL,
+  accepted_user_id uuid,
+  accepted_at timestamp with time zone,
+  revoked_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT team_invites_pkey PRIMARY KEY (invite_id),
+  CONSTRAINT team_invites_invited_by_fkey FOREIGN KEY (invited_by) REFERENCES public.users_table(id) ON DELETE SET NULL,
+  CONSTRAINT team_invites_accepted_user_id_fkey FOREIGN KEY (accepted_user_id) REFERENCES public.users_table(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX team_invites_active_email_key ON public.team_invites (lower(email)) WHERE (status = ANY (ARRAY['pending'::text, 'sent'::text, 'failed'::text]));
+CREATE INDEX team_invites_status_expiry_idx ON public.team_invites (status, expires_at);
+CREATE INDEX team_invites_invited_by_idx ON public.team_invites (invited_by, created_at DESC);
+CREATE TABLE public.email_events (
+  event_id bigint NOT NULL DEFAULT nextval('email_events_event_id_seq'),
+  invite_id uuid,
+  email text NOT NULL,
+  provider text NOT NULL,
+  template text NOT NULL,
+  status text NOT NULL CHECK (status = ANY (ARRAY['sent'::text, 'failed'::text])),
+  attempt integer NOT NULL DEFAULT 1,
+  error_code text,
+  latency_ms integer,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT email_events_pkey PRIMARY KEY (event_id),
+  CONSTRAINT email_events_invite_id_fkey FOREIGN KEY (invite_id) REFERENCES public.team_invites(invite_id) ON DELETE CASCADE
+);
+CREATE INDEX email_events_created_idx ON public.email_events (created_at DESC);
+CREATE INDEX email_events_invite_idx ON public.email_events (invite_id);
+CREATE TABLE public.password_resets (
+  reset_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  email text NOT NULL,
+  token_hash text NOT NULL UNIQUE,
+  requested_ip text,
+  expires_at timestamp with time zone NOT NULL,
+  used_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT password_resets_pkey PRIMARY KEY (reset_id),
+  CONSTRAINT password_resets_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users_table(id) ON DELETE CASCADE
+);
+CREATE INDEX password_resets_user_idx ON public.password_resets (user_id, created_at DESC);
+CREATE INDEX password_resets_expiry_idx ON public.password_resets (expires_at);

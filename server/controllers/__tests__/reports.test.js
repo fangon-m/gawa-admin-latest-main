@@ -50,7 +50,7 @@ describe('list issue reports', () => {
     expect(supabase.from).toHaveBeenCalledWith('issue_reports');
     expect(reportsQuery.eq).toHaveBeenCalledWith('status', 'open');
     expect(res.json).toHaveBeenCalledWith({
-      data: [{
+      data: [expect.objectContaining({
         id: report.report_id,
         reporterId: report.reporter_id,
         reporterName: 'Taylor User',
@@ -62,7 +62,11 @@ describe('list issue reports', () => {
         attachmentPaths: report.attachment_paths,
         status: report.status,
         createdAt: report.created_at,
-      }],
+        warnedAt: null,
+        warningDueAt: null,
+        warningComplianceFlag: false,
+        autoSuspendedAt: null,
+      })],
       pagination: { total: 1, page: 1, limit: 20, totalPages: 1 },
     });
   });

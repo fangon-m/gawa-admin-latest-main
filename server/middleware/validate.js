@@ -49,23 +49,31 @@ const schemas = {
     email: z.string().email('Invalid email address'),
   }),
   resetPassword: z.object({
-    accessToken: z.string().min(1, 'Access token is required'),
-    newPassword: z.string().min(6, 'Password must be at least 6 characters'),
+    token: z.string().min(20, 'Invalid reset link').max(200, 'Invalid reset link').optional(),
+    accessToken: z.string().min(1).optional(),
+    newPassword: z.string()
+      .min(7, 'Password must be at least 7 characters')
+      .max(128, 'Password must be at most 128 characters'),
+  }).refine((value) => Boolean(value.token || value.accessToken), {
+    message: 'A reset token is required',
+    path: ['token'],
   }),
   changePassword: z.object({
     currentPassword: z.string().min(1, 'Current password is required'),
     newPassword: z.string().min(6, 'Password must be at least 6 characters'),
   }),
 
-  adminResetPassword: z.object({
-    newPassword: z.string().min(6, 'Password must be at least 6 characters'),
-  }),
-
   // Users
   inviteUser: z.object({
-    name: z.string().min(1, 'Name is required').max(100),
-    email: z.string().email('Invalid email address'),
+    name: z.string().trim().min(1, 'Name is required').max(100),
+    email: z.string().trim().email('Invalid email address').max(254).transform(v => v.toLowerCase()),
     role: z.enum(['admin', 'customer_support'], 'Role must be admin or customer_support'),
+  }),
+  acceptInvite: z.object({
+    token: z.string().min(20, 'Invalid invitation link').max(200, 'Invalid invitation link'),
+    password: z.string()
+      .min(7, 'Password must be at least 7 characters')
+      .max(128, 'Password must be at most 128 characters'),
   }),
   archiveUser: z.object({
     reason: z.string().trim().min(1, 'Archive reason is required').max(500),
@@ -157,8 +165,14 @@ const schemas = {
       'user_unarchived',
       'user_deleted',
       'user_flagged',
+      'user_auto_suspended',
+      'user_warning_complied',
       'password_reset',
       'user_invited',
+      'invite_accepted',
+      'invite_resent',
+      'invite_revoked',
+      'invite_delivery_failed',
       'points_deducted',
       'content_flagged',
     ], 'Invalid activity type'),

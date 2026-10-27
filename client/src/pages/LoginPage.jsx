@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import PasswordInput from '../components/common/PasswordInput';
 
 const DEFAULT_EMAIL = 'gawaadmin@email.com';
 const DEFAULT_PASSWORD = 'gawaadmin123';
@@ -55,13 +56,12 @@ export default function LoginPage() {
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="password">Password</label>
-            <input
+            <PasswordInput
               id="password"
-              className="form-input"
-              type="password"
               placeholder="Enter your password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
               required
             />
             <div style={{ textAlign: 'right', marginTop: 4 }}>

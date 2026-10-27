@@ -5,6 +5,9 @@ export const list = (params) => get(`/users${toQueryString(params)}`);
 export const listTeam = () => get('/users/team');
 export const getById = (id) => get(`/users/${id}`);
 export const invite = (body) => post('/users/invite', body);
+export const resendInvite = (inviteId) => post(`/users/invites/${inviteId}/resend`);
+export const revokeInvite = (inviteId) => post(`/users/invites/${inviteId}/revoke`);
+export const sendPasswordReset = (id) => post(`/users/${id}/send-password-reset`);
 export const update = (id, body) => patch(`/users/${id}`, body);
 export const suspend = (id, options = {}) => post(`/users/${id}/suspend`, options);
 export const reinstate = (id) => post(`/users/${id}/reinstate`);
@@ -12,4 +15,4 @@ export const archiveUser = (id, reason) => post(`/users/${id}/archive`, { reason
 export const unarchiveUser = (id) => post(`/users/${id}/unarchive`);
 export const flagUser = (id) => post(`/users/${id}/flag`);
 export const remove = (id) => del(`/users/${id}`);
-export const resetPassword = (id, newPassword) => post(`/users/${id}/reset-password`, { newPassword });
+export const resetPassword = (id) => post(`/users/${id}/reset-password`);

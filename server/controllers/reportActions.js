@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const supabase = require('../db/supabase');
 const { logAdminActivity } = require('../utilities/activityLogger');
+const { getModerationSettings, sendModerationNotification } = require('../utilities/moderationWarnings');
 
 const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at';
 const STAFF_ROLES = new Set(['admin', 'customer_support']);
@@ -32,7 +33,8 @@ function actionDescription(id) {
     resolve_target_unavailable: 'Resolve this report because its reported target no longer exists.',
     relist: 'Reopen this closed job post.',
     flag_job_match: 'Add a moderation flag to this job match.',
-    warn: 'Send a moderation warning to this profile in chat.',
+    warn: 'Send a moderation warning to this profile in chat and start the compliance window.',
+    mark_compliant: 'Resolve this warning because the reported user complied. Administrator only.',
     suspend: 'Suspend this profile for the selected number of days.',
   };
   return descriptions[id];
@@ -49,13 +51,49 @@ function action(id, req, adminOnly = false) {
 }
 
 async function loadReport(reportId) {
-  const { data, error } = await supabase
+  const buildQuery = (columns) => supabase
     .from('issue_reports')
-    .select('report_id, target_type, target_id, status')
+    .select(columns)
     .eq('report_id', reportId)
     .maybeSingle();
+
+  let { data, error } = await buildQuery([
+    'report_id, target_type, target_id, status, issue_type',
+    'warned_at, warning_due_at, warning_reminder_at, warning_reminder_sent_at',
+    'warning_window_days, warning_compliance_flag, warning_complied_at',
+    'warning_closed_at, warning_issued_by',
+    'auto_suspended_at, auto_suspension_until, auto_suspension_skipped_reason',
+  ].join(', '));
+
+  if (error?.code === '42703') {
+    // Migration 008 not applied yet: warning fields are absent from the schema.
+    ({ data, error } = await buildQuery('report_id, target_type, target_id, status, issue_type'));
+  }
   if (error) throw error;
   return data;
+}
+
+function mapWarning(report) {
+  if (!report) return null;
+  const dueAt = report.warning_due_at || null;
+  const due = dueAt ? Date.parse(dueAt) : null;
+  return {
+    warnedAt: report.warned_at || null,
+    dueAt,
+    windowDays: report.warning_window_days ?? null,
+    reminderAt: report.warning_reminder_at || null,
+    remindedAt: report.warning_reminder_sent_at || null,
+    complianceFlag: report.warning_compliance_flag === true,
+    compliedAt: report.warning_complied_at || null,
+    closedAt: report.warning_closed_at || null,
+    issuedBy: report.warning_issued_by || null,
+    autoSuspendedAt: report.auto_suspended_at || null,
+    autoSuspensionUntil: report.auto_suspension_until || null,
+    autoSuspensionSkippedReason: report.auto_suspension_skipped_reason || null,
+    remainingSeconds: due && Number.isFinite(due)
+      ? Math.max(0, Math.ceil((due - Date.now()) / 1000))
+      : null,
+  };
 }
 
 async function loadTarget(report) {
@@ -95,6 +133,7 @@ async function getReportActions(req, res) {
 
   operation = `load_target:${report.target_type}`;
   const target = await loadTarget(report);
+  const moderation = await getModerationSettings(supabase);
   const open = ['open', 'under_review'].includes(report.status);
   const actions = [];
 
@@ -135,16 +174,37 @@ async function getReportActions(req, res) {
         }
       }
     }
+  } else if (report.status === 'warned') {
+    const warningActive = report.warning_compliance_flag !== true && !report.auto_suspended_at;
+    if (warningActive) {
+      actions.push(action('mark_compliant', req, true));
+      if (target && target.state !== true) {
+        operation = 'read_profile_suspension_state';
+        const suspensionExpiry = target.suspendedUntil ? Date.parse(target.suspendedUntil) : null;
+        const suspensionIsActive = target.suspensionStatus === 'active'
+          && (suspensionExpiry === null
+            || !Number.isFinite(suspensionExpiry)
+            || suspensionExpiry > Date.now());
+        if (!suspensionIsActive) actions.push(action('suspend', req, true));
+      }
+    }
   }
 
   res.json({
     reportId: report.report_id,
+    reportStatus: report.status,
     target: {
       type: report.target_type,
       id: report.target_id,
       exists: Boolean(target),
       version: target?.version || null,
       state: target?.state ?? null,
+    },
+    warning: mapWarning(report),
+    moderation: {
+      warningDays: moderation.warningDays,
+      reminderDay: moderation.reminderDay,
+      autoSuspendDays: moderation.autoSuspendDays,
     },
     actions,
   });
@@ -159,7 +219,29 @@ async function getReportActions(req, res) {
   }
 }
 
+async function getReportWarning(req, res) {
+  try {
+    const report = await loadReport(req.params.id);
+    if (!report) return res.status(404).json({ error: 'REPORT_NOT_FOUND' });
+    return res.json({
+      reportId: report.report_id,
+      reportStatus: report.status,
+      warning: mapWarning(report),
+    });
+  } catch (error) {
+    console.error('[IssueReportWarning] Could not load warning:', {
+      reportId: req.params.id,
+      databaseCode: error.code || null,
+      databaseMessage: error.message,
+    });
+    return res.status(500).json({ error: 'REPORT_WARNING_UNAVAILABLE' });
+  }
+}
+
 function mapActionError(error) {
+  if (['42703', '42P01', 'PGRST202'].includes(error?.code)) {
+    return { status: 503, code: 'MODERATION_SCHEMA_NOT_READY' };
+  }
   const message = String(error?.message || '');
   const knownCodes = [
     'TARGET_DELETED',
@@ -208,9 +290,13 @@ async function loadWarningTarget(reportId, senderId) {
   return { report, recipient };
 }
 
-async function sendWarningMessage(report, recipient, senderId, messageText) {
+async function sendWarningMessage(report, recipient, senderId, messageText, moderation = {}) {
+  const windowDays = moderation.warningDays || 7;
+  const suspendDays = moderation.autoSuspendDays || 3;
   const draftedText = messageText
-    || `Automated moderation warning for report #${report.report_id}. Reason: ${report.issue_type}. If you believe this warning is mistaken, reply here to appeal within 7 days.`;
+    || `Automated moderation warning for report #${report.report_id}. Reason: ${report.issue_type}. `
+      + `If you believe this warning is mistaken, reply here to appeal within ${windowDays} days. `
+      + `If the warning is not resolved, your account will be automatically suspended for ${suspendDays} days.`;
   const text = draftedText.includes(report.report_id)
     ? draftedText
     : `${draftedText}\n\nReport #${report.report_id}`;
@@ -245,6 +331,7 @@ async function executeReportAction(req, res) {
     : req.body.reason;
   if (!reason) return res.status(400).json({ error: 'INVALID_ACTION_INPUT' });
 
+  const moderationSettings = await getModerationSettings(supabase);
   const idempotencyKey = req.get('Idempotency-Key');
   if (!idempotencyKey || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
     return res.status(400).json({ error: 'INVALID_IDEMPOTENCY_KEY' });
@@ -281,7 +368,9 @@ async function executeReportAction(req, res) {
     p_actor_id: req.user.id,
     p_actor_role: hasRole(req, 'admin') ? 'admin' : 'customer_support',
     p_reason: reason,
-    p_duration_days: req.body.durationDays ?? null,
+    p_duration_days: req.params.actionId === 'warn'
+      ? moderationSettings.warningDays
+      : (req.body.durationDays ?? null),
     p_target_version: targetVersion,
     p_idempotency_key: idempotencyKey,
     p_request_hash: requestHash,
@@ -330,6 +419,7 @@ async function executeReportAction(req, res) {
   }
 
   const result = data?.result || data;
+  const actionResult = result.result || {};
   let warningMessage;
   if (req.params.actionId === 'warn') {
     try {
@@ -337,7 +427,8 @@ async function executeReportAction(req, res) {
         warningTarget.report,
         warningTarget.recipient,
         req.user.id,
-        req.body.messageText
+        req.body.messageText,
+        moderationSettings
       );
       warningMessage = { id: delivery.message.message_id, createdAt: delivery.message.created_at };
       if (delivery.created) {
@@ -356,6 +447,55 @@ async function executeReportAction(req, res) {
       });
       return res.status(500).json({ error: 'WARNING_MESSAGE_FAILED', warningRecorded: true });
     }
+
+    try {
+      await sendModerationNotification(supabase, {
+        kind: 'moderation_warning',
+        reportId: warningTarget.report.report_id,
+        targetId: warningTarget.recipient.id,
+        actorId: req.user.id,
+        reason: warningTarget.report.issue_type,
+        dueAt: actionResult.warningDueAt,
+        windowDays: actionResult.windowDays || moderationSettings.warningDays,
+        suspendDays: moderationSettings.autoSuspendDays,
+      });
+      await supabase
+        .from('issue_reports')
+        .update({ warning_notified_at: new Date().toISOString() })
+        .eq('report_id', warningTarget.report.report_id)
+        .is('warning_notified_at', null);
+    } catch (notificationError) {
+      // Non-fatal: the sweep retries un-notified warnings on its next tick.
+      console.error('[IssueReportAction] Warning notification could not be stored; sweep will retry:', {
+        reportId: req.params.id,
+        databaseCode: notificationError.code || null,
+      });
+    }
+  }
+
+  if (req.params.actionId === 'mark_compliant' && data?.replayed !== true) {
+    try {
+      await sendModerationNotification(supabase, {
+        kind: 'moderation_complied',
+        reportId: req.params.id,
+        targetId: actionResult.targetId || result.target?.id,
+        actorId: req.user.id,
+        dueAt: null,
+      });
+    } catch (notificationError) {
+      console.error('[IssueReportAction] Compliance notification failed:', {
+        reportId: req.params.id,
+        databaseCode: notificationError.code || null,
+      });
+    }
+
+    logAdminActivity({
+      actorId: req.user.id,
+      activityType: 'user_warning_complied',
+      category: 'user',
+      relatedUserId: result.target?.id || null,
+      description: `Admin marked warning for report ${req.params.id} as compliant`,
+    });
   }
 
   console.info(JSON.stringify({
@@ -364,11 +504,23 @@ async function executeReportAction(req, res) {
     role: hasRole(req, 'admin') ? 'admin' : 'customer_support',
     replayed: data?.replayed === true,
   }));
+  const warning = req.params.actionId === 'warn'
+    ? {
+      warnedAt: actionResult.warnedAt || null,
+      dueAt: actionResult.warningDueAt || null,
+      windowDays: actionResult.windowDays || moderationSettings.warningDays,
+      complianceFlag: false,
+    }
+    : req.params.actionId === 'mark_compliant'
+      ? { complianceFlag: true, compliedAt: actionResult.compliedAt || null }
+      : undefined;
+
   res.json({
     ...result,
+    ...(warning ? { warning } : {}),
     ...(warningMessage ? { warningMessage } : {}),
     replayed: data?.replayed === true,
   });
 }
 
-module.exports = { getReportActions, executeReportAction };
+module.exports = { getReportActions, getReportWarning, executeReportAction };

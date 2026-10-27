@@ -23,10 +23,21 @@ const issueReportFilters = [
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
     { value: 'open', label: 'Open' },
     { value: 'under_review', label: 'Under Review' },
+    { value: 'warned', label: 'Warned' },
     { value: 'resolved', label: 'Resolved' },
     { value: 'dismissed', label: 'Dismissed' },
   ]},
 ];
+
+function formatRemaining(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  if (seconds <= 0) return 'Due now';
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  if (days > 0) return `${days}d ${hours}h`;
+  const minutes = Math.max(1, Math.floor((seconds % 3600) / 60));
+  return `${hours}h ${minutes}m`;
+}
 
 const issueReportColumns = [
   { key: 'reporterName', label: 'Reporter' },
@@ -50,6 +61,7 @@ const issueReportActionLabels = {
   relist: 'Relist job',
   flag_job_match: 'Flag job match',
   warn: 'Warn user',
+  mark_compliant: 'Mark compliant',
   suspend: 'Suspend profile',
 };
 
@@ -70,6 +82,10 @@ const issueReportActionErrors = {
   INVALID_MESSAGE_RECIPIENT: 'The reported account could not be opened as a chat recipient. Verify the account ID and try again.',
   WARNING_RECIPIENT_UNAVAILABLE: 'The reported user could not be verified. No warning was sent; refresh the report and try again.',
   REPORT_ACTIONS_UNAVAILABLE: 'Permitted actions could not be loaded. Refresh the report or contact an administrator.',
+  REPORT_WARNING_UNAVAILABLE: 'The warning state could not be loaded. Refresh the report and try again.',
+  AUTO_SUSPENDED: 'This warning already resulted in an automatic suspension.',
+  WARNING_NOT_ACTIVE: 'This warning is no longer active. Refresh the report to see its current state.',
+  MODERATION_SCHEMA_NOT_READY: 'The moderation schema is not deployed on this database. Apply migrations 008 and 009, then retry.',
 };
 
 const issueReportActionUnavailableReasons = {
@@ -100,6 +116,12 @@ export default function Oversight() {
   const [selectedReview, setSelectedReview] = useState(null);
   const [reportActions, setReportActions] = useState([]);
   const [reportActionTarget, setReportActionTarget] = useState(null);
+  const [reportWarning, setReportWarning] = useState(null);
+  const [moderationSettings, setModerationSettings] = useState({
+    warningDays: 7,
+    reminderDay: 3,
+    autoSuspendDays: 3,
+  });
   const [reportActionsLoading, setReportActionsLoading] = useState(false);
   const [reportActionsError, setReportActionsError] = useState('');
   const [reportActionPrompt, setReportActionPrompt] = useState(null);
@@ -124,6 +146,7 @@ export default function Oversight() {
     if (!selectedReport) {
       setReportActions([]);
       setReportActionTarget(null);
+      setReportWarning(null);
       setReportActionsError('');
       return undefined;
     }
@@ -132,6 +155,7 @@ export default function Oversight() {
     setReportActionsLoading(true);
     setReportActions([]);
     setReportActionTarget(null);
+    setReportWarning(null);
     setReportActionsError('');
     setReportActionPrompt(null);
     setReportActionReason('');
@@ -143,10 +167,15 @@ export default function Oversight() {
         if (!current) return;
         setReportActions(result.actions || []);
         setReportActionTarget(result.target || null);
+        setReportWarning(result.warning || null);
+        if (result.moderation) {
+          setModerationSettings(previous => ({ ...previous, ...result.moderation }));
+        }
       })
       .catch((error) => {
         if (!current) return;
         setReportActions([]);
+        setReportWarning(null);
         setReportActionsError(issueReportActionErrors[error?.error] || 'Unable to load permitted actions.');
       })
       .finally(() => {
@@ -237,6 +266,7 @@ export default function Oversight() {
         getReportActions(selectedReport.id).then((latestActions) => {
           setReportActions(latestActions.actions || []);
           setReportActionTarget(latestActions.target || null);
+          setReportWarning(latestActions.warning || null);
           setReportActionsError('');
         }).catch(() => {
           setReportActionsError('The report changed and available actions could not be refreshed.');
@@ -263,6 +293,10 @@ export default function Oversight() {
       .then((latestActions) => {
         setReportActions(latestActions.actions || []);
         setReportActionTarget(latestActions.target || null);
+        setReportWarning(latestActions.warning || null);
+        if (latestActions.moderation) {
+          setModerationSettings(previous => ({ ...previous, ...latestActions.moderation }));
+        }
         setReportActionsError('');
       })
       .catch(() => {
@@ -274,6 +308,26 @@ export default function Oversight() {
     if (!reportFilter.status) return allReports;
     return allReports.filter(report => report.status === reportFilter.status);
   }, [allReports, reportFilter.status]);
+
+  const warningView = useMemo(() => {
+    if (!selectedReport) return null;
+    if (reportWarning?.warnedAt) return reportWarning;
+    if (!selectedReport.warnedAt) return null;
+    const due = selectedReport.warningDueAt ? Date.parse(selectedReport.warningDueAt) : null;
+    return {
+      warnedAt: selectedReport.warnedAt,
+      dueAt: selectedReport.warningDueAt,
+      windowDays: selectedReport.warningWindowDays,
+      complianceFlag: selectedReport.warningComplianceFlag === true,
+      compliedAt: selectedReport.warningCompliedAt,
+      autoSuspendedAt: selectedReport.autoSuspendedAt,
+      autoSuspensionUntil: selectedReport.autoSuspensionUntil,
+      autoSuspensionSkippedReason: selectedReport.autoSuspensionSkippedReason,
+      remainingSeconds: due && Number.isFinite(due)
+        ? Math.max(0, Math.ceil((due - Date.now()) / 1000))
+        : null,
+    };
+  }, [selectedReport, reportWarning]);
 
   const renderReviews = () => (
     <div className="card">
@@ -376,6 +430,59 @@ export default function Oversight() {
                   </div>
                 </div>
               )}
+              {warningView && (
+                <div className="detail-panel-section">
+                  <h4>Warning</h4>
+                  <div className="detail-field">
+                    <div className="detail-label">State</div>
+                    <div className="detail-value">
+                      {warningView.complianceFlag
+                        ? 'Complied'
+                        : warningView.autoSuspendedAt
+                          ? 'Auto-suspended'
+                          : warningView.autoSuspensionSkippedReason
+                            ? `Closed — ${warningView.autoSuspensionSkippedReason.replaceAll('_', ' ')}`
+                            : 'Pending compliance'}
+                    </div>
+                  </div>
+                  <div className="detail-field">
+                    <div className="detail-label">Warned</div>
+                    <div className="detail-value">{formatDateTime(warningView.warnedAt)}</div>
+                  </div>
+                  <div className="detail-field">
+                    <div className="detail-label">Compliance due</div>
+                    <div className="detail-value">
+                      {formatDateTime(warningView.dueAt)}
+                      {warningView.windowDays ? ` (${warningView.windowDays}-day window)` : ''}
+                    </div>
+                  </div>
+                  {!warningView.complianceFlag && !warningView.autoSuspendedAt && !warningView.autoSuspensionSkippedReason && (
+                    <div className="detail-field">
+                      <div className="detail-label">Time remaining</div>
+                      <div className="detail-value">{formatRemaining(warningView.remainingSeconds)}</div>
+                    </div>
+                  )}
+                  {warningView.compliedAt && (
+                    <div className="detail-field">
+                      <div className="detail-label">Complied</div>
+                      <div className="detail-value">{formatDateTime(warningView.compliedAt)}</div>
+                    </div>
+                  )}
+                  {warningView.autoSuspendedAt && (
+                    <div className="detail-field">
+                      <div className="detail-label">Auto-suspended</div>
+                      <div className="detail-value">
+                        {formatDateTime(warningView.autoSuspendedAt)}
+                        {warningView.autoSuspensionUntil ? ` until ${formatDateTime(warningView.autoSuspensionUntil)}` : ''}
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-muted text-xs">
+                    An unresolved warning is suspended automatically for {moderationSettings.autoSuspendDays} days.
+                    The day-{moderationSettings.reminderDay} reminder and suspension are sent as in-app notifications.
+                  </p>
+                </div>
+              )}
               {selectedReport && (
                 <div className="detail-panel-section">
                   <h4>Available Actions</h4>
@@ -405,7 +512,9 @@ export default function Oversight() {
                             setReportActionDeliveryPending(false);
                             setReportActionMessage(
                               availableAction.id === 'warn'
-                                ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. If you believe this warning is mistaken, reply here to appeal within 7 days.`
+                                ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. `
+                                  + `If you believe this warning is mistaken, reply here to appeal within ${moderationSettings.warningDays} days. `
+                                  + `If the warning is not resolved, your account will be automatically suspended for ${moderationSettings.autoSuspendDays} days.`
                                 : ''
                             );
                             setReportActionDuration(7);
@@ -471,9 +580,11 @@ export default function Oversight() {
                           : reportActionPrompt.description}
                         {reportActionPrompt.id === 'warn'
                           ? ' The message will be sent in the existing chat and the moderation action recorded in the audit log.'
-                          : ' This action will be recorded in the immutable moderation audit log.'}
+                          : reportActionPrompt.id === 'mark_compliant'
+                            ? ' This closes the warning and cancels the automatic suspension. The action is recorded in the immutable moderation audit log.'
+                            : ' This action will be recorded in the immutable moderation audit log.'}
                       </p>
-                      {['warn', 'suspend'].includes(reportActionPrompt.id) && (
+                      {['warn', 'mark_compliant', 'suspend'].includes(reportActionPrompt.id) && (
                         <div
                           role="status"
                           style={{

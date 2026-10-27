@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import { usePermissions } from './utils/permissions';
 import Layout from './components/layout/Layout';
@@ -26,6 +26,7 @@ const RentalDetail = lazy(() => import('./pages/RentalDetail'));
 const Assessments = lazy(() => import('./pages/Assessments'));
 const TrustLedger = lazy(() => import('./pages/TrustLedger'));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const AcceptInvitePage = lazy(() => import('./pages/AcceptInvitePage'));
 
 function ProtectedRoute({ children, requiredPermission }) {
   const { user } = useAuth();
@@ -40,6 +41,21 @@ function ProtectedRoute({ children, requiredPermission }) {
 export default function App() {
   const { user, isAuthenticated } = useAuth();
   const { can } = usePermissions(user);
+  const location = useLocation();
+
+  // Invite acceptance is standalone: the invitee is not signed in, and an
+  // authenticated admin clicking the link should not get the app shell either.
+  if (location.pathname === '/accept-invite') {
+    return (
+      <Suspense fallback={
+        <div className="page-loading">
+          <div className="page-loading__spinner" />
+        </div>
+      }>
+        <AcceptInvitePage />
+      </Suspense>
+    );
+  }
 
   if (!isAuthenticated) {
     return (

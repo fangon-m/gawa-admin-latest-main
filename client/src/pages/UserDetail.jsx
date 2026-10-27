@@ -89,9 +89,8 @@ export default function UserDetail() {
   const [archiveReason, setArchiveReason] = useState('');
   const [userActionError, setUserActionError] = useState('');
   const [showPwReset, setShowPwReset] = useState(false);
-  const [pwNew, setPwNew] = useState('');
-  const [pwConfirm, setPwConfirm] = useState('');
   const [pwError, setPwError] = useState('');
+  const [pwResult, setPwResult] = useState('');
   const [pwProcessing, setPwProcessing] = useState(false);
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
@@ -145,7 +144,7 @@ export default function UserDetail() {
 
   const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes'];
 
-  const resetPwForm = () => { setPwNew(''); setPwConfirm(''); setPwError(''); };
+  const closePwReset = () => { setShowPwReset(false); setPwError(''); setPwResult(''); };
 
   const handleAction = async (action) => {
     try {
@@ -178,21 +177,17 @@ export default function UserDetail() {
   };
 
   const handlePasswordReset = async () => {
-    if (pwNew !== pwConfirm) {
-      setPwError('Passwords do not match');
-      return;
-    }
-    if (pwNew.length < 6) {
-      setPwError('Password must be at least 6 characters');
-      return;
-    }
     setPwProcessing(true);
     setPwError('');
+    setPwResult('');
     try {
-      await resetPassword(id, pwNew);
-      addNotification('moderation_decision', 'Password Reset', `Password reset for ${user.name}`, `/users/${user.id}`);
-      setShowPwReset(false);
-      resetPwForm();
+      const res = await resetPassword(id);
+      if (res?.data?.delivery === 'failed') {
+        setPwError('The temporary password was set, but the email could not be delivered. Retry, or send a reset link instead.');
+      } else {
+        setPwResult(`Temporary password emailed to ${user.email}.`);
+        addNotification('moderation_decision', 'Password Reset', `Temporary password emailed to ${user.name}`, `/users/${user.id}`);
+      }
     } catch (err) {
       setPwError(err?.error || 'Failed to reset password');
     } finally {
@@ -203,13 +198,14 @@ export default function UserDetail() {
   const isSuspended = user.status === 'suspended';
   const isArchived = user.isArchived || user.status === 'archived';
   const isExpiredSuspension = isSuspended && user.suspendedUntil && new Date(user.suspendedUntil) < new Date();
+  const isTeamMember = ['admin', 'customer_support'].includes(user.role);
 
   const actionButtons = [
     { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended },
     { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended },
     { label: 'Archive & Ban Account', action: 'archive', permission: 'archiveUser', show: !isArchived },
     { label: 'Unarchive & Restore Access', action: 'unarchive', permission: 'unarchiveUser', show: isArchived },
-    { label: 'Reset Password', action: 'reset-password', permission: 'resetPassword', show: true },
+    { label: 'Reset Password', action: 'reset-password', permission: 'resetPassword', show: isTeamMember },
     { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: true },
   ];
 
@@ -638,41 +634,27 @@ export default function UserDetail() {
       )}
 
       {showPwReset && (
-        <div className="modal-overlay" onClick={() => { setShowPwReset(false); resetPwForm(); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+        <div className="modal-overlay" onClick={() => { if (!pwProcessing) closePwReset(); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
             <div className="modal-header">
               <h3>Reset Password</h3>
-              <button className="modal-close" onClick={() => { setShowPwReset(false); resetPwForm(); }}>
+              <button className="modal-close" onClick={closePwReset} disabled={pwProcessing}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
             <div className="modal-body">
-              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '1rem' }}>
-                Set a new password for <strong>{user.name}</strong>
+              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
+                Email a temporary password to <strong>{user.email}</strong> for <strong>{user.name}</strong>?
+                Their current password stops working immediately.
               </p>
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">New Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  placeholder="Enter new password"
-                  value={pwNew}
-                  onChange={(e) => setPwNew(e.target.value)}
-                  disabled={pwProcessing}
-                  autoFocus
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">Confirm Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  placeholder="Confirm new password"
-                  value={pwConfirm}
-                  onChange={(e) => setPwConfirm(e.target.value)}
-                  disabled={pwProcessing}
-                />
-              </div>
+              <p style={{ fontSize: 13, color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
+                The email contains the login email and the new temporary password. Ask them to change it right after signing in.
+              </p>
+              {pwResult && (
+                <div style={{ fontSize: 13, color: 'var(--color-success)', marginBottom: '0.75rem' }}>
+                  {pwResult}
+                </div>
+              )}
               {pwError && (
                 <div style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: '0.75rem' }}>
                   {pwError}
@@ -680,11 +662,11 @@ export default function UserDetail() {
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowPwReset(false); resetPwForm(); }} disabled={pwProcessing}>
-                Cancel
+              <button className="btn btn-outline" onClick={closePwReset} disabled={pwProcessing}>
+                {pwResult ? 'Close' : 'Cancel'}
               </button>
-              <button className="btn btn-primary" onClick={handlePasswordReset} disabled={!pwNew || !pwConfirm || pwProcessing}>
-                {pwProcessing ? 'Resetting...' : 'Reset Password'}
+              <button className="btn btn-primary" onClick={handlePasswordReset} disabled={pwProcessing}>
+                {pwProcessing ? 'Sending...' : 'Send Temporary Password'}
               </button>
             </div>
           </div>

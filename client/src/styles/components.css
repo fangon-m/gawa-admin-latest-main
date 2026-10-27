@@ -441,6 +441,27 @@
   white-space: nowrap;
 }
 
+.status-badge.warned {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+/* Pending team invitations (Settings → Team Members) */
+.status-badge.invite_pending {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.status-badge.invite_failed {
+  background: var(--color-error-subtle);
+  color: var(--color-error);
+}
+
+.status-badge.invite_expired {
+  background: var(--color-bg-subtle, #f4f5f7);
+  color: var(--color-text-muted);
+}
+
 .data-table-wrapper {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -1386,6 +1407,50 @@
   outline: none;
   transition: all var(--transition);
 }
+
+/* Password fields with a show/hide toggle (login, accept-invite) */
+.password-field {
+  position: relative;
+  display: flex;
+}
+
+.password-field .form-input {
+  padding-right: calc(var(--space-10) + var(--space-1));
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+}
+
+.password-toggle:hover {
+  color: var(--color-text);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.password-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 
 .form-input::placeholder {
   color: var(--color-text-faint);

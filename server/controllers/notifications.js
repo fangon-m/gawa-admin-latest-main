@@ -1,18 +1,21 @@
 const supabase = require('../db/supabase');
 const { getFullName } = require('../utilities/helpers');
 
-const VALID_ENTITY_TYPES = ['job_proposal', 'job_assignment', 'equipment_request', 'verification'];
+const VALID_ENTITY_TYPES = ['job_proposal', 'job_assignment', 'equipment_request', 'verification', 'user_account'];
 
 /**
  * Pick a live `entity_type` for an admin-originated notification. The live
- * notifications.entity_type column is constrained to four values; admin event
- * types (user_suspended, verification_approved, …) are mapped to the closest.
+ * notifications.entity_type column is constrained to five values; admin event
+ * types (user_suspended, verification_approved, ...) are mapped to the closest.
  */
 function inferEntityType(type = '') {
   const t = String(type).toLowerCase();
   if (t.includes('verification')) return 'verification';
   if (t.includes('assign') || t.includes('completion')) return 'job_assignment';
   if (t.includes('equipment') || t.includes('listing') || t.includes('rental')) return 'equipment_request';
+  if (t.includes('user') || t.includes('account') || t.includes('warning') || t.includes('suspension')) {
+    return 'user_account';
+  }
   return 'job_proposal';
 }
 

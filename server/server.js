@@ -9,6 +9,10 @@ const routes = require('./routes');
 
 const app = express();
 
+// Rate limits are per IP; behind a reverse proxy every request would otherwise
+// look like it came from the proxy and share one bucket.
+app.set('trust proxy', 1);
+
 // Rate limiting
 const rateLimit = require('express-rate-limit');
 const apiLimiter = rateLimit({
@@ -78,6 +82,7 @@ app.use((err, req, res, next) => {
 
 // Auto-process expired completion reviews every 5 minutes
 const supabase = require('./db/supabase');
+const { runModerationWarningSweep } = require('./utilities/moderationWarnings');
 const REVIEW_DAYS = 3;
 async function autoProcessExpiredReviews() {
   try {
@@ -192,6 +197,37 @@ function scheduleAutoResolveExpiredSuspensions({ startupDelayMs = 30_000, interv
   return { startupDelayMs, intervalMs };
 }
 
+// Warn -> compliance window -> automatic suspension. Runs in-process, exactly
+// like the timers above. The sweep is idempotent and safe to retry.
+async function runModerationSweepTick() {
+  try {
+    await supabase.ensureConnection();
+  } catch (err) {
+    console.error('[Moderation] Database connection unavailable:', err.message);
+  }
+  await runModerationWarningSweep();
+}
+
+function scheduleModerationWarningSweep({
+  startupDelayMs = 30_000,
+  intervalMs = config.moderation.sweepIntervalMs,
+  onTick = runModerationSweepTick,
+} = {}) {
+  if (process.env.DISABLE_MODERATION_SWEEP === 'true') {
+    console.log('  Moderation sweep: disabled by environment');
+    return null;
+  }
+
+  setTimeout(() => {
+    onTick();
+    setInterval(() => {
+      onTick();
+    }, intervalMs);
+  }, startupDelayMs);
+
+  return { startupDelayMs, intervalMs };
+}
+
 function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempts = 10) {
   const candidatePort = port + attempt;
   const server = app.listen(candidatePort, () => {
@@ -205,7 +241,9 @@ function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempt
 
     scheduleAutoProcessExpiredReviews();
     scheduleAutoResolveExpiredSuspensions();
+    scheduleModerationWarningSweep();
     console.log(`  Auto-complete: starting after a 30s warm-up and then running every 5 minutes`);
+    console.log(`  Moderation sweep: starting after a 30s warm-up and then running every ${Math.round(config.moderation.sweepIntervalMs / 60000)} minute(s)`);
   });
 
   server.on('error', (error) => {
@@ -232,4 +270,11 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { app, startServer, scheduleAutoProcessExpiredReviews };
+module.exports = {
+  app,
+  startServer,
+  scheduleAutoProcessExpiredReviews,
+  scheduleAutoResolveExpiredSuspensions,
+  scheduleModerationWarningSweep,
+  runModerationSweepTick,
+};

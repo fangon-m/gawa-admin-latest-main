@@ -9,7 +9,6 @@ import * as settingsApi from '../api/settings';
 import * as activityLogApi from '../api/activityLog';
 import * as authApi from '../api/auth';
 import { formatDate, formatDateTime, formatLabel } from '../utils/helpers';
-import { Copy, Check } from 'lucide-react';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
@@ -22,7 +21,6 @@ export default function Settings() {
   const { preferences, togglePreference } = useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
-  const [twoFA, setTwoFA] = useState(false);
 
   useEffect(() => {
     if (searchParams.get('tab')) {
@@ -92,9 +90,10 @@ export default function Settings() {
     }
   }, [tab, refetchActivityLogs]);
 
-  // Team members (admin-managed staff accounts)
+  // Team members (admin-managed staff accounts) and pending invitations
   const [inviteResult, setInviteResult] = useState(null);
-  const [copiedPw, setCopiedPw] = useState(false);
+  const [busyInviteId, setBusyInviteId] = useState(null);
+  const [resettingMemberId, setResettingMemberId] = useState(null);
   const [removingMember, setRemovingMember] = useState(null);
 
   const { data: teamMembers, refetch: refetchTeam } = useApiData(() => usersApi.listTeam(), [], {
@@ -152,15 +151,74 @@ export default function Settings() {
         role: inviteForm.role,
       });
       const created = res?.data ?? res ?? {};
-      setInviteResult({ email: inviteForm.email, password: created.generatedPassword || null });
-      setCopiedPw(false);
-      setInviteMsg(`Invitation created successfully for ${inviteForm.email}`);
+      setInviteResult({
+        email: created.email || inviteForm.email,
+        delivery: created.delivery || 'sent',
+        expiresAt: created.expiresAt || null,
+      });
+      setInviteMsg(
+        created.delivery === 'failed'
+          ? `Invitation saved for ${created.email || inviteForm.email}, but the email could not be sent. Use Resend.`
+          : `Invitation emailed to ${created.email || inviteForm.email}`
+      );
       setInviteForm({ name: '', email: '', role: 'admin' });
       refetchTeam();
     } catch (err) {
       setInviteMsg(err?.error || 'Failed to send invitation');
     }
     setTimeout(() => setInviteMsg(''), 6000);
+  };
+
+  const handleResendInvite = async (row) => {
+    setBusyInviteId(row.inviteId);
+    try {
+      const res = await usersApi.resendInvite(row.inviteId);
+      const result = res?.data ?? res ?? {};
+      setInviteMsg(
+        result.delivery === 'failed'
+          ? `Could not resend the invitation to ${row.email}. Check the mail provider.`
+          : `Invitation resent to ${row.email}`
+      );
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to resend invitation');
+    } finally {
+      setBusyInviteId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const handleRevokeInvite = async (row) => {
+    setBusyInviteId(row.inviteId);
+    try {
+      await usersApi.revokeInvite(row.inviteId);
+      setInviteMsg(`Invitation for ${row.email} revoked`);
+      setInviteResult(null);
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to revoke invitation');
+    } finally {
+      setBusyInviteId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const handleSendReset = async (row) => {
+    setResettingMemberId(row.id);
+    try {
+      const res = await usersApi.sendPasswordReset(row.id);
+      const result = res?.data ?? res ?? {};
+      setInviteMsg(
+        result.delivery === 'failed'
+          ? `Reset link created for ${row.email}, but the email could not be delivered.`
+          : `Password reset link emailed to ${row.email}`
+      );
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to send the reset link');
+    } finally {
+      setResettingMemberId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
   };
 
   const handleRemoveMember = async () => {
@@ -173,16 +231,6 @@ export default function Settings() {
       setRemovingMember(null);
       setInviteMsg(err?.error || 'Failed to remove team member');
       setTimeout(() => setInviteMsg(''), 6000);
-    }
-  };
-
-  const copyPassword = async (password) => {
-    try {
-      await navigator.clipboard.writeText(password);
-      setCopiedPw(true);
-      setTimeout(() => setCopiedPw(false), 2000);
-    } catch {
-      setCopiedPw(false);
     }
   };
 
@@ -312,19 +360,6 @@ export default function Settings() {
               )}
               <button type="submit" className="btn btn-primary">Update Password</button>
             </form>
-
-            <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '1.5rem 0' }} />
-
-            <div className="settings-row">
-              <div>
-                <div style={{ fontWeight: 500 }}>Two-Factor Authentication</div>
-                <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Add an extra layer of security to your account</div>
-              </div>
-              <label className="toggle">
-                <input type="checkbox" checked={twoFA} onChange={() => setTwoFA(!twoFA)} />
-                <span className="toggle-slider" />
-              </label>
-            </div>
           </div>
         )}
 
@@ -408,11 +443,47 @@ export default function Settings() {
                 {
                   key: 'actions',
                   label: '',
-                  render: (row) => (
-                    row.isSelf
-                      ? <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>You</span>
-                      : <button className="btn btn-danger btn-sm" onClick={() => setRemovingMember(row)}>Remove</button>
-                  ),
+                  render: (row) => {
+                    if (row.isSelf) {
+                      return <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>You</span>;
+                    }
+                    if (row.kind === 'invite') {
+                      return (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm"
+                            disabled={busyInviteId === row.inviteId}
+                            onClick={() => handleResendInvite(row)}
+                          >
+                            {busyInviteId === row.inviteId ? 'Sending…' : 'Resend'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            disabled={busyInviteId === row.inviteId}
+                            onClick={() => handleRevokeInvite(row)}
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={resettingMemberId === row.id}
+                          onClick={() => handleSendReset(row)}
+                          title="Email a one-time password reset link"
+                        >
+                          {resettingMemberId === row.id ? 'Sending…' : 'Reset password'}
+                        </button>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => setRemovingMember(row)}>Remove</button>
+                      </div>
+                    );
+                  },
                 },
               ]}
               data={teamMembers}
@@ -426,21 +497,17 @@ export default function Settings() {
 
               {inviteResult && (
                 <div style={{ background: 'var(--color-bg-subtle, #f8f9fa)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md, 8px)', padding: 16, marginBottom: 16 }}>
-                  <div style={{ fontSize: 13, marginBottom: 10 }}>
-                    Account created for <strong>{inviteResult.email}</strong>. Share this temporary password now — it is shown only once:
+                  <div style={{ fontSize: 13, marginBottom: 6 }}>
+                    {inviteResult.delivery === 'failed'
+                      ? <>Invitation saved for <strong>{inviteResult.email}</strong>, but the email could not be delivered.</>
+                      : <>Invitation emailed to <strong>{inviteResult.email}</strong>. No password is sent — they choose one from the link.</>}
                   </div>
-                  {inviteResult.password ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <code style={{ flex: 1, minWidth: 200, padding: '8px 12px', background: 'var(--color-bg)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm, 6px)', fontSize: 14 }}>{inviteResult.password}</code>
-                      <button type="button" className="btn btn-outline btn-sm" onClick={() => copyPassword(inviteResult.password)}>
-                        {copiedPw ? <Check size={14} /> : <Copy size={14} />}
-                        {copiedPw ? 'Copied' : 'Copy'}
-                      </button>
+                  {inviteResult.expiresAt && (
+                    <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+                      Link expires {formatDateTime(inviteResult.expiresAt)}.
                     </div>
-                  ) : (
-                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>No temporary password was returned by the server.</div>
                   )}
-                  <button type="button" className="btn btn-outline btn-sm" style={{ marginTop: 12 }} onClick={() => setInviteResult(null)}>Dismiss</button>
+                  <button type="button" className="btn btn-outline btn-sm" style={{ marginTop: 6 }} onClick={() => setInviteResult(null)}>Dismiss</button>
                 </div>
               )}
 
@@ -480,7 +547,7 @@ export default function Settings() {
                   </select>
                 </div>
                 {inviteMsg && (
-                  <div style={{ fontSize: 13, color: inviteMsg.includes('success') ? 'var(--color-success)' : 'var(--color-error)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, color: /fail|could not|error/i.test(inviteMsg) ? 'var(--color-error)' : 'var(--color-success)', marginBottom: 12 }}>
                     {inviteMsg}
                   </div>
                 )}

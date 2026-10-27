@@ -99,3 +99,130 @@
 - `npm run build` ✅
 - Grep clean: no `equipment_listing_skill`, `from('rentals')`, `depositStatus`, `return_records`, `rental_check_ins`, `moderateReview`, `totalAmount`
 - 6 rentals visible in admin with Flag/Remove actions
+
+---
+
+# Moderation Warning Lifecycle (warn -> 7-day window -> 3-day auto-suspension)
+
+## Behaviour
+- `warn` on an `issue_reports` profile report moves the report to `warned`, records
+  `warned_at`, `warning_due_at`, `warning_window_days`, `warning_issued_by`, and keeps
+  sending the existing chat message (now with the window + suspension terms).
+- Compliance is admin-only (`mark_compliant`): the report becomes `resolved`,
+  `warning_compliance_flag = true`, and no suspension occurs. Enforced in
+  `server/routes/reports.js` (`requireAdminForCompliance`) and inside the RPC.
+- The in-process sweep (`server/utilities/moderationWarnings.js`, 30s warm-up then
+  every 5 min) sends notification rows and, when `warning_due_at` has passed, calls
+  `apply_warning_auto_suspension` which atomically suspends the user for
+  `autoSuspendDays`, marks the report `resolved`, and writes an immutable
+  `issue_report_action_events` row with `actor_role = 'system'`.
+- Notifications are DB rows in `public.notifications` (`entity_type = 'user_account'`,
+  unique `dedupe_key`), so re-runs never duplicate: warning, day-3 reminder,
+  auto-suspension, compliance. Email/push remain out of scope.
+- Suspensions record provenance in `users_table.suspension_source`
+  (`manual` | `auto_warning`) and `users_table.suspended_at`.
+
+## Migration order (apply in the Supabase SQL editor)
+1. `server/db/migrations/008_moderation_warning_lifecycle.sql`
+   (columns, indexes, notification dedupe, immutable audit trigger,
+   `execute_issue_report_action` replacement, `apply_warning_auto_suspension`,
+   optional `app_settings` seed)
+2. `server/db/migrations/009_activity_log_moderation_types.sql`
+   (`user_auto_suspended`, `user_warning_complied`)
+3. Deploy the server build so the sweep and new routes are active.
+
+Rollback: `server/db/migrations/rollback_008_moderation_warning_lifecycle.sql`
+(set `DISABLE_MODERATION_SWEEP=true` and deploy the previous version first, and run
+`SET gawa.allow_rollback = 'true';` in the same session - the script refuses to run
+otherwise, so it can never be applied alongside `008`/`009` by mistake). It
+deletes moderation notifications before restoring the old `entity_type` check and
+does not reinstate auto-suspended users; review
+`SELECT id, email, suspended_until, suspension_reason FROM public.users_table WHERE suspension_source = 'auto_warning'`
+and reinstate deliberately via `POST /api/users/:id/reinstate`. Re-apply the
+`execute_issue_report_action` body from `006` after rolling back.
+Note: `009` has no rollback script; the previous constraint from `007` must be
+restored by hand if `009` is reverted.
+
+## Environment variables
+| Variable | Default | Range |
+|---|---|---|
+| `MODERATION_WARNING_DAYS` | 7 | 1-30 |
+| `MODERATION_REMINDER_DAY` | 3 | 1-30 (clamped to window) |
+| `MODERATION_AUTO_SUSPEND_DAYS` | 3 | 1-90 |
+| `MODERATION_SWEEP_INTERVAL_MS` | 300000 | 1000-3600000 |
+| `MODERATION_ENFORCEMENT_ENABLED` | true | `false` to notify only |
+| `DISABLE_MODERATION_SWEEP` | unset | `true` to stop the timer |
+
+DB values in `app_settings` (`moderation_warning_window_days`,
+`moderation_reminder_day`, `moderation_auto_suspend_days`) override the env
+defaults at runtime; the seed uses `ON CONFLICT DO NOTHING` and is skipped when the
+table is absent. Bounds are clamped in `server/utilities/moderationWarnings.js`.
+The reminder fires when `warned_at + moderation_reminder_day` is reached (evaluated on
+each sweep), so changing the setting applies to open warnings without a data patch.
+`users_table.suspension_source`/`suspended_at` are written by both the RPCs and
+`POST /api/users/:id/suspend` (`manual`).
+
+## API
+- `GET /api/reports/:id/warning` (admin + support)
+- `GET /api/reports/moderation/metrics?days=30` (admin)
+- `GET /api/reports/moderation/health` (admin) - last sweep result, backlog, failures
+- `POST /api/reports/:id/actions/mark_compliant` (admin only, `Idempotency-Key` + `If-Match`)
+- `GET /api/reports/:id/actions` now returns `reportStatus`, `warning`, and `moderation`
+  defaults alongside the permitted actions.
+
+## Operations
+- Watch `moderation.auto_suspended` / `moderation.suspension_skipped` log lines and
+  `GET /api/reports/moderation/health`: `consecutiveFailures > 0` or a rising
+  `dueBacklog` means the sweep is not draining.
+- Rate limits still apply (`/api` 100 req / 15 min, `/api/auth` 20 req / 15 min).
+
+## Verification
+- `npx jest --testPathIgnorePatterns=appeals.test.js` -> 17 suites / 98 tests pass
+- `npx vitest run` -> 12 files / 45 tests pass
+- `npm run build` succeeds
+- Known pre-existing failure: `server/controllers/__tests__/appeals.test.js` is a
+  0-byte file, so a plain `npx jest` (and therefore `npm test`) fails with
+  "Your test suite must contain at least one test". Unrelated to this feature.
+
+---
+
+## Temporary Password Reset (admin → team member)
+
+### Behaviour change
+`POST /api/users/:id/reset-password` no longer accepts a password. The server
+generates the credential, applies it to the Supabase auth user, and emails the
+login email plus that password. The password is never returned to the portal and
+never written to logs or `activity_log`.
+
+- `PUT`-style manual entry removed from `UserDetail.jsx`; the existing
+  "Reset Password" button now opens a confirmation and emails the credential.
+- Only `admin` / `customer_support` accounts qualify (`400 NOT_TEAM_MEMBER`);
+  archived accounts return `409 USER_ARCHIVED`; missing email `400 NO_EMAIL`;
+  auth provider failure `400 RESET_FAILED`.
+- Delivery failures still return `200` with `data.delivery = "failed"` so the
+  admin can retry or fall back to the one-time reset link.
+- Route is rate limited per target account (`TEMP_PASSWORD_MAX_PER_HOUR`, default 3/hour).
+
+### Config
+- `TEMP_PASSWORD_LENGTH` (default 12, 10-64)
+- `TEMP_PASSWORD_MAX_PER_HOUR` (default 3, 1-20)
+
+### Files
+- New: `server/services/tempPasswords.js`, `server/services/emailTemplates/tempPassword.js`
+- Changed: `server/controllers/users.js`, `server/routes/users.js`,
+  `server/config/index.js`, `server/middleware/validate.js` (dropped
+  `schemas.adminResetPassword`), `client/src/api/users.js`,
+  `client/src/pages/UserDetail.jsx`
+- Tests: `adminTempPassword.test.js`, `tempPasswords.test.js`,
+  `tempPasswordTemplate.test.js`, updated `UserDetail.test.jsx`
+
+### Note
+In development `EMAIL_PROVIDER` defaults to `console`, so the temporary password
+is printed to the server stdout instead of being delivered.
+
+## Verification
+- `npx jest --testPathIgnorePatterns=appeals.test.js` -> passes
+- `npx vitest run` -> passes
+- `npm run build` -> succeeds
+- Pre-existing: `server/controllers/__tests__/appeals.test.js` is empty, so plain
+  `npx jest` / `npm test` still reports that suite as failed.

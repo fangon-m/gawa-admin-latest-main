@@ -8,7 +8,7 @@ jest.mock('../../utilities/activityLogger', () => ({
 
 const supabase = require('../../db/supabase');
 const { logAdminActivity } = require('../../utilities/activityLogger');
-const { getReportActions, executeReportAction } = require('../reportActions');
+const { getReportActions, getReportWarning, executeReportAction } = require('../reportActions');
 
 const reportId = '11111111-1111-4111-8111-111111111111';
 const targetId = '22222222-2222-4222-8222-222222222222';
@@ -122,13 +122,13 @@ describe('issue report moderation actions', () => {
       user: { id: targetId, roles: ['customer_support'] },
     }, res);
 
-    expect(res.json).toHaveBeenCalledWith({
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       reportId,
       target: { type: 'job_match', id: targetId, exists: false, version: null, state: null },
       actions: [
         expect.objectContaining({ id: 'resolve_target_unavailable', allowed: true }),
       ],
-    });
+    }));
   });
 
   it('returns an explicit action-loading error and logs the failing query step', async () => {
@@ -297,13 +297,14 @@ describe('issue report moderation actions', () => {
       relatedUserId: targetId,
       description: `Admin sent a moderation warning for report ${reportId}`,
     });
-    expect(res.json).toHaveBeenCalledWith({
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       reportId,
       action: 'warn',
       reportStatus: 'open',
+      warning: expect.objectContaining({ complianceFlag: false, windowDays: 7 }),
       warningMessage: { id: warningMessage.message_id, createdAt: warningMessage.created_at },
       replayed: false,
-    });
+    }));
 
   });
 
@@ -406,5 +407,169 @@ describe('issue report moderation actions', () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: 'INVALID_IDEMPOTENCY_KEY' });
     expect(supabase.rpc).not.toHaveBeenCalled();
+  });
+
+  it('exposes the warning lifecycle and admin-only compliance action for a warned report', async () => {
+    const dueAt = '2026-10-19T00:00:00.000Z';
+    const report = {
+      report_id: reportId,
+      target_type: 'profile',
+      target_id: targetId,
+      status: 'warned',
+      warned_at: '2026-10-12T00:00:00.000Z',
+      warning_due_at: dueAt,
+      warning_window_days: 7,
+      warning_compliance_flag: false,
+      auto_suspended_at: null,
+    };
+    const reports = reportQuery(report);
+    const target = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: {
+          id: targetId,
+          updated_at: targetVersion,
+          is_archived: false,
+          suspension_status: 'none',
+        },
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => table === 'issue_reports' ? reports : target);
+    const res = response();
+
+    await getReportActions({
+      params: { id: reportId },
+      user: { id: targetId, roles: ['admin'] },
+    }, res);
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.reportStatus).toBe('warned');
+    expect(payload.warning).toEqual(expect.objectContaining({
+      warnedAt: '2026-10-12T00:00:00.000Z',
+      dueAt,
+      windowDays: 7,
+      complianceFlag: false,
+    }));
+    expect(payload.actions.map(item => item.id)).toEqual(expect.arrayContaining(['mark_compliant', 'suspend']));
+    expect(payload.actions.find(item => item.id === 'mark_compliant')).toEqual(expect.objectContaining({
+      allowed: true,
+      adminOnly: true,
+    }));
+  });
+
+  it('loads a dedicated warning status payload', async () => {
+    const reports = reportQuery({
+      report_id: reportId,
+      target_type: 'profile',
+      target_id: targetId,
+      status: 'warned',
+      warned_at: '2026-10-12T00:00:00.000Z',
+      warning_due_at: '2099-01-01T00:00:00.000Z',
+      warning_window_days: 7,
+      warning_compliance_flag: false,
+    });
+    supabase.from.mockReturnValue(reports);
+    const res = response();
+
+    await getReportWarning({ params: { id: reportId } }, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      reportId,
+      reportStatus: 'warned',
+      warning: expect.objectContaining({
+        dueAt: '2099-01-01T00:00:00.000Z',
+        windowDays: 7,
+        remainingSeconds: expect.any(Number),
+      }),
+    }));
+  });
+
+  it('executes an audited mark-compliant decision without a suspension duration', async () => {
+    supabase.rpc.mockResolvedValue({
+      data: {
+        result: {
+          reportId,
+          action: 'mark_compliant',
+          reportStatus: 'resolved',
+          target: { type: 'profile', id: targetId },
+          result: {
+            reportStatus: 'resolved',
+            complianceFlag: true,
+            compliedAt: '2026-10-13T00:00:00.000Z',
+          },
+        },
+        replayed: false,
+      },
+      error: null,
+    });
+    const fallback = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+    };
+    supabase.from.mockReturnValue(fallback);
+    const res = response();
+
+    await executeReportAction({
+      params: { id: reportId, actionId: 'mark_compliant' },
+      body: { reason: 'Reported content was removed by the user' },
+      user: { id: targetId, roles: ['admin'] },
+      get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : targetVersion),
+    }, res);
+
+    expect(supabase.rpc).toHaveBeenCalledWith('execute_issue_report_action', expect.objectContaining({
+      p_action_id: 'mark_compliant',
+      p_actor_role: 'admin',
+      p_duration_days: null,
+      p_reason: 'Reported content was removed by the user',
+    }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      reportStatus: 'resolved',
+      warning: { complianceFlag: true, compliedAt: '2026-10-13T00:00:00.000Z' },
+      replayed: false,
+    }));
+    expect(logAdminActivity).toHaveBeenCalledWith(expect.objectContaining({
+      activityType: 'user_warning_complied',
+      relatedUserId: targetId,
+    }));
+  });
+
+  it('reports a missing moderation schema instead of a generic failure', async () => {
+    supabase.rpc.mockResolvedValue({
+      data: null,
+      error: { code: '42703', message: 'column "warned_at" does not exist' },
+    });
+    const tables = {
+      issue_reports: {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({
+          data: { report_id: reportId, target_type: 'profile', target_id: targetId, issue_type: 'Fraud' },
+          error: null,
+        }),
+      },
+      users_table: {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({
+          data: { id: targetId, role: 'talent' },
+          error: null,
+        }),
+      },
+    };
+    supabase.from.mockImplementation(table => tables[table] || tables.issue_reports);
+    const res = response();
+
+    await executeReportAction({
+      params: { id: reportId, actionId: 'warn' },
+      body: { reason: 'Verified policy violation', messageText: 'Warning' },
+      user: { id: actionKey, roles: ['admin'] },
+      get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : null),
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.json).toHaveBeenCalledWith({ error: 'MODERATION_SCHEMA_NOT_READY' });
   });
 });

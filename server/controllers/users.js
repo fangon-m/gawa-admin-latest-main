@@ -1,7 +1,14 @@
 const supabase = require('../db/supabase');
-const crypto = require('crypto');
+const config = require('../config');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
 const { logAdminActivity } = require('../utilities/activityLogger');
+const invites = require('../services/invites');
+const passwordResets = require('../services/passwordResets');
+const tempPasswords = require('../services/tempPasswords');
+const { sendEmail } = require('../services/mailer');
+const { renderInviteEmail, ROLE_LABELS } = require('../services/emailTemplates/invite');
+const { renderPasswordResetEmail } = require('../services/emailTemplates/passwordReset');
+const { renderTempPasswordEmail } = require('../services/emailTemplates/tempPassword');
 
 const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, suspension_status, suspended_until, suspension_reason, suspension_updated_at, escalated_to_deletion, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
 
@@ -65,6 +72,10 @@ async function listUsers(req, res) {
 }
 
 async function listTeamMembers(req, res) {
+  // Keep the badge honest without a background job: any live invite past its
+  // expiry is flipped to 'expired' before we read the list.
+  await invites.expireStaleInvites();
+
   const { data, error } = await supabase
     .from('users_table')
     .select(USER_SELECT)
@@ -83,14 +94,59 @@ async function listTeamMembers(req, res) {
     });
   }
 
-  res.json({
-    data: (data || []).map(u => ({
+  const members = (data || []).map((u) => {
+    const suspensionActive = u.suspension_status === 'active' || u.suspension_status === 'escalated';
+    return {
+      kind: 'member',
       ...mapUser(u),
-      status: u.is_archived ? 'archived' : 'active',
+      status: u.is_archived ? 'archived' : suspensionActive ? 'suspended' : 'active',
       roles: rolesByUser[u.id] || [],
       isSelf: u.id === req.user?.id,
-    })),
+      resendable: false,
+    };
   });
+
+  const { data: inviteRows, error: inviteError } = await supabase
+    .from('team_invites')
+    .select('*')
+    .in('status', invites.ACTIVE_STATUSES)
+    .order('created_at', { ascending: true });
+
+  if (inviteError) {
+    // A missing migration must not take down the whole team page.
+    console.error('[Team] Could not load pending invitations:', inviteError.message);
+  }
+
+  const inviterIds = [...new Set((inviteRows || []).map(i => i.invited_by).filter(Boolean))];
+  const inviterNames = {};
+  if (inviterIds.length > 0) {
+    const { data: inviters } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name')
+      .in('id', inviterIds);
+    (inviters || []).forEach((u) => { inviterNames[u.id] = getFullName(u) || u.email || null; });
+  }
+
+  const pending = (inviteRows || []).map(invite => ({
+    kind: 'invite',
+    id: invite.invite_id,
+    inviteId: invite.invite_id,
+    name: invite.full_name,
+    email: invite.email,
+    role: invite.role,
+    roles: [invite.role],
+    status: invites.inviteStatus(invite),
+    expiresAt: invite.expires_at,
+    invitedBy: inviterNames[invite.invited_by] || null,
+    createdAt: invite.created_at,
+    isSelf: false,
+    resendable: true,
+  }));
+
+  const combined = [...members, ...pending]
+    .sort((a, b) => Date.parse(a.createdAt || 0) - Date.parse(b.createdAt || 0));
+
+  res.json({ data: combined });
 }
 
 async function getUserById(req, res) {
@@ -163,6 +219,8 @@ async function suspendUser(req, res) {
       suspension_status: 'active',
       suspended_until: suspendedUntil,
       suspension_reason: reason || null,
+      suspension_source: 'manual',
+      suspended_at: now.toISOString(),
       suspension_updated_at: now.toISOString(),
       escalated_to_deletion: false,
       updated_at: now.toISOString(),
@@ -402,119 +460,343 @@ async function updateUser(req, res) {
   res.json({ data: { ...mapUser(data) }, message: 'Profile updated successfully' });
 }
 
+/**
+ * Admin-triggered password reset. The server mints the temporary password,
+ * applies it to the team member's auth account, and emails the login email
+ * plus that password. The credential is never returned to the caller, shown in
+ * the portal, or written to logs.
+ */
 async function adminResetPassword(req, res) {
-  const { newPassword } = req.body;
-  const { error } = await supabase.auth.admin.updateUserById(req.params.id, { password: newPassword });
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ message: 'Password reset successful' });
+  const { id } = req.params;
+  if (!UUID_RE.test(id || '')) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  try {
+    const { data: member, error } = await supabase
+      .from('users_table')
+      .select('id, email, first_name, last_name, role, is_archived')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[TempPassword] Member lookup failed:', error.code || 'ERROR');
+      return res.status(500).json({ error: 'Could not load that team member' });
+    }
+    if (!member) return res.status(404).json({ error: 'User not found' });
+    if (!['admin', 'customer_support'].includes(member.role)) {
+      return res.status(400).json({
+        error: 'Only team members can receive a temporary password',
+        code: 'NOT_TEAM_MEMBER',
+      });
+    }
+    if (member.is_archived) {
+      return res.status(409).json({ error: 'This account is archived. Unarchive it first.', code: 'USER_ARCHIVED' });
+    }
+    if (!member.email) {
+      return res.status(400).json({
+        error: 'That account has no email address to send the password to',
+        code: 'NO_EMAIL',
+      });
+    }
+
+    const tempPassword = tempPasswords.generateTempPassword();
+    const { error: updateError } = await supabase.auth.admin.updateUserById(member.id, { password: tempPassword });
+    if (updateError) {
+      console.error('[TempPassword] Password update failed:', updateError.code || 'ERROR');
+      return res.status(400).json({ error: 'Could not set the temporary password. Please try again.', code: 'RESET_FAILED' });
+    }
+
+    const { subject, html, text } = renderTempPasswordEmail({
+      name: getFullName(member),
+      email: member.email,
+      password: tempPassword,
+      supportEmail: config.email.supportEmail,
+    });
+
+    const delivery = await sendEmail({ to: member.email, subject, html, text, template: 'temp_password' });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'password_reset',
+      category: 'user',
+      relatedUserId: member.id,
+      description: `Issued a temporary password to ${member.email} (${delivery.delivered ? 'delivered' : `failed: ${delivery.errorCode}`})`,
+    });
+
+    return res.json({
+      data: {
+        email: member.email,
+        delivery: delivery.delivered ? 'sent' : 'failed',
+      },
+      message: delivery.delivered
+        ? `Temporary password emailed to ${member.email}`
+        : 'Temporary password set, but the email could not be delivered.',
+    });
+  } catch (err) {
+    console.error('[TempPassword] Reset failed:', err?.code || 'ERROR');
+    return res.status(500).json({ error: 'Could not reset the password' });
+  }
 }
 
-async function findAuthUserByEmail(email) {
-  if (typeof supabase.auth.admin.listUsers !== 'function') return null;
-  const target = (email || '').toLowerCase();
-  for (let page = 1; page <= 10; page++) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
-    if (error) return null;
-    const users = data?.users || [];
-    const hit = users.find((u) => (u.email || '').toLowerCase() === target);
-    if (hit) return hit;
-    if (users.length < 1000) return null;
+const UUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+function inviteActorName(req) {
+  return getFullName(req.user) || req.user?.name || req.user?.email || 'A GAWA administrator';
+}
+
+function handleInviteError(res, err, fallback = 'Could not process the invitation') {
+  if (err instanceof invites.InviteError) {
+    return res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
   }
-  return null;
+  // Never echo raw driver/provider messages: they can contain connection
+  // strings or provider feedback. Log the code only.
+  console.error('[Invites] Unexpected error:', err?.code || 'ERROR', err?.message || 'unknown');
+  return res.status(500).json({ error: fallback });
+}
+
+async function deliverInvite({ invite, rawToken, inviterName }) {
+  const { subject, html, text } = renderInviteEmail({
+    inviteeName: invite.full_name,
+    inviterName,
+    email: invite.email,
+    role: invite.role,
+    acceptUrl: invites.buildAcceptUrl(rawToken),
+    expiresAt: invite.expires_at,
+    supportEmail: config.email.supportEmail,
+  });
+
+  const result = await sendEmail({
+    to: invite.email,
+    subject,
+    html,
+    text,
+    template: 'team_invite',
+    inviteId: invite.invite_id,
+  });
+
+  await invites.setDeliveryResult(invite.invite_id, {
+    delivered: result.delivered,
+    attempts: result.attempts,
+    errorCode: result.errorCode,
+  });
+
+  return result;
+}
+
+function inviteResponse(invite, delivery) {
+  return {
+    inviteId: invite.invite_id,
+    email: invite.email,
+    name: invite.full_name,
+    role: invite.role,
+    status: invites.inviteStatus(invite),
+    expiresAt: invite.expires_at,
+    delivery: delivery.delivered ? 'sent' : 'failed',
+  };
 }
 
 async function inviteUser(req, res) {
+  if (!config.invites.enabled) {
+    return res.status(503).json({ error: 'Team invitations are currently disabled', code: 'INVITES_DISABLED' });
+  }
+
   const { name, email, role } = req.body;
-  if (!name || !email || !role) return res.status(400).json({ error: 'Name, email, and role are required' });
-  if (!['admin', 'customer_support'].includes(role)) return res.status(400).json({ error: 'Role must be admin or customer_support' });
-
-  const normalizedEmail = email.toLowerCase().trim();
-
-  const { data: existing } = await supabase
-    .from('users_table')
-    .select('id')
-    .eq('email', normalizedEmail)
-    .maybeSingle();
-
-  if (existing) return res.status(409).json({ error: 'User with this email already exists' });
-
-  const generatedPassword = crypto.randomUUID().slice(0, 12);
-  const nameParts = name.trim().split(' ');
-  const firstName = nameParts[0] || name;
-  const lastName = nameParts.slice(1).join(' ') || '';
-
-  const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-    email: normalizedEmail,
-    password: generatedPassword,
-    email_confirm: true,
-    user_metadata: { name, first_name: firstName, last_name: lastName, role },
-  });
-
-  let userId;
-  if (authError) {
-    // An auth account with this email may already exist without a users_table
-    // profile (e.g. created before the profile row was written). Recover it.
-    const alreadyExists = /already (been )?registered|already exists/i.test(authError.message || '');
-    const recovered = alreadyExists ? await findAuthUserByEmail(normalizedEmail) : null;
-    if (!recovered) return res.status(500).json({ error: authError.message });
-    userId = recovered.id;
-    await supabase.auth.admin.updateUserById(userId, { password: generatedPassword, email_confirm: true });
-  } else if (authUser?.user?.id) {
-    userId = authUser.user.id;
-  } else {
-    return res.status(500).json({ error: 'Failed to create the authentication account' });
+  if (!['admin', 'customer_support'].includes(role)) {
+    return res.status(400).json({ error: 'Role must be admin or customer_support' });
   }
+  const normalizedEmail = invites.normalizeEmail(email);
 
-  // The auth account and the users_table profile are separate rows; create the
-  // profile explicitly instead of relying on a DB trigger, or login fails with
-  // "No application profile is linked to this account."
-  const { data: existingProfile } = await supabase
-    .from('users_table')
-    .select('id')
-    .eq('id', userId)
-    .maybeSingle();
+  try {
+    await invites.assertActorQuota(req.user?.id);
 
-  if (!existingProfile) {
-    const { error: profileError } = await supabase.from('users_table').insert({
-      id: userId,
-      email: normalizedEmail,
-      first_name: firstName,
-      last_name: lastName,
-      role,
-      is_verified: true,
-    });
-    if (profileError) {
-      // Roll back the orphan auth account so the email can be reused
-      await supabase.auth.admin.deleteUser(userId);
-      return res.status(500).json({ error: profileError.message });
+    // Invites are pending records only — the auth account and profile are
+    // created when the invitee accepts, so this must not collide with either.
+    const existingUser = await invites.findUserByEmail(normalizedEmail);
+    if (existingUser) {
+      return res.status(409).json({
+        error: existingUser.is_archived
+          ? 'A team member with this email already exists but is archived. Unarchive that account instead.'
+          : 'A team member with this email already exists',
+        code: 'USER_EXISTS',
+      });
     }
+
+    const activeInvite = await invites.findActiveInvite(normalizedEmail);
+    if (activeInvite && !invites.isExpired(activeInvite)) {
+      return res.status(409).json({
+        error: 'An active invitation already exists for this email. Resend it instead.',
+        code: 'INVITE_EXISTS',
+        inviteId: activeInvite.invite_id,
+        expiresAt: activeInvite.expires_at,
+      });
+    }
+    if (activeInvite) await invites.expireStaleInvites();
+
+    const { invite, rawToken } = await invites.insertInvite({
+      fullName: name,
+      email: normalizedEmail,
+      role,
+      invitedBy: req.user?.id,
+    });
+
+    const delivery = await deliverInvite({ invite, rawToken, inviterName: inviteActorName(req) });
+    const status = inviteResponse(invite, delivery);
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'user_invited',
+      category: 'user',
+      description: `Invited ${normalizedEmail} as ${ROLE_LABELS[role] || role} (email ${delivery.delivered ? 'sent' : 'failed'})`,
+    });
+    if (!delivery.delivered) {
+      logAdminActivity({
+        actorId: req.user?.id,
+        activityType: 'invite_delivery_failed',
+        category: 'user',
+        description: `Invitation email to ${normalizedEmail} failed after ${delivery.attempts} attempt(s)`,
+      });
+    }
+
+    return res.status(201).json({
+      data: status,
+      message: delivery.delivered
+        ? 'Invitation email sent'
+        : 'Invitation created, but the email could not be delivered. Use resend.',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not create the invitation');
+  }
+}
+
+async function resendInvite(req, res) {
+  const { inviteId } = req.params;
+  if (!UUID_RE.test(inviteId || '')) {
+    return res.status(404).json({ error: 'Invitation not found' });
   }
 
-  // loginWithSupabase resolves the effective role from user_roles, so assign it here too
-  const { data: roleRow } = await supabase
-    .from('roles')
-    .select('role_id')
-    .eq('role_name', role)
-    .maybeSingle();
-  if (roleRow?.role_id) {
-    await supabase.from('user_roles').insert({ user_id: userId, role_id: roleRow.role_id });
+  try {
+    const existing = await invites.getInviteById(inviteId);
+    if (!existing) return res.status(404).json({ error: 'Invitation not found' });
+    if (!invites.ACTIVE_STATUSES.includes(existing.status)) {
+      return res.status(409).json({ error: 'This invitation can no longer be resent', code: 'INVITE_INACTIVE' });
+    }
+
+    // Rotating the hash invalidates the previously emailed link immediately.
+    const { invite, rawToken } = await invites.rotateInviteToken(inviteId);
+    const delivery = await deliverInvite({ invite, rawToken, inviterName: inviteActorName(req) });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'invite_resent',
+      category: 'user',
+      description: `Resent invitation to ${invite.email} (email ${delivery.delivered ? 'sent' : 'failed'})`,
+    });
+
+    return res.json({
+      data: inviteResponse(invite, delivery),
+      message: delivery.delivered ? 'Invitation email resent' : 'Resend failed. Check the mail provider configuration.',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not resend the invitation');
+  }
+}
+
+async function revokeInvite(req, res) {
+  const { inviteId } = req.params;
+  if (!UUID_RE.test(inviteId || '')) {
+    return res.status(404).json({ error: 'Invitation not found' });
   }
 
-  const { data: profile } = await supabase
-    .from('users_table')
-    .select('*')
-    .eq('id', userId)
-    .single();
+  try {
+    const revoked = await invites.revokeInvite(inviteId);
 
-  logAdminActivity({
-    actorId: req.user?.id,
-    activityType: 'user_invited',
-    category: 'user',
-    relatedUserId: userId,
-    description: `Admin created ${role} account for ${getFullName(profile) || normalizedEmail}`,
-  });
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'invite_revoked',
+      category: 'user',
+      description: `Revoked pending invitation for ${revoked.email}`,
+    });
 
-  res.status(201).json({ data: { ...profile, generatedPassword, name: getFullName(profile) }, message: 'Team member created successfully' });
+    return res.json({
+      data: { inviteId: revoked.invite_id, email: revoked.email, status: 'revoked' },
+      message: 'Invitation revoked',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not revoke the invitation');
+  }
+}
+
+/**
+ * Admin-triggered reset link for an existing team member. Same token model as
+ * the self-service flow; the password is never set or shown here.
+ */
+async function sendPasswordResetEmail(req, res) {
+  const { id } = req.params;
+  if (!UUID_RE.test(id || '')) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  try {
+    const { data: member, error } = await supabase
+      .from('users_table')
+      .select('id, email, first_name, last_name, role, is_archived')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[PasswordReset] Member lookup failed:', error.code || 'ERROR');
+      return res.status(500).json({ error: 'Could not load that team member' });
+    }
+    if (!member) return res.status(404).json({ error: 'User not found' });
+    if (!['admin', 'customer_support'].includes(member.role)) {
+      return res.status(400).json({ error: 'Only team members can receive a reset link', code: 'NOT_TEAM_MEMBER' });
+    }
+    if (member.is_archived) {
+      return res.status(409).json({ error: 'This account is archived. Unarchive it first.', code: 'USER_ARCHIVED' });
+    }
+    if ((await passwordResets.countRecent(member.id)) >= config.passwordReset.maxPerHour) {
+      return res.status(429).json({
+        error: 'Too many reset emails for this account. Try again in an hour.',
+        code: 'RESET_QUOTA',
+      });
+    }
+
+    const created = await passwordResets.createReset({ userId: member.id, email: member.email, ip: req.ip });
+    if (!created) return res.status(500).json({ error: 'Could not create the reset link' });
+
+    const { subject, html, text } = renderPasswordResetEmail({
+      name: getFullName(member),
+      email: member.email,
+      resetUrl: passwordResets.buildResetUrl(created.rawToken),
+      expiresAt: created.reset.expires_at,
+      supportEmail: config.email.supportEmail,
+    });
+
+    const delivery = await sendEmail({ to: member.email, subject, html, text, template: 'password_reset' });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'password_reset',
+      category: 'user',
+      relatedUserId: member.id,
+      description: `Sent a password reset link to ${member.email} (${delivery.delivered ? 'delivered' : `failed: ${delivery.errorCode}`})`,
+    });
+
+    return res.json({
+      data: {
+        email: member.email,
+        delivery: delivery.delivered ? 'sent' : 'failed',
+        expiresAt: created.reset.expires_at,
+      },
+      message: delivery.delivered
+        ? `Reset link emailed to ${member.email}`
+        : 'Reset link created, but the email could not be delivered.',
+    });
+  } catch (err) {
+    console.error('[PasswordReset] Send failed:', err?.code || 'ERROR');
+    return res.status(500).json({ error: 'Could not send the reset link' });
+  }
 }
 
 async function fetchEntitySkills(entityIds, entityType = 'profile') {
@@ -591,4 +873,5 @@ async function listUserProposals(req, res) {
 
 module.exports = { listUsers, getUserById, updateUser, suspendUser, reinstateUser, deleteUser, inviteUser, flagUser,
   archiveUser, unarchiveUser, adminResetPassword, listUserProposals, listTeamMembers,
+  resendInvite, revokeInvite, sendPasswordResetEmail,
 };

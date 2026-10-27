@@ -170,4 +170,50 @@ describe('UserDetail', () => {
     fireEvent.change(screen.getByLabelText('Reason for archiving'), { target: { value: 'Policy violation' } });
     expect(screen.getByRole('button', { name: 'Archive & Ban', exact: true })).toBeEnabled();
   });
+
+  it('emails a temporary password instead of asking the admin to type one', async () => {
+    const userData = {
+      id: 'user-123',
+      name: 'Team Mate',
+      email: 'team@example.com',
+      role: 'admin',
+      status: 'active',
+      flags: 0,
+      notes: [],
+      skills: [],
+    };
+    useApiDataMock.mockImplementation(() => ({ data: userData, loading: false, refetch: vi.fn() }));
+
+    const usersApi = await import('../api/users');
+    usersApi.resetPassword.mockResolvedValue({ data: { email: 'team@example.com', delivery: 'sent' } });
+
+    render(<UserDetail />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Password' }));
+
+    expect(screen.queryByLabelText('New Password')).not.toBeInTheDocument();
+    expect(screen.getByText(/Their current password stops working immediately/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send Temporary Password' }));
+
+    expect(await screen.findByText('Temporary password emailed to team@example.com.')).toBeInTheDocument();
+    expect(usersApi.resetPassword).toHaveBeenCalledWith('user-123');
+  });
+
+  it('hides the password reset action for client accounts', () => {
+    const userData = {
+      id: 'user-123',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      role: 'client',
+      status: 'active',
+      flags: 0,
+      notes: [],
+      skills: [],
+    };
+    useApiDataMock.mockImplementation(() => ({ data: userData, loading: false, refetch: vi.fn() }));
+
+    render(<UserDetail />);
+
+    expect(screen.queryByRole('button', { name: 'Reset Password' })).not.toBeInTheDocument();
+  });
 });
