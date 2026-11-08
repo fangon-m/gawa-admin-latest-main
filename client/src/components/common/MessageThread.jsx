@@ -18,7 +18,14 @@ export default function MessageThread({ messages = [], currentUserId }) {
         return (
           <div key={idx} className={`message ${isSent ? 'sent' : 'received'}`}>
             <div>{msg.text}</div>
-            <div className="message-time">{formatDateTime(msg.createdAt)}</div>
+            <div className="message-time">
+              {formatDateTime(msg.createdAt)}
+              {isSent && (
+                <span className="message-read-status">
+                  {msg.readAt ? 'Seen' : 'Sent'}
+                </span>
+              )}
+            </div>
           </div>
         );
       })}

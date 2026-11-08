@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { getById as getUserById, suspend, reinstate, archiveUser, unarchiveUser, flagUser, resetPassword } from '../api/users';
+import { getById as getUserById, suspend, reinstate, archiveUser, unarchiveUser, flagUser } from '../api/users';
 import * as notesApi from '../api/notes';
 import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
@@ -88,10 +88,6 @@ export default function UserDetail() {
   const [suspensionReason, setSuspensionReason] = useState('');
   const [archiveReason, setArchiveReason] = useState('');
   const [userActionError, setUserActionError] = useState('');
-  const [showPwReset, setShowPwReset] = useState(false);
-  const [pwError, setPwError] = useState('');
-  const [pwResult, setPwResult] = useState('');
-  const [pwProcessing, setPwProcessing] = useState(false);
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
     () => assessmentAttemptsApi.getUserAttempts(id),
@@ -144,8 +140,6 @@ export default function UserDetail() {
 
   const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes'];
 
-  const closePwReset = () => { setShowPwReset(false); setPwError(''); setPwResult(''); };
-
   const handleAction = async (action) => {
     try {
       if (action === 'suspend') {
@@ -176,36 +170,15 @@ export default function UserDetail() {
     }
   };
 
-  const handlePasswordReset = async () => {
-    setPwProcessing(true);
-    setPwError('');
-    setPwResult('');
-    try {
-      const res = await resetPassword(id);
-      if (res?.data?.delivery === 'failed') {
-        setPwError('The temporary password was set, but the email could not be delivered. Retry, or send a reset link instead.');
-      } else {
-        setPwResult(`Temporary password emailed to ${user.email}.`);
-        addNotification('moderation_decision', 'Password Reset', `Temporary password emailed to ${user.name}`, `/users/${user.id}`);
-      }
-    } catch (err) {
-      setPwError(err?.error || 'Failed to reset password');
-    } finally {
-      setPwProcessing(false);
-    }
-  };
-
   const isSuspended = user.status === 'suspended';
   const isArchived = user.isArchived || user.status === 'archived';
   const isExpiredSuspension = isSuspended && user.suspendedUntil && new Date(user.suspendedUntil) < new Date();
-  const isTeamMember = ['admin', 'customer_support'].includes(user.role);
 
   const actionButtons = [
     { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended },
     { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended },
     { label: 'Archive & Ban Account', action: 'archive', permission: 'archiveUser', show: !isArchived },
     { label: 'Unarchive & Restore Access', action: 'unarchive', permission: 'unarchiveUser', show: isArchived },
-    { label: 'Reset Password', action: 'reset-password', permission: 'resetPassword', show: isTeamMember },
     { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: true },
   ];
 
@@ -258,10 +231,7 @@ export default function UserDetail() {
         </div>
         <div className="flex flex-col gap-2">
           {actionButtons.filter(b => b.show && can(b.permission)).map((btn) => (
-            <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => {
-              if (btn.action === 'reset-password') setShowPwReset(true);
-              else setShowConfirm(btn.action);
-            }}>{btn.label}</button>
+            <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => setShowConfirm(btn.action)}>{btn.label}</button>
           ))}
           <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
         </div>
@@ -631,46 +601,6 @@ export default function UserDetail() {
           onConfirm={() => handleAction(showConfirm)}
           onCancel={() => { setShowConfirm(null); setUserActionError(''); }}
         />
-      )}
-
-      {showPwReset && (
-        <div className="modal-overlay" onClick={() => { if (!pwProcessing) closePwReset(); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
-            <div className="modal-header">
-              <h3>Reset Password</h3>
-              <button className="modal-close" onClick={closePwReset} disabled={pwProcessing}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
-                Email a temporary password to <strong>{user.email}</strong> for <strong>{user.name}</strong>?
-                Their current password stops working immediately.
-              </p>
-              <p style={{ fontSize: 13, color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
-                The email contains the login email and the new temporary password. Ask them to change it right after signing in.
-              </p>
-              {pwResult && (
-                <div style={{ fontSize: 13, color: 'var(--color-success)', marginBottom: '0.75rem' }}>
-                  {pwResult}
-                </div>
-              )}
-              {pwError && (
-                <div style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: '0.75rem' }}>
-                  {pwError}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={closePwReset} disabled={pwProcessing}>
-                {pwResult ? 'Close' : 'Cancel'}
-              </button>
-              <button className="btn btn-primary" onClick={handlePasswordReset} disabled={pwProcessing}>
-                {pwProcessing ? 'Sending...' : 'Send Temporary Password'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
     </div>

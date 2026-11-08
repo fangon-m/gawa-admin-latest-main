@@ -47,11 +47,6 @@ vi.mock('../api/users', () => ({
   invite: vi.fn(),
 }));
 
-vi.mock('../api/settings', () => ({
-  getByKey: vi.fn(),
-  upsert: vi.fn(),
-}));
-
 vi.mock('../utils/useApiData', () => ({
   useApiData: () => ({ data: [], loading: false, error: null, refetch: mockRefetch }),
   useMutation: () => [vi.fn(), { loading: false, error: null, data: null }],
@@ -86,17 +81,11 @@ vi.mock('../components/common/DataTable', () => ({
 }));
 
 import * as usersApi from '../api/users';
-import * as settingsApi from '../api/settings';
 
 describe('Settings Page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: settings API returns service area
-    settingsApi.getByKey.mockResolvedValue({
-      data: { key: 'service_area', value: 'Bulacan, Metro Manila' },
-    });
     usersApi.update.mockResolvedValue({ data: {}, message: 'Profile updated' });
-    settingsApi.upsert.mockResolvedValue({ data: {}, message: 'Saved' });
   });
 
   // ===============================
@@ -200,96 +189,11 @@ describe('Settings Page', () => {
     });
   });
 
-  // ===============================
-  // Service Area tab - Save Configuration
-  // ===============================
-  describe('Service Area tab - Save Configuration', () => {
-    it('loads service area from API on mount', async () => {
-      render(<Settings />);
+  it('does not render the Service Area settings tab', () => {
+    render(<Settings />);
 
-      // Switch to service area tab
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-service-area');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(settingsApi.getByKey).toHaveBeenCalledWith('service_area');
-        expect(screen.getByText('Service Area Configuration')).toBeInTheDocument();
-      });
-    });
-
-    it('calls settingsApi.upsert on Save Configuration', async () => {
-      settingsApi.getByKey.mockResolvedValue({
-        data: { key: 'service_area', value: 'Bulacan' },
-      });
-
-      render(<Settings />);
-
-      // Switch to service area tab and wait for data to load
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-service-area');
-        fireEvent.click(tab);
-      });
-
-      // Wait for the textarea to load with the value from API
-      await waitFor(() => {
-        expect(screen.getByText('Save Configuration')).toBeInTheDocument();
-      });
-
-      const saveBtn = screen.getByText('Save Configuration');
-      await userEvent.click(saveBtn);
-
-      await waitFor(() => {
-        expect(settingsApi.upsert).toHaveBeenCalledWith('service_area', 'Bulacan');
-      });
-    });
-
-    it('shows success message after saving service area', async () => {
-      settingsApi.getByKey.mockResolvedValue({
-        data: { key: 'service_area', value: 'Bulacan' },
-      });
-
-      render(<Settings />);
-
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-service-area');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText('Save Configuration')).toBeInTheDocument();
-      });
-
-      const saveBtn = screen.getByText('Save Configuration');
-      await userEvent.click(saveBtn);
-
-      await waitFor(() => {
-        expect(screen.getByText('Configuration saved successfully')).toBeInTheDocument();
-      });
-    });
-
-    it('shows error message when service area save fails', async () => {
-      settingsApi.upsert.mockRejectedValue(new Error('API error'));
-
-      render(<Settings />);
-
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-service-area');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText('Save Configuration')).toBeInTheDocument();
-      });
-
-      const saveBtn = screen.getByText('Save Configuration');
-      await userEvent.click(saveBtn);
-
-      await waitFor(() => {
-        expect(screen.getByText('Failed to save configuration')).toBeInTheDocument();
-      });
-    });
+    expect(screen.queryByTestId('tab-service-area')).not.toBeInTheDocument();
+    expect(screen.queryByText('Service Area Configuration')).not.toBeInTheDocument();
   });
 
   // ===============================

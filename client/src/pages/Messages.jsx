@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { listConversations, getConversation, sendMessage } from '../api/messages';
@@ -27,9 +27,17 @@ export default function Messages() {
 
   const currentUserId = currentUser?.id;
 
-  const { data: conversations, error: conversationsError, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
+  const { data: inbox, error: conversationsError, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
+    defaultValue: { conversations: [], unreadCount: 0 },
+    transform: (response) => {
+      const conversations = response?.data ?? response ?? [];
+      return {
+        conversations,
+        unreadCount: response?.unreadCount ?? conversations.reduce((count, conv) => count + (conv.unreadCount || 0), 0),
+      };
+    },
   });
+  const conversations = inbox.conversations;
 
   const { data: allUsers } = useApiData(() => usersApi.list({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
@@ -42,6 +50,13 @@ export default function Messages() {
   );
 
   const [doSendMessage] = useMutation(sendMessage);
+  const totalUnread = inbox.unreadCount;
+
+  useEffect(() => {
+    if (activeConv && activeData?.id === activeConv) {
+      refetchConvs();
+    }
+  }, [activeConv, activeData, refetchConvs]);
 
   const filteredConvs = useMemo(() => {
     let data = [...conversations];
@@ -116,6 +131,12 @@ export default function Messages() {
       <div className="messages-layout">
         <div className="messages-list">
           <div className="messages-list-header">
+            <div className={styles.listTitleRow}>
+              <span className={styles.listTitle}>Inbox</span>
+              {totalUnread > 0 && (
+                <span className={styles.unreadTotal}>{totalUnread} unread</span>
+              )}
+            </div>
             <div className={styles.listHeaderRow}>
               <SearchBar value={search} onChange={setSearch} placeholder="Search users..." />
               <button
@@ -173,10 +194,11 @@ export default function Messages() {
               ) : (
                 filteredConvs.map((conv) => {
                   const other = (conv.participants || []).find((p) => p.userId !== currentUserId);
+                  const unreadCount = conv.unreadCount || 0;
                   return (
                     <div
                       key={conv.id}
-                      className={`conversation-item${activeConv === conv.id ? ' active' : ''}${conv.unread ? ' unread' : ''}`}
+                      className={`conversation-item${activeConv === conv.id ? ' active' : ''}${unreadCount > 0 ? ' unread' : ''}`}
                       onClick={() => setActiveConv(conv.id)}
                     >
                       <div className="conversation-avatar">{getInitials(other?.name || '?')}</div>
@@ -186,7 +208,11 @@ export default function Messages() {
                       </div>
                       <div className="conversation-meta">
                         <div className="conversation-time">{timeAgo(conv.lastMessageAt)}</div>
-                        {conv.unread && <div className="conversation-unread-badge" />}
+                        {unreadCount > 0 && (
+                          <div className="conversation-unread-badge" aria-label={`${unreadCount} unread messages`}>
+                            {unreadCount}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

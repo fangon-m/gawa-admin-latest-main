@@ -6,6 +6,19 @@ const supabase = require('../../db/supabase');
 const { sendMessage } = require('../messages');
 const { schemas } = require('../../middleware/validate');
 
+function resolvedQuery(result) {
+  const query = {
+    select: jest.fn(() => query),
+    eq: jest.fn(() => query),
+    in: jest.fn(() => query),
+    is: jest.fn(() => query),
+    update: jest.fn(() => query),
+    maybeSingle: jest.fn().mockResolvedValue(result),
+    then: (resolve, reject) => Promise.resolve(result).then(resolve, reject),
+  };
+  return query;
+}
+
 describe('messages controller', () => {
   const adminId = '11111111-1111-4111-8111-111111111111';
   const userId = '22222222-2222-4222-8222-222222222222';
@@ -114,5 +127,82 @@ describe('messages controller', () => {
       conversationId: reportedUserId,
       text: 'Reply to the warning',
     }).success).toBe(true);
+  });
+
+  it('returns an unread message count for each conversation', async () => {
+    const sentQuery = resolvedQuery({ data: [], error: null });
+    const receivedQuery = resolvedQuery({
+      data: [
+        { message_id: 'm1', sender_id: userId, receiver_id: adminId, message_text: 'First', created_at: '2026-10-12T00:00:00.000Z', read_at: null },
+        { message_id: 'm2', sender_id: userId, receiver_id: adminId, message_text: 'Second', created_at: '2026-10-12T00:01:00.000Z', read_at: null },
+        { message_id: 'm3', sender_id: userId, receiver_id: adminId, message_text: 'Read', created_at: '2026-10-12T00:02:00.000Z', read_at: '2026-10-12T00:03:00.000Z' },
+      ],
+      error: null,
+    });
+    const usersQuery = resolvedQuery({
+      data: [{ id: userId, first_name: 'Sam', last_name: 'User', role: 'client' }],
+      error: null,
+    });
+    let messageQueryCount = 0;
+    supabase.from.mockImplementation(table => {
+      if (table === 'users_table') return usersQuery;
+      return messageQueryCount++ === 0 ? sentQuery : receivedQuery;
+    });
+    req.query = {};
+
+    const { listConversations } = require('../messages');
+    await listConversations(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      unreadCount: 2,
+      data: [expect.objectContaining({ id: userId, unread: true, unreadCount: 2 })],
+    }));
+  });
+
+  it('marks incoming messages read when opening a conversation and returns their read receipt', async () => {
+    const userQuery = resolvedQuery({
+      data: { id: userId, first_name: 'Sam', last_name: 'User', role: 'client' },
+      error: null,
+    });
+    const sentQuery = resolvedQuery({
+      data: [{
+        message_id: 'sent-message',
+        sender_id: adminId,
+        receiver_id: userId,
+        message_text: 'Reply',
+        created_at: '2026-10-12T00:01:00.000Z',
+        read_at: null,
+      }],
+      error: null,
+    });
+    const receivedQuery = resolvedQuery({
+      data: [{
+        message_id: 'received-message',
+        sender_id: userId,
+        receiver_id: adminId,
+        message_text: 'Question',
+        created_at: '2026-10-12T00:00:00.000Z',
+        read_at: null,
+      }],
+      error: null,
+    });
+    const updateQuery = resolvedQuery({ data: null, error: null });
+    let messageQueryCount = 0;
+    supabase.from.mockImplementation(table => {
+      if (table === 'users_table') return userQuery;
+      const queries = [sentQuery, receivedQuery, updateQuery];
+      return queries[messageQueryCount++];
+    });
+    req.params = { id: userId };
+
+    const { getConversation } = require('../messages');
+    await getConversation(req, res);
+
+    const response = res.json.mock.calls[0][0].data;
+    const receivedMessage = response.messages.find(message => message.id === 'received-message');
+    expect(response.unread).toBe(false);
+    expect(response.unreadCount).toBe(0);
+    expect(receivedMessage.readAt).toEqual(expect.any(String));
+    expect(updateQuery.update).toHaveBeenCalledWith({ read_at: receivedMessage.readAt });
   });
 });

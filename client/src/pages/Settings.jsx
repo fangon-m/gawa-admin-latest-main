@@ -5,7 +5,6 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import * as usersApi from '../api/users';
-import * as settingsApi from '../api/settings';
 import * as activityLogApi from '../api/activityLog';
 import * as authApi from '../api/auth';
 import { formatDate, formatDateTime, formatLabel } from '../utils/helpers';
@@ -38,38 +37,12 @@ export default function Settings() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
 
-  // Service area state
-  const [serviceArea, setServiceArea] = useState('');
-  const [serviceAreaLoading, setServiceAreaLoading] = useState(true);
-  const [serviceAreaSaving, setServiceAreaSaving] = useState(false);
-  const [serviceAreaMsg, setServiceAreaMsg] = useState('');
-
   // Initialize profile form when user loads
   useEffect(() => {
     if (user) {
       setProfileForm({ name: user.name || '', phone: user.phone || '', location: user.location || '' });
     }
   }, [user]);
-
-  // Load service area from database on mount
-  useEffect(() => {
-    let mounted = true;
-    setServiceAreaLoading(true);
-    settingsApi.getByKey('service_area')
-      .then((res) => {
-        if (mounted) {
-          setServiceArea(res?.data?.value || 'Bulacan, Metro Manila, Pampanga, Nueva Ecija, Rizal, Laguna, Cavite');
-          setServiceAreaLoading(false);
-        }
-      })
-      .catch(() => {
-        if (mounted) {
-          setServiceArea('Bulacan, Metro Manila, Pampanga, Nueva Ecija, Rizal, Laguna, Cavite');
-          setServiceAreaLoading(false);
-        }
-      });
-    return () => { mounted = false; };
-  }, []);
 
   // Password reset state
   const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
@@ -107,7 +80,7 @@ export default function Settings() {
     { key: 'security', label: 'Password & Security' },
     { key: 'sessions', label: 'Active Sessions' },
     { key: 'activity', label: 'Admin Activity' },
-    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }, { key: 'service-area', label: 'Service Area' }, { key: 'notifications', label: 'Notifications' }] : []),
+    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }, { key: 'notifications', label: 'Notifications' }] : []),
   ];
 
   const [activeSessions, setActiveSessions] = useState([
@@ -554,47 +527,6 @@ export default function Settings() {
                 <button type="submit" className="btn btn-primary">Create Account</button>
               </form>
             </div>
-          </div>
-        )}
-
-        {tab === 'service-area' && can('manageSettings') && (
-          <div className="settings-card">
-            <div className="settings-card-title">Service Area Configuration</div>
-            <p style={{ fontSize: 14, color: 'var(--color-text-muted)', marginBottom: '1rem' }}>Configure the geographic areas where GAWA operates.</p>
-            {serviceAreaMsg && (
-              <div style={{ fontSize: 13, color: serviceAreaMsg.includes('saved') ? 'var(--color-success)' : 'var(--color-error)', marginBottom: 12 }}>
-                {serviceAreaMsg}
-              </div>
-            )}
-            <div className="form-group">
-              <label className="form-label">Covered Provinces</label>
-              <textarea
-                className="form-textarea"
-                rows={4}
-                value={serviceArea}
-                onChange={(e) => setServiceArea(e.target.value)}
-                placeholder="e.g. Bulacan, Metro Manila, Pampanga, ..."
-              />
-            </div>
-            <button
-              className="btn btn-primary"
-              disabled={serviceAreaSaving || serviceAreaLoading}
-              onClick={async () => {
-                setServiceAreaSaving(true);
-                setServiceAreaMsg('');
-                try {
-                  await settingsApi.upsert('service_area', serviceArea);
-                  setServiceAreaMsg('Configuration saved successfully');
-                } catch {
-                  setServiceAreaMsg('Failed to save configuration');
-                } finally {
-                  setServiceAreaSaving(false);
-                  setTimeout(() => setServiceAreaMsg(''), 4000);
-                }
-              }}
-            >
-              {serviceAreaSaving ? 'Saving...' : 'Save Configuration'}
-            </button>
           </div>
         )}
 

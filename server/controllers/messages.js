@@ -57,16 +57,19 @@ function serializeMessage(message) {
     receiverId: message.receiver_id,
     text: message.message_text,
     createdAt: message.created_at,
+    readAt: message.read_at || null,
   };
 }
 
 function threadForUser(user, admin, messages) {
   const latest = messages[messages.length - 1];
+  const unreadCount = messages.filter(message => message.receiver_id === admin.id && !message.read_at).length;
   return {
     id: user.id,
     lastMessage: latest?.message_text || '',
     lastMessageAt: latest?.created_at || null,
-    unread: messages.some(message => message.receiver_id === admin.id && !message.read_at),
+    unread: unreadCount > 0,
+    unreadCount,
     createdAt: latest?.created_at || null,
     participants: [currentParticipant(admin), otherParticipant(user)],
   };
@@ -94,7 +97,7 @@ async function listConversations(req, res) {
 
   const userIds = [...byUser.keys()];
   if (userIds.length === 0) {
-    return res.json({ data: [], pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
+    return res.json({ data: [], unreadCount: 0, pagination: { total: 0, page: 1, limit: 20, totalPages: 0 } });
   }
 
   const { data: users, error: usersError } = await supabase
@@ -117,6 +120,7 @@ async function listConversations(req, res) {
   const offset = (page - 1) * limit;
   res.json({
     data: conversations.slice(offset, offset + limit),
+    unreadCount: conversations.reduce((count, conversation) => count + conversation.unreadCount, 0),
     pagination: { total: conversations.length, page, limit, totalPages: Math.ceil(conversations.length / limit) },
   });
 }
@@ -139,8 +143,9 @@ async function getConversation(req, res) {
   const { data: messages, error: messagesError } = await loadMessagesForPair(adminId, userId);
   if (messagesError) return res.status(500).json({ error: messagesError.message });
 
+  const readAt = new Date().toISOString();
   const { error: readError } = await supabase.from('messages')
-    .update({ read_at: new Date().toISOString() })
+    .update({ read_at: readAt })
     .eq('sender_id', userId)
     .eq('receiver_id', adminId)
     .is('read_at', null);
@@ -148,10 +153,15 @@ async function getConversation(req, res) {
 
   const conversation = threadForUser(user, req.user, messages);
   conversation.unread = false;
+  conversation.unreadCount = 0;
+  const serializedMessages = messages.map(message => serializeMessage({
+    ...message,
+    read_at: message.receiver_id === adminId && !message.read_at ? readAt : message.read_at,
+  }));
   res.json({
     data: {
       ...conversation,
-      messages: messages.map(serializeMessage),
+      messages: serializedMessages,
     },
   });
 }
