@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 
 async function enrichRentals(rentals) {
   if (!rentals || rentals.length === 0) return [];
@@ -31,8 +31,8 @@ async function enrichRentals(rentals) {
 }
 
 async function listRentals(req, res) {
-  const { page = 1, limit = 20, status, renterId, ownerId, listingId } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { status, renterId, ownerId, listingId } = req.query;
 
   let query = supabase.from('equipment_rentals').select('*', { count: 'exact' });
   if (status) query = query.eq('rental_status', status);
@@ -44,7 +44,7 @@ async function listRentals(req, res) {
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichRentals(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -77,7 +77,7 @@ async function flagRental(req, res) {
       reason: reason || 'Flagged by admin',
     });
 
-  if (flagError) return res.status(500).json({ error: flagError.message });
+  if (flagError) return sendError(res, flagError, { status: 500 });
 
   const { data: rental, error: fetchErr } = await supabase
     .from('equipment_rentals')
@@ -102,7 +102,7 @@ async function removeRental(req, res) {
     .delete()
     .eq('rental_id', rentalId);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   res.json({ message: 'Rental removed' });
 }

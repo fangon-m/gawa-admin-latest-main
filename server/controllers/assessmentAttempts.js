@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
 
 /**
  * GET /api/assessment-attempts/stats/skills
@@ -82,7 +82,7 @@ async function getAttemptHistory(req, res) {
   const { data: attempts, error } = await query.order('started_at', { ascending: false });
 
   if (error) {
-    return res.status(500).json({ error: error.message });
+    return sendError(res, error, { status: 500 });
   }
 
   // Enrich each attempt with its assessment + skill name

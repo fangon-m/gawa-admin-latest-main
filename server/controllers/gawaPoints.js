@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 const { logAdminActivity } = require('../utilities/activityLogger');
 
 async function enrichWithUser(items, userIdKey = 'user_id') {
@@ -33,7 +33,7 @@ async function listPacks(req, res) {
   query = query.order('sort_order', { ascending: true }).order('price_php', { ascending: true });
 
   const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: data.map(p => ({ ...p, isActive: p.is_active, packId: p.pack_id, displayName: p.display_name, pricePhp: p.price_php, costPerPoint: p.cost_per_point, sortOrder: p.sort_order, createdAt: p.created_at, updatedAt: p.updated_at })) });
 }
 
@@ -55,7 +55,7 @@ async function createPack(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: { ...data, isActive: data.is_active, packId: data.pack_id, displayName: data.display_name, pricePhp: data.price_php, costPerPoint: data.cost_per_point, sortOrder: data.sort_order, createdAt: data.created_at }, message: 'Pack created' });
 }
 
@@ -83,7 +83,7 @@ async function updatePack(req, res) {
 
 async function deletePack(req, res) {
   const { error } = await supabase.from('gawa_points_packs').delete().eq('pack_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Pack deleted' });
 }
 
@@ -103,7 +103,7 @@ async function issuePoints(req, res) {
     .select()
     .single();
 
-  if (txnErr) return res.status(500).json({ error: txnErr.message });
+  if (txnErr) return sendError(res, txnErr, { status: 500 });
 
   const { data: wallet } = await supabase.from('gawa_points_wallets').select('balance').eq('user_id', userId).single();
   if (wallet) {
@@ -112,12 +112,12 @@ async function issuePoints(req, res) {
       .from('gawa_points_wallets')
       .update({ balance: newBalance, updated_at: new Date().toISOString() })
       .eq('user_id', userId);
-    if (walletErr) return res.status(500).json({ error: walletErr.message });
+    if (walletErr) return sendError(res, walletErr, { status: 500 });
   } else {
     const { error: walletErr } = await supabase
       .from('gawa_points_wallets')
       .insert({ user_id: userId, balance: +pts, updated_at: new Date().toISOString() });
-    if (walletErr) return res.status(500).json({ error: walletErr.message });
+    if (walletErr) return sendError(res, walletErr, { status: 500 });
   }
 
   res.json({ data: txn, message: `${pts} points issued to user ${userId}` });
@@ -153,7 +153,7 @@ async function deductPoints(req, res) {
     .select()
     .single();
 
-  if (txnErr) return res.status(500).json({ error: txnErr.message });
+  if (txnErr) return sendError(res, txnErr, { status: 500 });
 
   if (wallet) {
     const newBalance = (parseFloat(wallet.balance) || 0) - absPts;
@@ -161,27 +161,27 @@ async function deductPoints(req, res) {
       .from('gawa_points_wallets')
       .update({ balance: newBalance, updated_at: new Date().toISOString() })
       .eq('user_id', userId);
-    if (walletErr) return res.status(500).json({ error: walletErr.message });
+    if (walletErr) return sendError(res, walletErr, { status: 500 });
   } else {
     const { error: walletErr } = await supabase
       .from('gawa_points_wallets')
       .insert({ user_id: userId, balance: -absPts, updated_at: new Date().toISOString() });
-    if (walletErr) return res.status(500).json({ error: walletErr.message });
+    if (walletErr) return sendError(res, walletErr, { status: 500 });
   }
 
   res.json({ data: txn, message: `${absPts} points deducted from user ${userId}` });
 }
 
 async function listPointsTransactions(req, res) {
-  const { page = 1, limit = 20, userId, transactionType } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { userId, transactionType } = req.query;
   let query = supabase.from('gawa_points_transactions').select('*', { count: 'exact' });
   if (userId) query = query.eq('user_id', userId);
   if (transactionType) query = query.eq('transaction_type', transactionType);
   query = query.order('created_at', { ascending: false }).range(offset, offset + +limit - 1);
 
   const { data, error, count } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   const enriched = await enrichWithUser(data || [], 'user_id');
   res.json({
     data: enriched,
@@ -190,15 +190,15 @@ async function listPointsTransactions(req, res) {
 }
 
 async function listWallets(req, res) {
-  const { page = 1, limit = 20, userId } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { userId } = req.query;
 
   let query = supabase.from('gawa_points_wallets').select('*', { count: 'exact' });
   if (userId) query = query.eq('user_id', userId);
   query = query.order('updated_at', { ascending: false }).range(offset, offset + +limit - 1);
 
   const { data, error, count } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   const enriched = await enrichWallets(data || []);
   res.json({
     data: enriched,
@@ -218,8 +218,24 @@ async function adjustWallet(req, res) {
   const newBalance = (parseFloat(wallet.balance) || 0) + parseFloat(amount);
   if (newBalance < 0) return res.status(400).json({ error: 'Insufficient balance' });
 
-  const { data, error } = await supabase.from('gawa_points_wallets').update({ balance: newBalance, updated_at: new Date().toISOString() }).eq('user_id', req.params.userId).select().single();
-  if (error) return res.status(500).json({ error: error.message });
+  // The balance is only overwritten if it has not changed since it was read.
+  // Without this guard two concurrent adjustments would both succeed and the
+  // second write would discard the first one.
+  const { data, error } = await supabase
+    .from('gawa_points_wallets')
+    .update({ balance: newBalance, updated_at: new Date().toISOString() })
+    .eq('user_id', req.params.userId)
+    .eq('balance', wallet.balance)
+    .select()
+    .maybeSingle();
+
+  if (error) return sendError(res, error, { status: 500 });
+  if (!data) {
+    return res.status(409).json({
+      error: 'The wallet balance changed while this adjustment was being applied. Reload and try again.',
+      code: 'WALLET_CHANGED',
+    });
+  }
   const enriched = await enrichWallets([data]);
   res.json({ data: enriched[0], message: `Balance adjusted by ${amount}` });
 }

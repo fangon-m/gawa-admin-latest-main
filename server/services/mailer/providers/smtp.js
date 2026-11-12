@@ -11,15 +11,41 @@ const config = require('../../../config');
 const name = 'smtp';
 let cachedTransport;
 
-function getTransport() {
-  if (cachedTransport) return cachedTransport;
-
+/**
+ * Builds the transport options.
+ *
+ * Exported so the hardening options can be asserted without creating a
+ * pooled transport (a pool holds sockets open and keeps the process alive).
+ */
+function buildTransportOptions() {
   const { host, port, secure, user, pass } = config.email.smtp;
   if (!host) {
     const err = new Error('SMTP_HOST is not configured');
     err.code = 'PROVIDER_NOT_CONFIGURED';
     throw err;
   }
+
+  return {
+    host,
+    port,
+    secure,
+    auth: user ? { user, pass } : undefined,
+    connectionTimeout: config.email.timeoutMs,
+    greetingTimeout: config.email.timeoutMs,
+    socketTimeout: config.email.timeoutMs,
+    pool: true,
+    maxConnections: 3,
+    // Nothing this server sends should ever reach the filesystem or the
+    // network on the mailer's behalf. Without these, a message body can pull
+    // in a local file or a remote URL, which turns the mailer into a
+    // file-disclosure and request-forgery primitive.
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  };
+}
+
+function getTransport() {
+  if (cachedTransport) return cachedTransport;
 
   let nodemailer;
   try {
@@ -31,17 +57,7 @@ function getTransport() {
     throw err;
   }
 
-  cachedTransport = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: user ? { user, pass } : undefined,
-    connectionTimeout: config.email.timeoutMs,
-    greetingTimeout: config.email.timeoutMs,
-    socketTimeout: config.email.timeoutMs,
-    pool: true,
-    maxConnections: 3,
-  });
+  cachedTransport = nodemailer.createTransport(buildTransportOptions());
   return cachedTransport;
 }
 
@@ -54,8 +70,10 @@ async function send({ to, subject, html, text }) {
     text,
     html,
     replyTo: config.email.replyTo || undefined,
+    disableFileAccess: true,
+    disableUrlAccess: true,
   });
   return { providerMessageId: info?.messageId || null };
 }
 
-module.exports = { name, send };
+module.exports = { name, send, buildTransportOptions };

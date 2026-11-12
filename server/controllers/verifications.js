@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 const PROFILE_FIELDS = [
   'email', 'phone', 'first_name', 'middle_name', 'last_name', 'birth_date',
   'region', 'province', 'municipality', 'barangay', 'complete_address',
@@ -61,8 +61,8 @@ async function enrichVerifications(verifications) {
 }
 
 async function listVerifications(req, res) {
-  const { page = 1, limit = 20, status, type } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { status, type } = req.query;
 
   let query = supabase.from('id_verifications').select('*', { count: 'exact' });
   if (status) query = query.eq('status', status);
@@ -72,7 +72,7 @@ async function listVerifications(req, res) {
     .order('submitted_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichVerifications(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -149,7 +149,7 @@ async function reviewVerification(req, res, { status, isVerified, remarks, messa
     .update({ is_verified: isVerified, ...profileUpdates })
     .eq('id', verification.user_id);
 
-  if (userUpdateError) return res.status(500).json({ error: userUpdateError.message });
+  if (userUpdateError) return sendError(res, userUpdateError, { status: 500 });
 
   const { data, error } = await supabase
     .from('id_verifications')

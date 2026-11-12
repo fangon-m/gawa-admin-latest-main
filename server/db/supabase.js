@@ -98,9 +98,11 @@ async function ensureConnection() {
 }
 
 // Ensure connection periodically (every 4 minutes) to catch stale connections
-setInterval(() => {
+const keepAliveTimer = setInterval(() => {
   ensureConnection().catch(err => console.error('[Supabase] Periodic connection check failed:', err.message));
 }, 4 * 60 * 1000);
+// A background health check must not be the reason the process stays alive.
+keepAliveTimer.unref?.();
 
 // Export a proxy that maintains backward compatibility
 const supabaseProxy = new Proxy({}, {

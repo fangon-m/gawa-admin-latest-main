@@ -25,8 +25,8 @@ async function handleUploadError(error, req, res, next) {
   return res.status(status).json({ error: message });
 }
 
-router.get('/', authenticate, ctrl.listAssessmentQuestions);
-router.get('/:id', authenticate, ctrl.getAssessmentQuestionById);
+router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listAssessmentQuestions);
+router.get('/:id', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getAssessmentQuestionById);
 router.post('/import', authenticate, authorize(ROLES.ADMIN), upload.single('file'), importCtrl.importAssessmentQuestions, handleUploadError);
 router.post('/', authenticate, authorize(ROLES.ADMIN), ctrl.createAssessmentQuestion);
 router.put('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.updateAssessmentQuestion);

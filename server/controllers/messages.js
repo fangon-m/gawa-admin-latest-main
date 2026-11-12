@@ -1,6 +1,6 @@
 const { createHash } = require('crypto');
 const supabase = require('../db/supabase');
-const { getFullName } = require('../utilities/helpers');
+const { getFullName, sendError } = require('../utilities/helpers');
 
 const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at, read_at';
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
@@ -105,7 +105,7 @@ async function listConversations(req, res) {
     .from('users_table')
     .select('id, first_name, middle_name, last_name, email, role, is_archived')
     .in('id', userIds);
-  if (usersError) return res.status(500).json({ error: usersError.message });
+  if (usersError) return sendError(res, usersError, { status: 500 });
 
   const userMap = new Map((users || []).map(user => [user.id, user]));
   const conversations = userIds
@@ -137,12 +137,12 @@ async function getConversation(req, res) {
   }
 
   const { data: user, error: userError } = await loadUser(userId);
-  if (userError) return res.status(500).json({ error: userError.message });
+  if (userError) return sendError(res, userError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
 
   const { data: messages, error: messagesError } = await loadMessagesForPair(adminId, userId);
-  if (messagesError) return res.status(500).json({ error: messagesError.message });
+  if (messagesError) return sendError(res, messagesError, { status: 500 });
 
   const readAt = new Date().toISOString();
   const { error: readError } = await supabase.from('messages')
@@ -150,7 +150,7 @@ async function getConversation(req, res) {
     .eq('sender_id', userId)
     .eq('receiver_id', adminId)
     .is('read_at', null);
-  if (readError) return res.status(500).json({ error: readError.message });
+  if (readError) return sendError(res, readError, { status: 500 });
 
   const conversation = threadForUser(user, req.user, messages);
   conversation.unread = false;
@@ -179,7 +179,7 @@ async function sendMessage(req, res) {
   }
 
   const { data: user, error: userError } = await loadUser(userId);
-  if (userError) return res.status(500).json({ error: userError.message });
+  if (userError) return sendError(res, userError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
   if (user.is_archived) {
@@ -199,7 +199,7 @@ async function sendMessage(req, res) {
     })
     .select(MESSAGE_COLUMNS)
     .single();
-  if (messageError) return res.status(500).json({ error: messageError.message });
+  if (messageError) return sendError(res, messageError, { status: 500 });
 
   res.status(201).json({
     data: serializeMessage(message),

@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sanitizeSearchTerm, sanitizeEntityFilter, sendError } = require('../utilities/helpers');
 const { getArchivedUserIds, applyArchivedOwnerFilter } = require('../utilities/visibility');
 
 async function enrichJobPosts(posts) {
@@ -33,10 +33,27 @@ async function enrichJobPosts(posts) {
 }
 
 async function listJobPosts(req, res) {
-  const { page = 1, limit = 20, jobStatus, clientId, search, hiringOption, participantId } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { jobStatus, hiringOption } = req.query;
+
+  // `participantId` is interpolated into a PostgREST `or(...)` filter, so it
+  // must be a well-formed identifier. Anything else is rejected outright: a
+  // partial match would silently widen the filter, and a crafted value could
+  // inject extra predicates into the expression.
+  const participantId = sanitizeEntityFilter(req.query.participantId);
+  if (req.query.participantId && !participantId) {
+    return res.status(400).json({ error: 'Invalid participantId' });
+  }
+  const clientId = sanitizeEntityFilter(req.query.clientId || req.query.userId);
+  if ((req.query.clientId || req.query.userId) && !clientId) {
+    return res.status(400).json({ error: 'Invalid clientId' });
+  }
+
+  // Normalised before it reaches the PostgREST filter expression.
+  const search = sanitizeSearchTerm(req.query.search);
+
   // Owner-scoped requests (user detail history) must still show archived accounts.
-  const ownerScoped = Boolean(clientId || participantId || req.query.userId);
+  const ownerScoped = Boolean(clientId || participantId);
 
   const runQuery = async (useArchiveMarker) => {
     let query = supabase.from('job_posts').select('*', { count: 'exact' });
@@ -53,8 +70,8 @@ async function listJobPosts(req, res) {
       } else {
         query = query.eq('client_id', participantId);
       }
-    } else if (clientId || req.query.userId) {
-      query = query.eq('client_id', clientId || req.query.userId);
+    } else if (clientId) {
+      query = query.eq('client_id', clientId);
     }
     if (search) query = query.or(`job_title.ilike.%${search}%,job_description.ilike.%${search}%`);
     if (!ownerScoped) {
@@ -73,7 +90,7 @@ async function listJobPosts(req, res) {
     ({ data, error, count } = await runQuery(false));
   }
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const enriched = await enrichJobPosts(data || []);
 
@@ -127,7 +144,7 @@ async function getJobPostById(req, res) {
     .eq('job_post_id', postId)
     .maybeSingle();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   if (!post) return res.status(404).json({ error: 'Job post not found' });
 
   const { data: matches } = await supabase
@@ -159,13 +176,31 @@ async function getJobPostById(req, res) {
     .eq('entity_id', req.params.id)
     .order('created_at', { ascending: false });
 
-  const { data: completions } = await supabase
-    .from('job_completion')
-    .select('*')
-    .eq('job_match_id', req.params.id)
-    .order('created_at', { ascending: true });
+  // A completion belongs to a job *match*, not to the job post. Filtering
+  // `job_completion` by the post id compares two different keys, so it never
+  // matches a row and the completions tab is always empty. The completions
+  // for a job are the ones recorded against any of the job's matches.
+  const matchIds = (matches || []).map((m) => m.job_match_id);
+  const { data: completions } = matchIds.length
+    ? await supabase
+      .from('job_completion')
+      .select('*')
+      .in('job_match_id', matchIds)
+      .order('created_at', { ascending: true })
+    : { data: [] };
 
   const enriched = await enrichJobPosts([post]);
+
+  // Name the worker each completion came from: a job can have several
+  // matches, and a bare completion record says nothing about who submitted it.
+  const talentNameByMatch = new Map(enrichedMatches.map((m) => [m.jobMatchId, m.userName]));
+  const statusByMatch = new Map((matches || []).map((m) => [m.job_match_id, m.status]));
+  const enrichedCompletions = (completions || []).map((c) => ({
+    ...toCamelCase(c),
+    matchId: c.job_match_id,
+    talentName: talentNameByMatch.get(c.job_match_id) || null,
+    matchStatus: statusByMatch.get(c.job_match_id) || null,
+  }));
 
   let latestCheckIn = null;
   const acceptedMatch = (matches || []).find(m => m.status === 'accepted');
@@ -187,7 +222,7 @@ async function getJobPostById(req, res) {
       acceptedMatchId: acceptedMatch?.job_match_id || null,
       matches: enrichedMatches,
       flags: (flags || []).map(f => toCamelCase(f)),
-      completions: (completions || []).map(c => toCamelCase(c)),
+      completions: enrichedCompletions,
       checkIn: latestCheckIn,
     },
   });
@@ -212,7 +247,7 @@ async function flagJobPost(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   await supabase
     .from('job_posts')
@@ -224,7 +259,7 @@ async function flagJobPost(req, res) {
 
 async function removeJobPost(req, res) {
   const { error } = await supabase.from('job_posts').delete().eq('job_post_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Job post removed' });
 }
 

@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 
 async function getMatchWithPost(matchId) {
   const { data, error } = await supabase
@@ -40,7 +40,7 @@ async function markDone(req, res) {
     .update({ status: 'completed', completed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq('job_match_id', matchId);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const { error: compErr } = await supabase
     .from('job_completion')
@@ -84,8 +84,7 @@ async function disputeCompletion(req, res) {
 }
 
 async function listDisputed(req, res) {
-  const { page = 1, limit = 20 } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
 
   const { data, error, count } = await supabase
     .from('job_posts')
@@ -94,7 +93,7 @@ async function listDisputed(req, res) {
     .range(offset, offset + +limit - 1)
     .order('updated_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const userIds = new Set();
   (data || []).forEach(p => {

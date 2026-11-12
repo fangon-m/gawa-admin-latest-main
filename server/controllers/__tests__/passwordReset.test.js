@@ -51,6 +51,21 @@ const TEAM_MEMBER = {
   is_archived: false,
 };
 
+// Team membership is decided by the `user_roles` table. The legacy
+// `users_table.role` column is deliberately ignored, so the mock returns the
+// role row from a separate query.
+function mockTables({ profile = TEAM_MEMBER, roleNames = ['admin'] } = {}) {
+  supabase.from.mockImplementation((table) => {
+    if (table === 'user_roles') {
+      return queryReturning({
+        data: roleNames.map((role_name) => ({ roles: { role_name } })),
+        error: null,
+      });
+    }
+    return queryReturning({ data: profile, error: null });
+  });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   supabase.from.mockImplementation(() => queryReturning({ data: null, error: null }));
@@ -73,8 +88,8 @@ describe('requestPasswordReset', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
-  it('does not send links to consumer accounts', async () => {
-    supabase.from.mockImplementation(() => queryReturning({ data: { ...TEAM_MEMBER, role: 'client' }, error: null }));
+  it('does not send links to accounts without a team role', async () => {
+    mockTables({ profile: { ...TEAM_MEMBER, role: 'client' }, roleNames: [] });
     const res = mockRes();
 
     await requestPasswordReset({ body: { email: 'client@example.com' }, ip: '::1' }, res);
@@ -83,8 +98,30 @@ describe('requestPasswordReset', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
+  it('sends a link to a team member recorded only on the profile row', async () => {
+    // The role lives on the profile row today, so it is a valid source.
+    mockTables({ profile: { ...TEAM_MEMBER, role: 'admin' }, roleNames: [] });
+    const res = mockRes();
+
+    await requestPasswordReset({ body: { email: 'admin@example.com' }, ip: '::1' }, res);
+
+    expect(passwordResets.createReset).toHaveBeenCalled();
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'admin@example.com' }));
+  });
+
+  it('does not send a link to an account with no team role anywhere', async () => {
+    mockTables({ profile: { ...TEAM_MEMBER, role: 'client' }, roleNames: [] });
+    const res = mockRes();
+
+    await requestPasswordReset({ body: { email: 'client@example.com' }, ip: '::1' }, res);
+
+    expect(passwordResets.createReset).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ message: expect.stringMatching(/If that email belongs to a team member/i) });
+  });
+
   it('does not send links to archived accounts', async () => {
-    supabase.from.mockImplementation(() => queryReturning({ data: { ...TEAM_MEMBER, is_archived: true }, error: null }));
+    mockTables({ profile: { ...TEAM_MEMBER, is_archived: true } });
     const res = mockRes();
 
     await requestPasswordReset({ body: { email: 'admin@example.com' }, ip: '::1' }, res);
@@ -93,7 +130,7 @@ describe('requestPasswordReset', () => {
   });
 
   it('creates a reset and emails the link to a team member', async () => {
-    supabase.from.mockImplementation(() => queryReturning({ data: TEAM_MEMBER, error: null }));
+    mockTables();
     const res = mockRes();
 
     await requestPasswordReset({ body: { email: 'Admin@Example.com' }, ip: '::1' }, res);
@@ -112,7 +149,7 @@ describe('requestPasswordReset', () => {
   });
 
   it('stays quiet once the hourly cap is reached', async () => {
-    supabase.from.mockImplementation(() => queryReturning({ data: TEAM_MEMBER, error: null }));
+    mockTables();
     passwordResets.countRecent.mockResolvedValue(3);
     const res = mockRes();
 

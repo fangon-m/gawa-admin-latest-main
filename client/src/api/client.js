@@ -98,14 +98,23 @@ async function request(path, options = {}) {
 
   const res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401 || res.status === 403) {
+  // 403 means the caller is authenticated but not allowed to perform this
+  // action. Refreshing the session or signing the user out would be wrong:
+  // the session is still valid, the request simply is not permitted. Only a
+  // 401 (expired session) may trigger a refresh or a sign-out.
+  if (res.status === 403) {
+    const data = await res.json().catch(() => ({}));
+    throw { status: 403, ...data };
+  }
+
+  if (res.status === 401) {
     const retried = await tryRefreshToken().catch(() => null);
     if (retried) {
       headers.Authorization = `Bearer ${retried}`;
       const retryRes = await fetch(url, { ...options, headers });
       const retryData = await retryRes.json().catch(() => ({}));
       if (retryRes.ok) return retryData;
-      if (retryRes.status === 401 || retryRes.status === 403) {
+      if (retryRes.status === 401) {
         clearAuthSession();
       }
       throw { status: retryRes.status, ...retryData };
@@ -153,14 +162,14 @@ function sendFile(path, formData, authToken, onProgress) {
 
 export async function postFile(path, formData, onProgress) {
   let response = await sendFile(path, formData, token, onProgress);
-  if (response.status === 401 || response.status === 403) {
+  if (response.status === 401) {
     const refreshed = await tryRefreshToken().catch(() => null);
     if (!refreshed) {
       clearAuthSession();
       throw { status: response.status, ...response.data };
     }
     response = await sendFile(path, formData, refreshed, onProgress);
-    if (response.status === 401 || response.status === 403) clearAuthSession();
+    if (response.status === 401) clearAuthSession();
   }
   if (response.status < 200 || response.status >= 300) {
     throw { status: response.status, ...response.data };

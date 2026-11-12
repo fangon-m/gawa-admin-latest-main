@@ -1,9 +1,8 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
 
 async function listEscalatedJobs(req, res) {
-  const { page = 1, limit = 20 } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
 
   const { data: posts, error, count } = await supabase
     .from('job_posts')
@@ -12,7 +11,7 @@ async function listEscalatedJobs(req, res) {
     .order('updated_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   if (!posts || posts.length === 0) {
     return res.json({ data: [], pagination: { total: 0, page: +page, limit: +limit, totalPages: 0 } });
@@ -137,7 +136,7 @@ async function resolveEscalatedJob(req, res) {
       .select()
       .single();
 
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
+    if (updateErr) return sendError(res, updateErr, { status: 500 });
 
     if (acceptedMatch) {
       await supabase.from('job_matches').update({ status: 'verified', updated_at: new Date().toISOString() }).eq('job_match_id', acceptedMatch.job_match_id);
@@ -155,7 +154,7 @@ async function resolveEscalatedJob(req, res) {
       .select()
       .single();
 
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
+    if (updateErr) return sendError(res, updateErr, { status: 500 });
 
     await supabase.from('entity_flags').insert({
       entity_type: 'job_post',

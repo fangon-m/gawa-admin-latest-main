@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sanitizeSearchTerm, sanitizeEntityFilter, sendError } = require('../utilities/helpers');
 const { getArchivedUserIds, applyArchivedOwnerFilter } = require('../utilities/visibility');
 
 async function enrichEquipmentListings(listings) {
@@ -29,8 +29,18 @@ async function enrichEquipmentListings(listings) {
 }
 
 async function listEquipmentListings(req, res) {
-  const { page = 1, limit = 20, status, ownerId, search } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { status } = req.query;
+
+  // `ownerId` selects a single owner, so it must be a well-formed identifier
+  // rather than a free-text filter fragment.
+  const ownerId = sanitizeEntityFilter(req.query.ownerId);
+  if (req.query.ownerId && !ownerId) {
+    return res.status(400).json({ error: 'Invalid ownerId' });
+  }
+
+  // Normalised before it reaches the PostgREST filter expression.
+  const search = sanitizeSearchTerm(req.query.search);
 
   const runQuery = async (useArchiveMarker) => {
     let query = supabase.from('equipment_listings').select('*', { count: 'exact' });
@@ -54,7 +64,7 @@ async function listEquipmentListings(req, res) {
     ({ data, error, count } = await runQuery(false));
   }
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichEquipmentListings(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -93,7 +103,7 @@ async function flagEquipmentListing(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   await supabase
     .from('equipment_listings')
@@ -105,7 +115,7 @@ async function flagEquipmentListing(req, res) {
 
 async function removeEquipmentListing(req, res) {
   const { error } = await supabase.from('equipment_listings').delete().eq('listing_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Equipment listing removed' });
 }
 

@@ -1,7 +1,8 @@
 const supabase = require('../db/supabase');
 const config = require('../config');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sanitizeSearchTerm, sendError } = require('../utilities/helpers');
 const { logAdminActivity } = require('../utilities/activityLogger');
+const { revokeUserSessions } = require('../utilities/sessionRevocation');
 const { stampArchivedContent, clearArchivedContentMarkers } = require('../utilities/archiveContent');
 const invites = require('../services/invites');
 const passwordResets = require('../services/passwordResets');
@@ -33,8 +34,13 @@ function mapUser(u) {
 }
 
 async function listUsers(req, res) {
-  const { page = 1, limit = 20, role, status, verified, search } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { role, status, verified } = req.query;
+  // The search term is interpolated into a PostgREST filter expression, so it
+  // is normalised to an allow-list first: a raw value could otherwise inject
+  // extra predicates (`%`, `,`, `)`) and turn the row count into a blind
+  // oracle over columns that are not part of the projection.
+  const search = sanitizeSearchTerm(req.query.search);
 
   let query = supabase.from('users_table').select(USER_SELECT, { count: 'exact' })
     .not('role', 'in', '("admin","customer_support")');
@@ -49,7 +55,7 @@ async function listUsers(req, res) {
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const userIds = (data || []).map(u => u.id);
   const rolesByUser = {};
@@ -89,7 +95,7 @@ async function listTeamMembers(req, res) {
     .in('role', ['admin', 'customer_support'])
     .order('created_at', { ascending: true });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const userIds = (data || []).map(u => u.id);
   const rolesByUser = {};
@@ -224,7 +230,7 @@ async function suspendUser(req, res) {
     .eq('id', req.params.id)
     .maybeSingle();
 
-  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+  if (fetchErr) return sendError(res, fetchErr, { status: 500 });
   if (!existingUser) return res.status(404).json({ error: 'User not found' });
 
   if (existingUser.is_archived) {
@@ -254,6 +260,10 @@ async function suspendUser(req, res) {
     .single();
 
   if (updateErr || !user) return res.status(500).json({ error: updateErr?.message || 'Could not suspend user' });
+
+  // A suspended member must lose access immediately, not when their token
+  // happens to expire.
+  await revokeUserSessions(req.params.id);
 
   logAdminActivity({
     actorId: req.user?.id,
@@ -316,7 +326,7 @@ async function flagUser(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   logAdminActivity({
     actorId: req.user?.id,
@@ -336,16 +346,21 @@ async function deleteUser(req, res) {
     .eq('id', req.params.id)
     .maybeSingle();
 
-  const { error } = await supabase.auth.admin.deleteUser(req.params.id);
-  if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
-
-  logAdminActivity({
+  // The audit record has to be written BEFORE the account is removed.
+  // `activity_log.related_user_id` is a foreign key with ON DELETE SET NULL, so
+  // a record written after the deletion is rejected outright and the trail of
+  // a deletion is lost. Written first, the row survives with the
+  // relationship cleared and the description still naming the account.
+  await logAdminActivity({
     actorId: req.user?.id,
     activityType: 'user_deleted',
     category: 'user',
     relatedUserId: req.params.id,
     description: `Admin deleted user ${userDisplayName(user, req.params.id)}`,
   });
+
+  const { error } = await supabase.auth.admin.deleteUser(req.params.id);
+  if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
 
   res.json({ message: 'User deleted' });
 }
@@ -362,7 +377,7 @@ async function archiveUser(req, res) {
     .eq('id', userId)
     .maybeSingle();
 
-  if (fetchError) return res.status(500).json({ error: fetchError.message });
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (['admin', 'customer_support'].includes(user.role)) {
     return res.status(403).json({ error: 'Staff accounts cannot be archived here' });
@@ -401,10 +416,15 @@ async function archiveUser(req, res) {
         error: 'Auth ban failed and archive rollback failed; user access remains blocked by the archive flag',
       });
     }
-    return res.status(502).json({ error: banError.message });
+    return sendError(res, banError, { status: 502 });
   }
 
   const archivedContent = await stampArchivedContent(userId, archivedAt);
+
+  // The auth ban already stops the account signing in; revoking the
+  // sessions as well means a token issued before the archive stops working
+  // immediately rather than at its own expiry.
+  await revokeUserSessions(userId);
 
   logAdminActivity({
     actorId: req.user?.id,
@@ -429,7 +449,7 @@ async function unarchiveUser(req, res) {
     .eq('id', userId)
     .maybeSingle();
 
-  if (fetchError) return res.status(500).json({ error: fetchError.message });
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (!user.is_archived) return res.status(409).json({ error: 'User is not archived' });
 
@@ -459,7 +479,7 @@ async function unarchiveUser(req, res) {
         error: 'Auth unban failed and archive rollback failed; verify the account remains blocked before retrying',
       });
     }
-    return res.status(502).json({ error: unbanError.message });
+    return sendError(res, unbanError, { status: 502 });
   }
 
   const restoredContent = user.archived_at
@@ -553,6 +573,9 @@ async function adminResetPassword(req, res) {
       console.error('[TempPassword] Password update failed:', updateError.code || 'ERROR');
       return res.status(400).json({ error: 'Could not set the temporary password. Please try again.', code: 'RESET_FAILED' });
     }
+
+    // A new password invalidates the sessions the member held before it.
+    await revokeUserSessions(member.id);
 
     const { subject, html, text } = renderTempPasswordEmail({
       name: getFullName(member),
@@ -893,7 +916,7 @@ async function listUserProposals(req, res) {
     .eq('user_id', id)
     .order('matched_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const clientIds = [...new Set((matches || []).map(m => m.job_post?.client_id).filter(Boolean))];
   const clientNameMap = {};

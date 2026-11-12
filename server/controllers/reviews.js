@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 
 async function enrichReviews(reviews) {
   if (!reviews || reviews.length === 0) return [];
@@ -26,8 +26,8 @@ async function enrichReviews(reviews) {
 }
 
 async function listReviews(req, res) {
-  const { page = 1, limit = 20, jobCompletionId, reviewerId, revieweeId } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { jobCompletionId, reviewerId, revieweeId } = req.query;
 
   let query = supabase.from('reviews').select('*', { count: 'exact' });
   if (jobCompletionId) query = query.eq('job_completion_id', jobCompletionId);
@@ -38,7 +38,7 @@ async function listReviews(req, res) {
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   res.json({
     data: await enrichReviews(data || []),

@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sendError } = require('../utilities/helpers');
 
 async function checkIn(req, res) {
   const { matchId } = req.params;
@@ -37,7 +37,7 @@ async function checkIn(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data), message: 'Check-in recorded' });
 }
 
@@ -51,7 +51,7 @@ async function getCheckInStatus(req, res) {
     .limit(1)
     .maybeSingle();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: data ? toCamelCase(data) : null });
 }
 

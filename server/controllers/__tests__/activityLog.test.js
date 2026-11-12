@@ -144,7 +144,10 @@ describe('activityLog controller', () => {
       await listActivityLog(req, res);
 
       expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({ error: 'db down' });
+      expect(res.json).toHaveBeenCalledWith({ error: 'Something went wrong' });
+      expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({
+        error: expect.stringContaining('db down'),
+      }));
     });
   });
 
@@ -237,7 +240,10 @@ describe('activityLog controller', () => {
       await createActivityLog(req, res);
 
       expect(res.status).toHaveBeenCalledWith(500);
-      expect(res.json).toHaveBeenCalledWith({ error: 'constraint failed' });
+      expect(res.json).toHaveBeenCalledWith({ error: 'Something went wrong' });
+      expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({
+        error: expect.stringContaining('constraint failed'),
+      }));
     });
   });
 });

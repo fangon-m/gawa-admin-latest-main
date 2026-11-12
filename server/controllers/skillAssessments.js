@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sendError } = require('../utilities/helpers');
 
 async function listSkillAssessments(req, res) {
   const { skillId, isActive } = req.query;
@@ -9,7 +9,7 @@ async function listSkillAssessments(req, res) {
   query = query.order('created_at', { ascending: false });
 
   const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: data.map(toCamelCase) });
 }
 
@@ -42,7 +42,7 @@ async function createSkillAssessment(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data), message: 'Assessment created' });
 }
 
@@ -70,7 +70,7 @@ async function updateSkillAssessment(req, res) {
 
 async function deleteSkillAssessment(req, res) {
   const { error } = await supabase.from('skill_assessments').delete().eq('assessment_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Assessment deleted' });
 }
 

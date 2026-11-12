@@ -8,8 +8,27 @@ const dotenv = require('dotenv');
 dotenv.config();
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const nodeEnv = process.env.NODE_ENV || 'development';
+const nodeEnv = (process.env.NODE_ENV || '').trim();
 const isProduction = nodeEnv === 'production';
+
+// NODE_ENV decides which security guards are active (required secrets, the
+// banned console mailer, the local-admin backdoor that used to live here).
+// Guessing "development" when the variable is missing silently disables
+// every one of them, so the server refuses to boot instead.
+const VALID_NODE_ENVS = ['development', 'production', 'test'];
+if (!nodeEnv) {
+  console.error(
+    '[Config] NODE_ENV is required. Set NODE_ENV=development for local work, ' +
+    'NODE_ENV=production for a deployment, or NODE_ENV=test for automated tests. ' +
+    'See scripts/run-server.js for the supported entrypoints.'
+  );
+  process.exit(1);
+}
+if (!VALID_NODE_ENVS.includes(nodeEnv)) {
+  console.error(`[Config] NODE_ENV must be one of: ${VALID_NODE_ENVS.join(', ')} (received "${nodeEnv}").`);
+  process.exit(1);
+}
+
 const requiredEnvVars = [
   ['JWT_SECRET', 'JWT_SECRET is required. Generate one with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"'],
   ['SUPABASE_URL', 'SUPABASE_URL is required'],
@@ -64,6 +83,13 @@ const config = {
   corsOrigins: process.env.CORS_ORIGINS || 'http://localhost:3000',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
   bcryptSaltRounds: 10,
+
+  // Number of reverse-proxy hops to trust for the client IP. 0 (the default)
+  // means X-Forwarded-For is ignored entirely, so a client cannot spoof its
+  // own address and slip past the rate limiters. Only raise this when a
+  // trusted proxy really does sit in front of the app.
+  trustProxyHops: intEnv('TRUST_PROXY_HOPS', 0, 0, 10),
+  trustProxyConfigured: Object.prototype.hasOwnProperty.call(process.env, 'TRUST_PROXY_HOPS'),
 
   // Supabase
   supabaseUrl: process.env.SUPABASE_URL,

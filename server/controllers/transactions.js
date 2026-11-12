@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
 
 const CLIENT_FUND_TRANSACTION_TYPES = ['job_payment', 'rental_payment', 'deposit'];
@@ -107,8 +107,8 @@ async function enrichTransactions(txns) {
 }
 
 async function listTransactions(req, res) {
-  const { page = 1, limit = 20, type, status, userId, startDate, endDate, paymentMethod } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { type, status, userId, startDate, endDate, paymentMethod } = req.query;
 
   let query = supabase.from('transactions').select('id, user_id, type, amount, status, payment_method, reference, fee, description, net_amount, created_at, related_id, related_type, direction', { count: 'exact' });
   if (type) query = query.eq('type', type);
@@ -122,7 +122,7 @@ async function listTransactions(req, res) {
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichTransactions(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -164,7 +164,7 @@ async function releaseEscrow(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: toCamelCase(data), message: 'Escrow released' });
 }
 
@@ -200,7 +200,7 @@ async function processRefund(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   if (escrow?.status === 'held') {
     const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'refunded');
     if (escrowUpdate.error) {
@@ -228,7 +228,7 @@ async function approvePayout(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: toCamelCase(data), message: 'Payout approved' });
 }
 

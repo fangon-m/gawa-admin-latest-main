@@ -1,4 +1,5 @@
 const supabase = require('../db/supabase');
+const { calculatePagination, sendError } = require('../utilities/helpers');
 const { getFullName } = require('../utilities/helpers');
 const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
 
@@ -129,7 +130,8 @@ async function getSummary(req, res) {
 }
 
 async function listEntries(req, res) {
-  const { page = 1, limit = 20, type, status, userId, startDate, endDate } = req.query;
+  const { type, status, userId, startDate, endDate } = req.query;
+  const { page: pageNumber, limit: pageSize, offset } = calculatePagination(req.query.page, req.query.limit);
   const [transactionsResult, escrowsResult] = await Promise.all([
     getUnreleasedTransactions(),
     getEquipmentDepositEscrows(),
@@ -152,9 +154,6 @@ async function listEntries(req, res) {
 
   entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const total = entries.length;
-  const pageNumber = Math.max(1, Number(page) || 1);
-  const pageSize = Math.max(1, Number(limit) || 20);
-  const offset = (pageNumber - 1) * pageSize;
   const pageEntries = entries.slice(offset, offset + pageSize);
 
   const userIds = [...new Set(pageEntries.flatMap((entry) => [entry.userId, entry.ownerId]).filter(Boolean))];
@@ -164,7 +163,7 @@ async function listEntries(req, res) {
       .from('users_table')
       .select('id, first_name, last_name')
       .in('id', userIds);
-    if (usersError) return res.status(500).json({ error: usersError.message });
+    if (usersError) return sendError(res, usersError, { status: 500 });
     if (users) users.forEach((user) => { userMap[user.id] = getFullName(user); });
   }
 

@@ -40,4 +40,29 @@ describe('mail provider modules', () => {
     ).resolves.toEqual({ providerMessageId: null });
     log.mockRestore();
   });
+
+  it('builds the SMTP transport with file and URL access disabled', () => {
+    // A message body must never be able to pull in a local file or a remote
+    // URL: that turns the mailer into a file-disclosure and SSRF primitive.
+    const previousHost = config.email.smtp.host;
+    config.email.smtp.host = 'smtp.example.com';
+
+    try {
+      const options = smtpProvider.buildTransportOptions();
+      expect(options.disableFileAccess).toBe(true);
+      expect(options.disableUrlAccess).toBe(true);
+    } finally {
+      config.email.smtp.host = previousHost;
+    }
+  });
+
+  it('refuses to build a transport without a host', () => {
+    const previousHost = config.email.smtp.host;
+    config.email.smtp.host = '';
+    try {
+      expect(() => smtpProvider.buildTransportOptions()).toThrow(/SMTP_HOST/);
+    } finally {
+      config.email.smtp.host = previousHost;
+    }
+  });
 });

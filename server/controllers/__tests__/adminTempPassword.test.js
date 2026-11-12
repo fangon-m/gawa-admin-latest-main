@@ -6,7 +6,11 @@ process.env.INVITE_TOKEN_PEPPER = 'a'.repeat(64);
 
 jest.mock('../../db/supabase', () => ({
   from: jest.fn(),
-  auth: { admin: { updateUserById: jest.fn() } },
+  auth: { admin: {
+        updateUserById: jest.fn(),
+        getUserById: jest.fn(() => Promise.resolve({ data: { user: { app_metadata: {} } }, error: null })),
+        signOut: jest.fn(() => Promise.resolve({ error: null })),
+      } },
 }));
 jest.mock('../../utilities/activityLogger', () => ({ logAdminActivity: jest.fn() }));
 jest.mock('../../services/mailer', () => ({ sendEmail: jest.fn() }));

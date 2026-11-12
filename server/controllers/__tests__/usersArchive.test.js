@@ -7,8 +7,10 @@ jest.mock('../../db/supabase', () => ({
   from: jest.fn(),
   auth: {
     admin: {
-      updateUserById: jest.fn(),
-    },
+        updateUserById: jest.fn(),
+        getUserById: jest.fn(() => Promise.resolve({ data: { user: { app_metadata: {} } }, error: null })),
+        signOut: jest.fn(() => Promise.resolve({ error: null })),
+      },
   },
 }));
 

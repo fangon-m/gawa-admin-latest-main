@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { isUuid } = require('../utilities/helpers');
 
 /**
  * Middleware factory that validates req.body against a Zod schema.
@@ -15,6 +16,26 @@ function validate(schema) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
     req.body = result.data; // Use parsed/coerced data
+    next();
+  };
+}
+
+/**
+ * Rejects a path parameter that is not a UUID with 400.
+ *
+ * Without it the value reaches the database driver, which rejects the cast
+ * and turns a malformed id in the URL into a 500 — a client mistake reported
+ * as a server fault.
+ */
+function validateUuidParam(...names) {
+  return (req, res, next) => {
+    for (const name of names) {
+      const value = req.params[name];
+      if (value === undefined) continue;
+      if (!isUuid(String(value))) {
+        return res.status(400).json({ error: `Invalid ${name}` });
+      }
+    }
     next();
   };
 }
@@ -198,4 +219,4 @@ const schemas = {
   }),
 };
 
-module.exports = { validate, validateQuery, schemas };
+module.exports = { validate, validateQuery, validateUuidParam, schemas };

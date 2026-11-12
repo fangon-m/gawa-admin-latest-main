@@ -29,4 +29,32 @@ describe('api client auth expiry handling', () => {
 
     window.removeEventListener('auth:expired', handler);
   });
+
+  it('does not sign the user out on 403 (the session is still valid)', async () => {
+    setToken('good-token');
+    localStorage.setItem('gawa_admin_token', 'good-token');
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'Insufficient permissions' }),
+    });
+
+    const handler = vi.fn();
+    window.addEventListener('auth:expired', handler);
+
+    await expect(post('/users')).rejects.toMatchObject({
+      status: 403,
+      error: 'Insufficient permissions',
+    });
+
+    // The token survives: a permission error must not end the session.
+    expect(getToken()).toBe('good-token');
+    expect(localStorage.getItem('gawa_admin_token')).toBe('good-token');
+    expect(handler).not.toHaveBeenCalled();
+    // No refresh was attempted either.
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    window.removeEventListener('auth:expired', handler);
+  });
 });

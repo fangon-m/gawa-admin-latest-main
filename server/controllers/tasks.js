@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sendError } = require('../utilities/helpers');
 
 async function listCompletions(req, res) {
   const { data, error } = await supabase
@@ -8,7 +8,7 @@ async function listCompletions(req, res) {
     .eq('job_match_id', req.params.matchId)
     .order('created_at', { ascending: true });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: (data || []).map(toCamelCase) });
 }
 
@@ -35,7 +35,7 @@ async function createCompletion(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data), message: 'Completion record created' });
 }
 
@@ -63,7 +63,7 @@ async function deleteCompletion(req, res) {
     .delete()
     .eq('job_completion_id', req.params.id);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Completion record deleted' });
 }
 

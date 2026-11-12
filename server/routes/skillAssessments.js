@@ -4,8 +4,8 @@ const ctrl = require('../controllers/skillAssessments');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
 
-router.get('/', authenticate, ctrl.listSkillAssessments);
-router.get('/:id', authenticate, ctrl.getSkillAssessmentById);
+router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listSkillAssessments);
+router.get('/:id', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getSkillAssessmentById);
 router.post('/', authenticate, authorize(ROLES.ADMIN), ctrl.createSkillAssessment);
 router.put('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.updateSkillAssessment);
 router.delete('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.deleteSkillAssessment);

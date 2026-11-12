@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
 
 const ACTIVITY_TYPE_MAP = {
   deposit_refunded: 'Deposit Refunded',
@@ -96,7 +96,7 @@ async function listActivityLog(req, res) {
   query = query.range((p - 1) * l, p * l - 1).order('created_at', { ascending: false });
 
   const { data, error, count } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const rows = (data || []).map((row) => {
     const camel = toCamelCase(row);
@@ -152,7 +152,7 @@ async function createActivityLog(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const inserted = toCamelCase(data);
   inserted.agentName = req.user?.name || req.user?.email || 'Admin';

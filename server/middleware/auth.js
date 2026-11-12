@@ -2,14 +2,14 @@ const { createClient } = require('@supabase/supabase-js');
 const config = require('../config');
 const serviceClient = require('../db/supabase'); // service_role client (bypasses RLS)
 const { getFullName } = require('../utilities/helpers');
+const { resolveRoles } = require('../utilities/permissions');
+const { isRevoked } = require('../utilities/sessionRevocation');
 
-// A missing .env must not take the whole server down: the dev shortcut token
-// still works, and every other request fails closed with 401.
+// A missing .env must not take the whole server down: every request fails
+// closed with 401 instead.
 const anonClient = config.supabaseUrl && config.supabaseAnonKey
   ? createClient(config.supabaseUrl, config.supabaseAnonKey)
   : null;
-const LOCAL_ADMIN_TOKEN = 'gawa-local-admin-token';
-const LOCAL_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
 
 function isSuspended(profile) {
   if (profile?.suspension_status !== 'active') return false;
@@ -18,6 +18,15 @@ function isSuspended(profile) {
   return !Number.isFinite(suspendedUntil) || suspendedUntil > Date.now();
 }
 
+/**
+ * The caller's effective role comes from the `user_roles` table, or — while
+ * that table is still missing from the database — from the server-managed
+ * `auth.users.app_metadata`, or from the role recorded on the profile row.
+ *
+ * The profile column is the weakest of the three and is protected by the row
+ * level security policies on `users_table`, which stop an account from
+ * writing its own `role`. The role table takes over as soon as it exists.
+ */
 async function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -26,35 +35,6 @@ async function authenticate(req, res, next) {
 
   const token = authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'Invalid or expired token' });
-
-  if (token === LOCAL_ADMIN_TOKEN) {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-
-    const { data: profile, error: profileError } = await serviceClient
-      .from('users_table')
-      .select('*')
-      .eq('email', 'gawaadmin@email.com')
-      .maybeSingle();
-    if (profileError) return res.status(500).json({ error: profileError.message });
-    if (profile?.is_archived) {
-      return res.status(403).json({ error: 'This account is archived and cannot access the application' });
-    }
-    if (isSuspended(profile)) {
-      return res.status(403).json({ error: 'This account is suspended and cannot access the application' });
-    }
-
-    req.user = {
-      ...(profile || {}),
-      id: profile?.id || LOCAL_ADMIN_ID,
-      email: 'gawaadmin@email.com',
-      name: profile ? getFullName(profile) : 'GAWA Admin',
-      role: 'admin',
-      roles: ['admin'],
-    };
-    return next();
-  }
 
   if (!anonClient) {
     return res.status(401).json({ error: 'Invalid or expired token' });
@@ -65,6 +45,12 @@ async function authenticate(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
+  // A token that was issued before the account's sessions were revoked must
+  // stop working immediately, not when it happens to expire.
+  if (isRevoked(token, data.user.app_metadata || {})) {
+    return res.status(401).json({ error: 'Session revoked. Please sign in again.' });
+  }
+
   // Enrich with profile data (role, name, etc.) using service_role client (bypasses RLS)
   const [profileRes, rolesRes] = await Promise.all([
     serviceClient.from('users_table').select('*').eq('id', data.user.id).single(),
@@ -72,7 +58,11 @@ async function authenticate(req, res, next) {
   ]);
 
   const profile = profileRes.data || {};
-  const userRoles = (rolesRes.data || []).map(r => r.roles?.role_name).filter(Boolean);
+  const { roles, role } = resolveRoles({
+    roleRows: rolesRes.data || [],
+    appMetadata: data.user.app_metadata || {},
+    profileRole: profile.role,
+  });
 
   if (profile.is_archived) {
     return res.status(403).json({ error: 'This account is archived and cannot access the application' });
@@ -82,11 +72,14 @@ async function authenticate(req, res, next) {
   }
 
   req.user = {
+    ...profile,
     id: data.user.id,
     email: data.user.email,
-    ...profile,
     name: getFullName(profile) || data.user.email,
-    roles: userRoles,
+    // Resolved from the role table, the auth metadata or the profile row,
+    // in that order of preference.
+    role,
+    roles,
   };
   next();
 }

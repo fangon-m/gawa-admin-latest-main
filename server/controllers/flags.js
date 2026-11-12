@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sendError } = require('../utilities/helpers');
 
 async function listFlags(req, res) {
   const { entityType, entityId } = req.query;
@@ -9,7 +9,7 @@ async function listFlags(req, res) {
   if (entityId) query = query.eq('entity_id', entityId);
 
   const { data, error } = await query.order('created_at', { ascending: false });
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: (data || []).map(toCamelCase) });
 }
 
@@ -30,13 +30,13 @@ async function createFlag(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data) });
 }
 
 async function removeFlag(req, res) {
   const { error } = await supabase.from('entity_flags').delete().eq('flag_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Flag removed' });
 }
 

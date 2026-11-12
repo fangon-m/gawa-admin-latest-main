@@ -71,7 +71,7 @@ describe('list issue reports', () => {
     });
   });
 
-  it('returns database errors instead of hiding failures', async () => {
+  it('reports failures without leaking database error detail to the client', async () => {
     const reportsQuery = {
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
@@ -83,6 +83,11 @@ describe('list issue reports', () => {
     await listReports(req, res);
 
     expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'issue_reports unavailable' });
+    // The table/driver detail stays in the server log; the client only sees
+    // a generic message.
+    expect(res.json).toHaveBeenCalledWith({ error: 'Something went wrong' });
+    expect(res.json).not.toHaveBeenCalledWith(expect.objectContaining({
+      error: expect.stringContaining('issue_reports'),
+    }));
   });
 });

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const supabase = require('../db/supabase');
 const { logAdminActivity } = require('../utilities/activityLogger');
 const { getModerationSettings, sendModerationNotification } = require('../utilities/moderationWarnings');
+const { hasRole } = require('../utilities/permissions');
 
 const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at';
 const STAFF_ROLES = new Set(['admin', 'customer_support']);
@@ -21,11 +22,6 @@ const TARGETS = {
   equipment_rental: { table: 'equipment_rentals', idColumn: 'rental_id', stateColumn: 'rental_status' },
   equipment_request: { table: 'equipment_requests', idColumn: 'request_id', stateColumn: 'request_status' },
 };
-
-function hasRole(req, role) {
-  const roles = req.user?.roles?.length ? req.user.roles : [req.user?.role].filter(Boolean);
-  return roles.includes(role);
-}
 
 function actionDescription(id) {
   const descriptions = {

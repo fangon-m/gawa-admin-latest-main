@@ -1,14 +1,15 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sanitizeSearchTerm, sendError } = require('../utilities/helpers');
 
 async function listSkills(req, res) {
-  const { search } = req.query;
+  // Normalised before it reaches the PostgREST filter expression.
+  const search = sanitizeSearchTerm(req.query.search);
   let query = supabase.from('skills').select('*');
   if (search) query = query.ilike('skill_name', `%${search}%`);
   query = query.order('skill_name', { ascending: true });
 
   const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: data.map(toCamelCase) });
 }
 
@@ -36,7 +37,7 @@ async function createSkill(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data), message: 'Skill created' });
 }
 
@@ -60,7 +61,7 @@ async function updateSkill(req, res) {
 
 async function deleteSkill(req, res) {
   const { error } = await supabase.from('skills').delete().eq('skill_id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Skill deleted' });
 }
 
@@ -71,7 +72,7 @@ async function listSkillAssessments(req, res) {
   query = query.order('created_at', { ascending: false });
 
   const { data, error } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: data.map(toCamelCase) });
 }
 

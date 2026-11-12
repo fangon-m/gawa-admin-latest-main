@@ -1,26 +1,54 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import PasswordInput from '../components/common/PasswordInput';
 
-const DEFAULT_EMAIL = 'gawaadmin@email.com';
-const DEFAULT_PASSWORD = 'gawaadmin123';
+// Only the email address is remembered. The password is never stored: it
+// would be readable by any script on the origin, and it used to be shipped in
+// the bundle as a pre-filled default.
+const EMAIL_STORAGE_KEY = 'gawa_admin_email';
+
+function readRememberedEmail() {
+  try {
+    return localStorage.getItem(EMAIL_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+function rememberEmail(email) {
+  try {
+    if (email) localStorage.setItem(EMAIL_STORAGE_KEY, email);
+    else localStorage.removeItem(EMAIL_STORAGE_KEY);
+  } catch {
+    /* storage unavailable — the form still works */
+  }
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
-  const [email, setEmail] = useState(DEFAULT_EMAIL);
-  const [password, setPassword] = useState(DEFAULT_PASSWORD);
+  // Read once on mount: the remembered address decides where the cursor
+  // starts, and it must not change while the form is open.
+  const rememberedEmail = useRef(readRememberedEmail()).current;
+  const [email, setEmail] = useState(rememberedEmail);
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const showsRemembered = rememberedEmail !== '' && email === rememberedEmail;
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+    // A trailing space in the address is the most common reason a valid
+    // login is rejected, so it is trimmed before it is sent.
+    const address = email.trim();
     try {
-      const success = await login(email, password);
+      const success = await login(address, password);
       if (success) {
+        rememberEmail(address.toLowerCase());
         navigate('/', { replace: true });
       } else {
         setError('Invalid email or password');
@@ -30,6 +58,11 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const forgetEmail = () => {
+    rememberEmail('');
+    setEmail('');
   };
 
   return (
@@ -50,8 +83,9 @@ export default function LoginPage() {
               placeholder="Enter your email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
               required
-              autoFocus
+              autoFocus={!rememberedEmail}
             />
           </div>
           <div className="form-group">
@@ -62,9 +96,22 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              autoFocus={!!rememberedEmail}
               required
             />
             <div style={{ textAlign: 'right', marginTop: 4 }}>
+              {showsRemembered && (
+                <button
+                  type="button"
+                  onClick={forgetEmail}
+                  style={{
+                    background: 'none', border: 'none', padding: 0, marginRight: 12,
+                    fontSize: 13, color: 'var(--color-primary)', cursor: 'pointer',
+                  }}
+                >
+                  Not you?
+                </button>
+              )}
               <Link to="/reset-password" style={{ fontSize: 13, color: 'var(--color-primary)' }}>Forgot password?</Link>
             </div>
           </div>

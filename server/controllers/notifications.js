@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { getFullName } = require('../utilities/helpers');
+const { getFullName, sendError } = require('../utilities/helpers');
 
 const VALID_ENTITY_TYPES = ['job_proposal', 'job_assignment', 'equipment_request', 'verification', 'user_account'];
 
@@ -44,7 +44,7 @@ async function listNotifications(req, res) {
   query = query.order('created_at', { ascending: false }).limit(Math.min(+limit, 100));
 
   const { data, error, count } = await query;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const actorIds = [...new Set((data || []).map(n => n.actor_id).filter(Boolean))];
   const actorMap = {};
@@ -84,7 +84,7 @@ async function createNotification(req, res) {
     .select('notification_id, recipient_id, actor_id, event_type, title, body, entity_type, entity_id, data, created_at, read_at')
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   res.status(201).json({ data: mapNotification(data, req.user?.name) });
 }
@@ -110,7 +110,7 @@ async function markAllRead(req, res) {
     .eq('recipient_id', req.user.id)
     .is('read_at', null);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'All notifications marked as read' });
 }
 

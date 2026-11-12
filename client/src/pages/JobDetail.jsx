@@ -237,6 +237,7 @@ export default function JobDetail() {
                           </div>
                         )}
                         <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 2 }}>
+                          {c.talentName && <>Submitted by {c.talentName} · </>}
                           Requested: {formatDate(c.requestedAt)}
                           {c.confirmedAt && <> · Confirmed: {formatDate(c.confirmedAt)}</>}
                         </div>

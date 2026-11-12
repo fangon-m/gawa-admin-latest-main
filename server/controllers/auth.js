@@ -1,48 +1,19 @@
 const supabase = require('../db/supabase');
 const config = require('../config');
 const { createClient } = require('@supabase/supabase-js');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
 const { logAdminActivity } = require('../utilities/activityLogger');
 const { findAuthUserByEmail } = require('../utilities/authUsers');
+const { resolveRoles, ROLES, APP_METADATA_ROLE_KEY } = require('../utilities/permissions');
+const { revokeUserSessions } = require('../utilities/sessionRevocation');
 const invites = require('../services/invites');
 const passwordResets = require('../services/passwordResets');
 const { sendEmail } = require('../services/mailer');
 const { renderPasswordResetEmail } = require('../services/emailTemplates/passwordReset');
 
-const LOCAL_ADMIN_EMAIL = 'gawaadmin@email.com';
-const LOCAL_ADMIN_PASSWORD = 'gawaadmin123';
-const LOCAL_ADMIN_TOKEN = 'gawa-local-admin-token';
-const LOCAL_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
-
 async function login(req, res) {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
-
-  if (email === LOCAL_ADMIN_EMAIL && password === LOCAL_ADMIN_PASSWORD) {
-    if (process.env.NODE_ENV === 'production') return loginWithSupabase(email, password, res);
-
-    const { data: profile, error: profileError } = await supabase
-      .from('users_table')
-      .select('id, first_name, last_name, email, role, is_verified, profile_image_url, phone, complete_address, created_at, is_archived')
-      .eq('email', LOCAL_ADMIN_EMAIL)
-      .maybeSingle();
-    if (profileError) return res.status(500).json({ error: profileError.message });
-    if (profile?.is_archived) return res.status(403).json({ error: 'This account is archived and cannot access the application' });
-
-    return res.json({
-      data: {
-        token: LOCAL_ADMIN_TOKEN,
-        user: {
-          ...(profile || {}),
-          id: profile?.id || LOCAL_ADMIN_ID,
-          email: LOCAL_ADMIN_EMAIL,
-          name: profile ? getFullName(profile) : 'GAWA Admin',
-          role: 'admin',
-          roles: ['admin'],
-        },
-      },
-    });
-  }
 
   return loginWithSupabase(email, password, res);
 }
@@ -56,17 +27,22 @@ async function loginWithSupabase(email, password, res) {
     .select('id, first_name, last_name, email, role, is_verified, profile_image_url, phone, complete_address, created_at')
     .eq('id', data.user.id)
     .maybeSingle();
-  if (profileError) return res.status(500).json({ error: profileError.message });
+  if (profileError) return sendError(res, profileError, { status: 500 });
   if (!profile) return res.status(403).json({ error: 'No application profile is linked to this account.' });
 
-  // user_roles is optional in some deployments; fall back to the legacy
-  // users_table.role column when the table (or the join) is unavailable.
+  // The role table is the intended source of truth. Until it exists in the
+  // database the role comes from the server-managed auth metadata, or from
+  // the role recorded on the profile row.
   const { data: roleRows, error: rolesError } = await supabase
     .from('user_roles')
     .select('roles(role_name)')
     .eq('user_id', data.user.id);
-  if (rolesError) console.warn('[Auth] user_roles lookup failed; using users_table.role:', rolesError.message);
-  const roles = (roleRows || []).map(row => row.roles?.role_name).filter(Boolean);
+  if (rolesError) console.warn('[Auth] user_roles lookup unavailable; using auth metadata:', rolesError.message);
+  const { roles, role } = resolveRoles({
+    roleRows: roleRows || [],
+    appMetadata: data.user.app_metadata || {},
+    profileRole: profile.role,
+  });
 
   res.json({
     data: {
@@ -74,18 +50,14 @@ async function loginWithSupabase(email, password, res) {
       user: {
         ...profile,
         name: getFullName(profile),
-        role: roles.includes('admin')
-          ? 'admin'
-          : roles.includes('customer_support')
-            ? 'customer_support'
-            : profile.role,
+        role,
         roles,
       },
     },
   });
 }
 
-const TEAM_ROLES = ['admin', 'customer_support'];
+const TEAM_ROLES = [ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT];
 const RESET_REQUESTED = 'If that email belongs to a team member, a reset link has been sent.';
 
 /**
@@ -107,7 +79,22 @@ async function requestPasswordReset(req, res) {
       console.error('[PasswordReset] Profile lookup failed:', error.code || 'ERROR');
       return respond();
     }
-    if (!profile || profile.is_archived || !TEAM_ROLES.includes(profile.role)) return respond();
+    if (!profile || profile.is_archived) return respond();
+
+    // Team membership comes from the role table when it exists, otherwise
+    // from the server-managed auth metadata, otherwise from the role recorded
+    // on the profile row.
+    const { data: roleRows } = await supabase
+      .from('user_roles')
+      .select('roles(role_name)')
+      .eq('user_id', profile.id);
+    const authUser = await findAuthUserByEmail(profile.email || email);
+    const { roles } = resolveRoles({
+      roleRows: roleRows || [],
+      appMetadata: authUser?.app_metadata || {},
+      profileRole: profile.role,
+    });
+    if (!TEAM_ROLES.some((role) => roles.includes(role))) return respond();
 
     if ((await passwordResets.countRecent(profile.id)) >= config.passwordReset.maxPerHour) {
       console.warn('[PasswordReset] Hourly cap reached for', email);
@@ -194,6 +181,34 @@ async function resetPassword(req, res) {
   return res.json({ message: 'Password reset successful' });
 }
 
+/**
+ * Ends the caller's session.
+ *
+ * The refresh token is revoked on the server, so the credentials cannot be
+ * used to obtain a new access token. The access token itself stays valid
+ * until it expires (an hour), which is the usual trade-off; a revocation
+ * that has to take effect at once is handled by bumping the session version
+ * instead.
+ */
+async function logout(req, res) {
+  const authHeader = req.headers?.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (token) {
+    try {
+      // 'local' revokes this session only, leaving the member signed in on
+      // their other devices.
+      await supabase.auth.admin.signOut(token, 'local');
+    } catch (err) {
+      // The session may already have expired; either way the caller is
+      // signing out, so this is not an error worth reporting.
+      console.error('[Logout] Could not revoke the session:', err?.message || err);
+    }
+  }
+
+  res.status(204).send();
+}
+
 async function changePassword(req, res) {
   const { currentPassword, newPassword } = req.body;
   const userEmail = req.user.email;
@@ -206,6 +221,11 @@ async function changePassword(req, res) {
 
   const { error } = await supabase.auth.admin.updateUserById(req.user.id, { password: newPassword });
   if (error) return res.status(400).json({ error: error.message });
+
+  // A password change invalidates every session the member holds, including
+  // the one that made the change: a token stolen before the change must not
+  // keep working.
+  await revokeUserSessions(req.user.id);
 
   res.json({ message: 'Password updated successfully' });
 }
@@ -282,6 +302,10 @@ async function acceptInvite(req, res) {
         last_name: lastName,
         role: invite.role,
       },
+      // The role is also stored in app_metadata, which only the service role
+      // can write. `user_metadata` is writable by the account holder, so it
+      // cannot be used to decide what somebody is allowed to do.
+      app_metadata: { [APP_METADATA_ROLE_KEY]: invite.role },
     });
 
     if (authError) {
@@ -295,6 +319,7 @@ async function acceptInvite(req, res) {
       const { error: updateError } = await supabase.auth.admin.updateUserById(orphan.id, {
         password,
         email_confirm: true,
+        app_metadata: { [APP_METADATA_ROLE_KEY]: invite.role },
       });
       if (updateError) throw updateError;
       createdUserId = orphan.id;
@@ -320,14 +345,23 @@ async function acceptInvite(req, res) {
       throw profileError;
     }
 
-    // loginWithSupabase resolves the effective role from user_roles.
-    const { data: roleRow } = await supabase
+    // The role table is the intended source of truth. It may not exist in the
+    // database yet, in which case the role set in app_metadata at account
+    // creation carries the role — so a missing table must not fail the signup.
+    const { data: roleRow, error: roleLookupError } = await supabase
       .from('roles')
       .select('role_id')
       .eq('role_name', invite.role)
       .maybeSingle();
-    if (roleRow?.role_id) {
-      await supabase.from('user_roles').insert({ user_id: createdUserId, role_id: roleRow.role_id });
+    if (roleLookupError) {
+      console.warn('[Invite] Role table unavailable; the role is held in app_metadata:', roleLookupError.message);
+    } else if (roleRow?.role_id) {
+      const { error: roleInsertError } = await supabase
+        .from('user_roles')
+        .insert({ user_id: createdUserId, role_id: roleRow.role_id });
+      if (roleInsertError) {
+        console.warn('[Invite] Could not write the role row:', roleInsertError.message);
+      }
     }
 
     await invites.attachAcceptedUser(invite.invite_id, createdUserId);
@@ -352,4 +386,4 @@ async function acceptInvite(req, res) {
   }
 }
 
-module.exports = { login, requestPasswordReset, resetPassword, changePassword, refreshToken, me, acceptInvite };
+module.exports = { login, logout, requestPasswordReset, resetPassword, changePassword, refreshToken, me, acceptInvite };

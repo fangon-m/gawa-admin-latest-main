@@ -1,7 +1,4 @@
-const ROLES = {
-  ADMIN: 'admin',
-  CUSTOMER_SUPPORT: 'customer_support',
-};
+const { getUserRoles, ROLES } = require('../utilities/permissions');
 
 const ROLE_HIERARCHY = {
   [ROLES.ADMIN]: 100,
@@ -28,10 +25,13 @@ function authorize(...allowedRoles) {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    // Check roles from user_roles table (plural array) first, then fall back to profiles.role (singular)
-    const userRoles = req.user.roles?.length ? req.user.roles : [req.user.role].filter(Boolean);
-    if (!userRoles.some(r => allowedRoles.includes(r))) {
-      const hasSufficientRole = userRoles.some(r => allowedRoles.some(allowed => hasMinRole(r, allowed)));
+    // Roles come from the `user_roles` join only. The legacy `users_table.role`
+    // column is not a trust anchor: it is an unconstrained text column that the
+    // consumer app can write to, so honouring it would let a consumer account
+    // grant itself admin. An account with no role row is a non-staff account.
+    const userRoles = getUserRoles(req);
+    if (!userRoles.some((r) => allowedRoles.includes(r))) {
+      const hasSufficientRole = userRoles.some((r) => allowedRoles.some((allowed) => hasMinRole(r, allowed)));
       if (!hasSufficientRole) {
         return res.status(403).json({ error: 'Insufficient permissions' });
       }
@@ -42,7 +42,7 @@ function authorize(...allowedRoles) {
 
 function restrictSupportActions(action) {
   return (req, res, next) => {
-    const userRoles = req.user?.roles?.length ? req.user.roles : [req.user?.role].filter(Boolean);
+    const userRoles = getUserRoles(req);
     if (userRoles.includes(ROLES.CUSTOMER_SUPPORT) && SUPPORT_RESTRICTED_ACTIONS.includes(action)) {
       return res.status(403).json({ error: 'Customer support cannot perform this action' });
     }

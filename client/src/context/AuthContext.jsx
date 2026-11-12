@@ -105,12 +105,20 @@ export function AuthProvider({ children }) {
     }
   }, [user?.id]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Leave the interface immediately. The token is only cleared after the
+    // revocation has been sent, because that request still has to carry it —
+    // clearing it first would leave the session alive on the server.
+    setUser(null);
+    setIsAuthenticated(false);
+    try {
+      await authApi.logout();
+    } catch {
+      /* the session may already have expired — clear locally regardless */
+    }
     setToken(null);
     setStored(TOKEN_KEY, null);
     setRefreshToken(null);
-    setUser(null);
-    setIsAuthenticated(false);
   }, []);
 
   return (

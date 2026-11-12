@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { getFullName } = require('../utilities/helpers');
+const { getFullName, sendError } = require('../utilities/helpers');
 const { getModerationHealth } = require('../utilities/moderationWarnings');
 
 const REPORT_BASE_COLUMNS = 'report_id, reporter_id, target_type, target_id, issue_type, comment, attachment_paths, status, created_at';
@@ -28,7 +28,7 @@ async function listReports(req, res) {
     result = await buildQuery(REPORT_BASE_COLUMNS);
   }
   const { data, error, count } = result;
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const reports = data || [];
   const userIds = [...new Set(reports.flatMap(report => [
@@ -41,7 +41,7 @@ async function listReports(req, res) {
       .from('users_table')
       .select('id, first_name, middle_name, last_name, email')
       .in('id', userIds);
-    if (usersError) return res.status(500).json({ error: usersError.message });
+    if (usersError) return sendError(res, usersError, { status: 500 });
     userNames = new Map((users || []).map(user => [user.id, getFullName(user)]));
   }
 

@@ -1,6 +1,7 @@
 const path = require('path');
 const XLSX = require('@e965/xlsx');
 const supabase = require('../db/supabase');
+const { sendError } = require('../utilities/helpers');
 
 const MAX_ROWS = 500;
 const MAX_CHOICES = 10;
@@ -187,7 +188,8 @@ async function importAssessmentQuestions(req, res) {
       });
     }
     const detail = String(error.message || 'Database error').replace(/[\r\n]+/g, ' ').slice(0, 300);
-    return res.status(500).json({ error: `Import failed; no questions were committed. ${detail}` });
+    console.error('[Assessment import] Transaction failed:', detail);
+    return sendError(res, error, { status: 500, fallback: 'Import failed; no questions were committed' });
   }
 
   res.status(201).json({
