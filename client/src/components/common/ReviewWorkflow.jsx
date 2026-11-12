@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldAlert, CheckCircle, XCircle, User, Briefcase, FileText, ExternalLink } from 'lucide-react';
-import { formatDateTime, formatCurrency, timeAgo } from '../../utils/helpers';
+import { formatDateTime, formatCurrency, timeAgo, userEntityPath, formatEntityIdNumeric } from '../../utils/helpers';
 import DataTable from './DataTable';
 import DetailPanel from './DetailPanel';
 import Tabs from './Tabs';
@@ -71,7 +71,7 @@ export default function ReviewWorkflow({
         </div>
       ),
     },
-    { key: 'clientName', label: 'Client', render: (row) => row.clientInfo?.name || row.clientId?.slice(0, 8) || 'Unknown' },
+    { key: 'clientName', label: 'Client', render: (row) => row.clientInfo?.name || formatEntityIdNumeric(row.clientId, 'USR-') || 'Unknown' },
     { key: 'talentName', label: 'Talent', render: (row) => row.talent?.talentInfo?.name || 'N/A' },
     { key: 'budget', label: 'Budget', render: (row) => formatCurrency(row.budget) },
     { key: 'updatedAt', label: dateLabel, render: (row) => <span title={formatDateTime(row.updatedAt)}>{timeAgo(row.updatedAt)}</span> },
@@ -190,7 +190,7 @@ export default function ReviewWorkflow({
                 <div className="card">
                   <div className="card-header">
                     <h3><User size={14} /> Client</h3>
-                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/users/${selected.clientId}`)}><ExternalLink size={13} /> Profile</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(userEntityPath(selected.clientId))}><ExternalLink size={13} /> Profile</button>
                   </div>
                   <div className="card-body">
                     <div className="detail-grid" style={{ gap: 'var(--space-2)' }}>
@@ -204,7 +204,7 @@ export default function ReviewWorkflow({
                 <div className="card">
                   <div className="card-header">
                     <h3><Briefcase size={14} /> Talent</h3>
-                    {selected.talent?.talentId && <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/users/${selected.talent.talentId}`)}><ExternalLink size={13} /> Profile</button>}
+                    {selected.talent?.talentId && <button className="btn btn-ghost btn-sm" onClick={() => navigate(userEntityPath(selected.talent.talentId))}><ExternalLink size={13} /> Profile</button>}
                   </div>
                   <div className="card-body">
                     {selected.talent ? (

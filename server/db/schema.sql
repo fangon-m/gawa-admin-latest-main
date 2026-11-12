@@ -51,6 +51,8 @@ CREATE TABLE public.job_posts (
   budget numeric,
   job_latitude double precision,
   job_longitude double precision,
+  client_archived_at timestamp with time zone,
+  client_archive_removed_at timestamp with time zone,
   CONSTRAINT job_posts_pkey PRIMARY KEY (job_post_id),
   CONSTRAINT job_posts_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.users_table(id)
 );
@@ -74,6 +76,8 @@ CREATE TABLE public.equipment_listings (
   status text NOT NULL DEFAULT 'available'::text CHECK (status = ANY (ARRAY['available'::text, 'rented'::text, 'unavailable'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  archived_at timestamp with time zone,
+  archive_removed_at timestamp with time zone,
   CONSTRAINT equipment_listings_pkey PRIMARY KEY (listing_id),
   CONSTRAINT equipment_listings_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES public.users_table(id)
 );
@@ -306,6 +310,10 @@ CREATE TABLE public.job_proposals (
   counter_offer_price numeric CHECK (counter_offer_price IS NULL OR counter_offer_price > 0::numeric),
   job_title text,
   proposal_milestones jsonb,
+  counter_offer_price_type text,
+  counter_offer_milestones jsonb,
+  proposer_archived_at timestamp with time zone,
+  proposer_archive_removed_at timestamp with time zone,
   CONSTRAINT job_proposals_pkey PRIMARY KEY (proposal_id),
   CONSTRAINT job_proposals_job_post_id_fkey FOREIGN KEY (job_post_id) REFERENCES public.job_posts(job_post_id),
   CONSTRAINT job_proposals_proposer_id_fkey FOREIGN KEY (proposer_id) REFERENCES public.users_table(id)

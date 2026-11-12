@@ -19,9 +19,15 @@ async function enrichTransactions(txns) {
   });
 
   let userMap = {};
+  let archivedUserIds = new Set();
   if (userIds.size > 0) {
-    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name').in('id', [...userIds]);
-    if (users) users.forEach(u => { userMap[u.id] = getFullName(u); });
+    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name, is_archived').in('id', [...userIds]);
+    if (users) {
+      users.forEach(u => {
+        userMap[u.id] = getFullName(u);
+        if (u.is_archived) archivedUserIds.add(u.id);
+      });
+    }
   }
 
   let jobMap = {};
@@ -53,20 +59,27 @@ async function enrichTransactions(txns) {
   });
 
   let counterpartyMap = {};
+  let archivedCounterpartyIds = new Set();
   if (counterpartyIds.size > 0) {
-    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name').in('id', [...counterpartyIds]);
-    if (users) users.forEach(u => { counterpartyMap[u.id] = getFullName(u); });
+    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name, is_archived').in('id', [...counterpartyIds]);
+    if (users) {
+      users.forEach(u => {
+        counterpartyMap[u.id] = getFullName(u);
+        if (u.is_archived) archivedCounterpartyIds.add(u.id);
+      });
+    }
   }
 
   return txns.map(t => {
     let relatedTitle = null;
     let counterpartyName = null;
+    let counterpartyId = null;
 
     if (t.related_type === 'job_post' && t.related_id) {
       const job = jobMap[t.related_id];
       if (job) {
         relatedTitle = job.job_title;
-        const counterpartyId = t.type === 'payout' ? job.talent_id : job.client_id;
+        counterpartyId = t.type === 'payout' ? job.talent_id : job.client_id;
         counterpartyName = counterpartyId ? counterpartyMap[counterpartyId] : null;
       }
     } else if (t.related_type === 'equipment_rental' && t.related_id) {
@@ -75,7 +88,8 @@ async function enrichTransactions(txns) {
         const listing = listingMap[rental.listing_id];
         if (listing) {
           relatedTitle = listing.equipment_name;
-          counterpartyName = listing.owner_id ? counterpartyMap[listing.owner_id] : null;
+          counterpartyId = listing.owner_id || null;
+          counterpartyName = counterpartyId ? counterpartyMap[counterpartyId] : null;
         }
       }
     }
@@ -85,6 +99,9 @@ async function enrichTransactions(txns) {
       userName: userMap[t.user_id] || t.user_id,
       relatedTitle,
       counterpartyName,
+      // Financial records stay visible for audit; flag archived owners instead.
+      userArchived: archivedUserIds.has(t.user_id),
+      counterpartyArchived: Boolean(counterpartyId && archivedCounterpartyIds.has(counterpartyId)),
     };
   });
 }

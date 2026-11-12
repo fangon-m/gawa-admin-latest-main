@@ -226,3 +226,117 @@ is printed to the server stdout instead of being delivered.
 - `npm run build` -> succeeds
 - Pre-existing: `server/controllers/__tests__/appeals.test.js` is empty, so plain
   `npx jest` / `npm test` still reports that suite as failed.
+
+## Archived Account Content Visibility
+
+Archiving a user (archive + auth ban) no longer leaves their content in active views.
+Job posts and proposals are hidden by archive markers (status untouched); equipment
+listings are additionally flipped to `unavailable`, which is what the mobile app
+reads. Unarchiving reverses both.
+
+### Archive / unarchive markers
+- `POST /users/:id/archive` stamps `job_posts.client_archived_at` for the client's
+  posts, `job_proposals.proposer_archived_at` for talent and contractor proposals,
+  and stamps `equipment_listings.archived_at` + flips its status from `available`
+  to `unavailable` (the signal the mobile app reads). Response gains
+  `archivedContent: { jobPosts, proposals, listings }`.
+- `POST /users/:id/unarchive` clears the marker stamped with that same
+  `archived_at` (so posts the owner archived themselves are left alone) and
+  falls back to clearing **every** archive marker when the timestamp does not
+  match (legacy/re-archive data). Listings are restored **by marker**, not by
+  `updated_at` equality, so listings touched after the archive still return.
+  Markerless rows are restored when `updated_at >= archived_at`, and as a last
+  resort every `unavailable` listing owned by the restored account is brought
+  back. Response gains `restoredContent`.
+- `rented` / already-`unavailable` listings are untouched on archive.
+- Code tolerates databases without the listing marker columns (PostgREST
+  `42703` / `PGRST204`): it falls back to status-only flips and timestamp-based
+  restores.
+
+### Startup reconciliation
+- `server/utilities/archiveContent.js` exports `reconcileArchivedAccounts()`.
+  `server/server.js` runs it once after a 30s warm-up (disable with
+  `DISABLE_ARCHIVE_RECONCILE=true`).
+- It re-stamps every archived account and heals listings left `unavailable` by
+  accounts that were already unarchived before the markers existed, so legacy
+  cases self-correct without manual SQL.
+
+### Active views vs. history
+- `GET /jobs` and `GET /listings` exclude content owned by archived accounts;
+  `GET /jobs` also excludes posts with `client_archived_at` set and
+  `GET /listings` excludes listings with `archived_at` set
+  (`server/utilities/visibility.js`), so visibility no longer depends on status
+  alone.
+- Owner-scoped requests (`/jobs?userId=`, `/jobs?clientId=`, `/listings?ownerId=`)
+  skip those filters, so UserDetail keeps showing the archived account's jobs,
+  listings and proposals.
+- `GET /activity-log` accepts `relatedUserId`, which lets UserDetail show the
+  `user_archived` / `user_unarchived` entries for the account.
+
+### UserDetail
+- Profile shows Archived At, Archived By (resolved name when available) and
+  Archive Reason.
+- New History tab (admin only, `viewAuditLogs`) lists the account's admin activity.
+
+### Files
+- New: `server/utilities/visibility.js`, `server/utilities/archiveContent.js`,
+  `server/controllers/__tests__/archivedOwnerVisibility.test.js`,
+  `server/controllers/__tests__/archiveContent.test.js`
+- Changed: `server/controllers/{users,jobs,listings,activityLog}.js`,
+  `server/server.js`, `server/middleware/validate.js`, `server/db/schema.sql`,
+  `client/src/pages/UserDetail.jsx`, `client/src/pages/UserDetail.test.jsx`,
+  `server/controllers/__tests__/usersArchive.test.js`
+
+### Transactions (financial records are never hidden)
+Transactions and the trust ledger keep every archived account's records for audit.
+`GET /transactions` and `GET /transactions/:id` now return `userArchived` and
+`counterpartyArchived`; the Transactions list and detail show an Archived badge
+next to the user/counterparty instead of dropping the row.
+- Changed: `server/controllers/transactions.js`,
+  `client/src/pages/Transactions.jsx`, `client/src/pages/TransactionDetail.jsx`,
+  `server/controllers/__tests__/transactionsTrustLedgerVisibility.test.js`
+
+### Dashboard activity + notification settings cleanup
+- Recent Admin/Support Actions now only shows admin-portal activity types
+  (mobile consumer activity stays out), renders human labels (`User Archived`)
+  instead of raw codes, resolves the target account name instead of its UUID
+  (including rewriting UUIDs embedded in older descriptions, deduped per
+  action + account), and shows `Daniel Reyes` rather than `d4444444-...`.
+- User/account activity descriptions (suspend, reinstate, flag, archive,
+  unarchive, delete) now use the account's display name, not its UUID.
+- Removed Settings -> Notifications preferences tab; notification preferences
+  (`gawa_notification_prefs`) and `preferences`/`togglePreference` are gone from
+  `NotificationContext`. Notifications are inbound events (verification,
+  messages, reports/CRM) and no longer filtered by admin preferences.
+- Changed: `server/controllers/{dashboard,activityLog,users}.js`,
+  `client/src/context/NotificationContext.jsx`, `client/src/pages/Settings.jsx`
+
+### Friendly user URLs (no UUID in the address bar)
+- User detail is now addressed as `/users/USR-630212` (the same short numeric ID
+  the UI already shows) instead of the raw account UUID.
+- New `server/utilities/entityIds.js` mirrors the client `formatEntityIdNumeric`
+  hash and resolves a friendly ID back to the account UUID (60s cache over
+  `users_table` ids; ambiguous IDs resolve to 404 so the wrong account never
+  opens).
+- New `server/middleware/resolveUser.js` resolves `:id` on every user route
+  (`GET/PATCH/DELETE /users/:id`, `/users/:id/proposals`, suspend, reinstate,
+  archive, unarchive, flag, password actions); UUIDs still work.
+- New `client/src/utils/helpers.js` helper `userEntityPath(id)`; all admin
+  links to a user profile (Users, Transactions, Trust Ledger, Gawa Points,
+  Jobs, Rentals, Listings, Verification, Review Workflow, Disputes, Escalations)
+  now use it, and UserDetail uses the resolved UUID for its data calls.
+
+### Friendly URLs for every entity type
+- `server/utilities/entityIds.js` now resolves friendly IDs for all entity types:
+  `user` (users_table), `job` (job_posts), `listing` (equipment_listings),
+  `rental` (equipment_rentals) and `transaction` (transactions), each with its
+  own prefix (USR-, JOB-, LST-, RNT-, TXN-) and a 60s per-type cache.
+- `server/middleware/resolveEntity.js` (`resolveEntityParam(type)`) resolves the
+  `:id` route param for the user, job, listing, rental and transaction routes;
+  raw UUIDs still work and ambiguous IDs answer 404.
+- Client helpers `jobEntityPath`, `listingEntityPath`, `rentalEntityPath` and
+  `transactionEntityPath` join `userEntityPath`; every admin link now uses a
+  friendly URL (`/jobs/JOB-358839`, `/listings/LST-534976`,
+  `/rentals/RNT-195912`, `/transactions/TXN-529804`).
+- Detail pages resolve the real UUID from the loaded row before calling notes,
+  flag/remove and escrow endpoints.

@@ -130,6 +130,7 @@ const schemas = {
   // Activity Log
   listActivityLog: z.object({
     userId: z.string().uuid('Invalid user ID').optional(),
+    relatedUserId: z.string().uuid('Invalid user ID').optional(),
     activityType: z.string().optional(),
     category: z.string().optional(),
     scope: z.enum(['all', 'admin']).optional().default('all'),

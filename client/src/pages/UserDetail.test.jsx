@@ -119,7 +119,7 @@ describe('UserDetail', () => {
     };
 
     useApiDataMock.mockImplementation(() => {
-      const currentCall = callIndex++ % 5;
+      const currentCall = callIndex++ % 6;
       if (currentCall === 0) {
         return { data: userData, loading: false, refetch: vi.fn() };
       }
@@ -138,6 +138,9 @@ describe('UserDetail', () => {
       }
       if (currentCall === 4) {
         return { data: { data: [], stats: {} }, loading: false, refetch: vi.fn() };
+      }
+      if (currentCall === 5) {
+        return { data: [], loading: false, refetch: vi.fn() };
       }
       return { data: [], loading: false, refetch: vi.fn() };
     });

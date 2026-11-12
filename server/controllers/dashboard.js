@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { activityTypeLabel, ADMIN_ACTIVITY_TYPES } = require('./activityLog');
 
 async function getStats(req, res) {
   // Ensure connection is alive before running queries
@@ -50,7 +51,7 @@ async function getStats(req, res) {
       .in('status', ['completed', 'escrow', 'held'])
       .order('created_at', { ascending: true })),
     safeQuery(supabase.from('users_table').select('role').not('role', 'in', '("admin","customer_support")')),
-    safeQuery(supabase.from('activity_log').select('*, users_table!activity_log_user_id_fkey(first_name, last_name, email)').order('created_at', { ascending: false }).limit(10)),
+    safeQuery(supabase.from('activity_log').select('*, users_table!activity_log_user_id_fkey(first_name, last_name, email), target:users_table!activity_log_related_user_id_fkey(first_name, last_name, email)').in('activity_type', ADMIN_ACTIVITY_TYPES).order('created_at', { ascending: false }).limit(10)),
     safeQuery(supabase.from('id_verifications').select('*').eq('status', 'pending').order('submitted_at', { ascending: false }).limit(5)),
   ]);
 
@@ -112,16 +113,33 @@ async function getStats(req, res) {
     amount: Math.round(amount),
   }));
 
-  // Recent actions
-  const recentActions = (recentActionsData.data || []).map(a => {
-    const actor = a.users_table || {};
-    return {
-      action: a.activity_type,
-      agent: getFullName(actor) || actor.email || 'System',
-      target: a.description,
-      date: a.created_at,
-    };
-  });
+  // Recent actions: human-readable labels/names, one row per action + target.
+  const seenActions = new Set();
+  const recentActions = (recentActionsData.data || [])
+    .map(a => {
+      const actor = a.users_table || {};
+      const targetUser = a.target || {};
+      const targetName = getFullName(targetUser) || targetUser.email || null;
+      let target = a.description || '';
+      // Older rows embed the raw account UUID; show the account name instead.
+      if (targetName && a.related_user_id) {
+        target = target.split(a.related_user_id).join(targetName);
+      }
+      return {
+        action: activityTypeLabel(a.activity_type),
+        actionType: a.activity_type,
+        agent: getFullName(actor) || actor.email || 'System',
+        target,
+        relatedUserId: a.related_user_id || null,
+        date: a.created_at,
+      };
+    })
+    .filter(row => {
+      const key = `${row.actionType}:${row.relatedUserId || row.target}`;
+      if (seenActions.has(key)) return false;
+      seenActions.add(key);
+      return true;
+    });
 
   // Growth rates (compare current month vs previous month)
   const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();

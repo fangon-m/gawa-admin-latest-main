@@ -23,13 +23,14 @@ function otherParticipant(user) {
     userId: user.id,
     name: getFullName(user),
     role: user.role || null,
+    isArchived: Boolean(user.is_archived),
   };
 }
 
 async function loadUser(userId) {
   return supabase
     .from('users_table')
-    .select('id, first_name, middle_name, last_name, email, role')
+    .select('id, first_name, middle_name, last_name, email, role, is_archived')
     .eq('id', userId)
     .maybeSingle();
 }
@@ -102,7 +103,7 @@ async function listConversations(req, res) {
 
   const { data: users, error: usersError } = await supabase
     .from('users_table')
-    .select('id, first_name, middle_name, last_name, email, role')
+    .select('id, first_name, middle_name, last_name, email, role, is_archived')
     .in('id', userIds);
   if (usersError) return res.status(500).json({ error: usersError.message });
 
@@ -181,6 +182,9 @@ async function sendMessage(req, res) {
   if (userError) return res.status(500).json({ error: userError.message });
   if (!user) return res.status(404).json({ error: 'User not found' });
   if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
+  if (user.is_archived) {
+    return res.status(409).json({ error: 'Archived accounts cannot receive messages. Unarchive the account first.' });
+  }
 
   const createdAt = new Date().toISOString();
   const messageHash = createHash('sha256').update(text).digest('hex');

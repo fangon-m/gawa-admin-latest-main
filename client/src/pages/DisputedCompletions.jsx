@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { listDisputed, resolveDispute } from '../api/completions';
-import { formatDate, formatDateTime, formatCurrency, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, timeAgo, userEntityPath, jobEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
@@ -62,7 +62,7 @@ export default function DisputedCompletions() {
     {
       key: 'clientName',
       label: 'Client',
-      render: (row) => row.clientName || row.clientId?.slice(0, 8) || 'Unknown',
+      render: (row) => row.clientName || formatEntityIdNumeric(row.clientId, 'USR-') || 'Unknown',
     },
     {
       key: 'talentName',
@@ -117,7 +117,7 @@ export default function DisputedCompletions() {
         'moderation_decision',
         `Dispute ${actionModal.action === 'approve' ? 'Approved' : 'Rejected'}`,
         `${actionModal.job.jobTitle} — ${adminNote.trim()}`,
-        `/jobs/${actionModal.job.jobPostId}`
+        jobEntityPath(actionModal.job.jobPostId)
       );
 
       setActionModal(null);
@@ -322,7 +322,7 @@ export default function DisputedCompletions() {
                 <div className="card">
                   <div className="card-header">
                     <h3><User size={14} /> Client</h3>
-                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/users/${selectedJob.clientId}`)}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(userEntityPath(selectedJob.clientId))}>
                       <ExternalLink size={13} /> Profile
                     </button>
                   </div>
@@ -339,7 +339,7 @@ export default function DisputedCompletions() {
                   <div className="card-header">
                     <h3><Briefcase size={14} /> Talent</h3>
                     {selectedJob.talent?.talentId && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/users/${selectedJob.talent.talentId}`)}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => navigate(userEntityPath(selectedJob.talent.talentId))}>
                         <ExternalLink size={13} /> Profile
                       </button>
                     )}

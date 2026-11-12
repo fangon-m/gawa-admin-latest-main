@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listRentals } from '../api/rentals';
-import { formatDate, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
+import { formatDate, formatCurrency, formatEntityIdNumeric, rentalEntityPath, listingEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -43,7 +43,7 @@ export default function Rentals() {
   }, [search, rentals]);
 
   const columns = [
-    { key: 'listingTitle', label: 'Equipment', render: (row) => <span className="cell-link" onClick={(e) => { e.stopPropagation(); if (row.listingId) navigate(`/listings/${row.listingId}`); }}>{row.listingTitle || row.equipmentName || 'N/A'}</span> },
+    { key: 'listingTitle', label: 'Equipment', render: (row) => <span className="cell-link" onClick={(e) => { e.stopPropagation(); if (row.listingId) navigate(listingEntityPath(row.listingId)); }}>{row.listingTitle || row.equipmentName || 'N/A'}</span> },
     { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.rentalId || row.id, 'RNT-')}</span> },
     { key: 'renterName', label: 'Renter' },
     { key: 'ownerName', label: 'Owner' },
@@ -66,7 +66,7 @@ export default function Rentals() {
           <DataTable
             columns={columns}
             data={filtered}
-            onRowClick={(row) => { if (row.rentalId) navigate(`/rentals/${row.rentalId}`); }}
+            onRowClick={(row) => { if (row.rentalId) navigate(rentalEntityPath(row.rentalId)); }}
             pageSize={10}
             emptyMessage={loading ? 'Loading...' : 'No rentals found.'}
           />

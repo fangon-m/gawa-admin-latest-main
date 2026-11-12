@@ -5,7 +5,7 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { getById as getListingById, flag as flagListing, remove as removeListing } from '../api/listings';
 import * as rentalsApi from '../api/rentals';
-import { formatDate, formatCurrency } from '../utils/helpers';
+import { formatDate, formatCurrency, userEntityPath, listingEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import DataTable from '../components/common/DataTable';
@@ -38,7 +38,9 @@ export default function ListingDetail() {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
-  const { data: rentals } = useApiData(() => rentalsApi.list({ listingId: id, limit: 50 }), [id], {
+  // The route carries the friendly ID (LST-123456); data calls need the UUID.
+  const listingId = listing?.listingId || id;
+  const { data: rentals } = useApiData(() => rentalsApi.list({ listingId, limit: 50 }), [listingId], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
   });
@@ -82,7 +84,7 @@ export default function ListingDetail() {
             <div>
               <h2 style={{ fontSize: '1.125rem', fontWeight: 700 }}>{listing.equipmentName}</h2>
               <div style={{ display: 'flex', gap: '0.5rem', color: 'var(--color-text-muted)', fontSize: 13, marginTop: 2 }}>
-                <span>by <span className="cell-link" onClick={() => navigate(`/users/${listing.ownerId}`)}>{listing.ownerName}</span></span>
+                <span>by <span className="cell-link" onClick={() => navigate(userEntityPath(listing.ownerId))}>{listing.ownerName}</span></span>
                 {listing.equipmentCondition && <span>{listing.equipmentCondition}</span>}
               </div>
             </div>

@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { getById as getRentalById, flag as flagRental, remove as removeRental } from '../api/rentals';
-import { formatDateTime, formatCurrency } from '../utils/helpers';
+import { formatDateTime, formatCurrency, userEntityPath, rentalEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
@@ -36,6 +36,8 @@ export default function RentalDetail() {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
+  // The route carries the friendly ID (RNT-123456); data calls need the UUID.
+  const rentalId = rental?.rentalId || id;
 
   const [doFlag] = useMutation(flagRental);
   const [doRemove] = useMutation(removeRental);
@@ -43,9 +45,9 @@ export default function RentalDetail() {
   const handleAction = async (action) => {
     try {
       if (action === 'flag') {
-        await doFlag(id);
+        await doFlag(rentalId);
       } else if (action === 'remove') {
-        await doRemove(id);
+        await doRemove(rentalId);
         setShowConfirm(null);
         navigate('/rentals');
         return;
@@ -92,7 +94,7 @@ export default function RentalDetail() {
 
   return (
     <div>
-      <Header title={`Rental ${rental.rentalId?.slice(0, 8) || rental.id?.slice(0, 8)}`} />
+      <Header title={`Rental ${formatEntityIdNumeric(rental.rentalId || rental.id, 'RNT-')}`} />
       <div className="card mb-4">
         <div className="card-body" style={{ padding: 'var(--space-3) var(--space-5)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
@@ -113,11 +115,11 @@ export default function RentalDetail() {
             <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={rental.rentalStatus} /></div></div>
             <div className="detail-field"><div className="detail-label">Renter</div><div className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <User size={14} />
-              <span className="cell-link" onClick={() => navigate(`/users/${rental.renterId}`)}>{rental.renterName}</span>
+              <span className="cell-link" onClick={() => navigate(userEntityPath(rental.renterId))}>{rental.renterName}</span>
             </div></div>
             <div className="detail-field"><div className="detail-label">Owner</div><div className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <User size={14} />
-              <span className="cell-link" onClick={() => navigate(`/users/${rental.ownerId}`)}>{rental.ownerName}</span>
+              <span className="cell-link" onClick={() => navigate(userEntityPath(rental.ownerId))}>{rental.ownerName}</span>
             </div></div>
             <div className="detail-field"><div className="detail-label">Rental Period</div><div className="detail-value" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Calendar size={14} />

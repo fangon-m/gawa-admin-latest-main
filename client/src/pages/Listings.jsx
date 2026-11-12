@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listListings } from '../api/listings';
-import { formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
+import { formatCurrency, formatEntityIdNumeric, listingEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
 import FilterBar from '../components/common/FilterBar';
@@ -38,7 +38,7 @@ export default function Listings() {
   }, [search, fil, listings]);
 
   const columns = [
-    { key: 'equipmentName', label: 'Equipment', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(`/listings/${row.listingId}`); }}>{row.equipmentName}</span> },
+    { key: 'equipmentName', label: 'Equipment', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }}>{row.equipmentName}</span> },
     { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.listingId, 'LST-')}</span> },
     { key: 'ownerName', label: 'Owner' },
     { key: 'dayPricing', label: 'Day Rate', render: (row) => formatCurrency(row.dayPricing) },
@@ -56,7 +56,7 @@ export default function Listings() {
           <FilterBar filters={filters} values={fil} onChange={(key, value) => setFil((p) => ({ ...p, [key]: value }))} />
         </div>
         <div className="card-body" style={{ padding: 0 }}>
-          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.listingId) navigate(`/listings/${row.listingId}`); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No listings found.'} />
+          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No listings found.'} />
         </div>
       </div>
     </div>

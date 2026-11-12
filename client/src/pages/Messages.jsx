@@ -81,7 +81,7 @@ export default function Messages() {
 
   const availableUsers = useMemo(() => {
     if (!showNewMessage) return [];
-    let list = allUsers.filter((u) => u.id !== currentUserId && !['admin', 'customer_support'].includes(u.role));
+    let list = allUsers.filter((u) => u.id !== currentUserId && !['admin', 'customer_support'].includes(u.role) && !u.isArchived && u.status !== 'archived');
     if (newSearch) {
       const q = newSearch.toLowerCase();
       list = list.filter((u) =>
@@ -242,7 +242,13 @@ export default function Messages() {
               <div className="messages-thread-body">
                 <MessageThread messages={activeData.messages || []} currentUserId={currentUserId} />
               </div>
-              <MessageComposer onSend={handleSend} disabled={sending} />
+              {otherParticipant?.isArchived ? (
+                <div style={{ padding: '1rem', textAlign: 'center', fontSize: 13, color: 'var(--color-text-muted)', borderTop: '1px solid var(--color-border)' }}>
+                  This account is archived. Unarchive it to send messages.
+                </div>
+              ) : (
+                <MessageComposer onSend={handleSend} disabled={sending} />
+              )}
             </>
           )}
         </div>

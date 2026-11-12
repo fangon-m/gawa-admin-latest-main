@@ -5,7 +5,7 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import * as gawaPointsApi from '../api/gawaPoints';
 import * as usersApi from '../api/users';
-import { formatDate, formatCurrency, formatNumber } from '../utils/helpers';
+import { formatDate, formatCurrency, formatNumber, userEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
@@ -221,7 +221,7 @@ export default function GawaPoints() {
   ];
 
   const txnCols = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.id?.slice(0, 8)}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'PTS-')}</span> },
     { key: 'userName', label: 'User' },
     { key: 'transactionType', label: 'Type', render: (row) => <StatusBadge status={row.transactionType} /> },
     { key: 'amount', label: 'Amount', render: (row) => (
@@ -315,7 +315,7 @@ export default function GawaPoints() {
         {tab === 'transactions' && (
           <div className="card">
             <div className="card-body" style={{ padding: 0 }}>
-              <DataTable columns={txnCols} data={transactions} pageSize={10} onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)} emptyMessage="No transactions found." />
+              <DataTable columns={txnCols} data={transactions} pageSize={10} onRowClick={(row) => row.userId && navigate(userEntityPath(row.userId))} emptyMessage="No transactions found." />
             </div>
           </div>
         )}
@@ -323,7 +323,7 @@ export default function GawaPoints() {
         {tab === 'wallets' && (
           <div className="card">
             <div className="card-body" style={{ padding: 0 }}>
-              <DataTable columns={walletCols} data={wallets} pageSize={10} onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)} emptyMessage="No wallets found." />
+              <DataTable columns={walletCols} data={wallets} pageSize={10} onRowClick={(row) => row.userId && navigate(userEntityPath(row.userId))} emptyMessage="No wallets found." />
             </div>
           </div>
         )}

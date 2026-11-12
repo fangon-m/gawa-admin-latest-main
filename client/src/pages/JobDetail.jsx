@@ -6,7 +6,7 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { getById as getJobById, flag as flagJob, remove as removeJob } from '../api/jobs';
 import * as entityNotesApi from '../api/entityNotes';
-import { formatDate, formatCurrency } from '../utils/helpers';
+import { formatDate, formatCurrency, userEntityPath, jobEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import StatusBadge from '../components/common/StatusBadge';
@@ -39,16 +39,20 @@ export default function JobDetail() {
     );
   }
 
-  const { data: jobNotes, refetch: refetchJobNotes } = useApiData(
-    () => entityNotesApi.list('job_posts', id).catch(() => []),
-    [id],
-    { defaultValue: [], transform: (r) => r?.data ?? r ?? [] }
-  );
-
   const { data: job, loading, error, refetch } = useApiData(() => getJobById(id), [id], {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
+
+  // The route carries the friendly ID (JOB-123456); every data call needs the
+  // real job id returned by the API.
+  const jobId = job?.jobPostId || id;
+
+  const { data: jobNotes, refetch: refetchJobNotes } = useApiData(
+    () => entityNotesApi.list('job_posts', jobId).catch(() => []),
+    [jobId],
+    { defaultValue: [], transform: (r) => r?.data ?? r ?? [] }
+  );
 
   if (loading) {
     return (
@@ -89,8 +93,8 @@ export default function JobDetail() {
 
   const handleAction = async (action) => {
     try {
-      if (action === 'flag') await flagJob(id);
-      else if (action === 'remove') await removeJob(id);
+      if (action === 'flag') await flagJob(jobId);
+      else if (action === 'remove') await removeJob(jobId);
       setShowConfirm(null);
       refetch();
     } catch (err) { console.error('Job action failed:', err); }
@@ -171,7 +175,7 @@ export default function JobDetail() {
                         <span style={{ fontSize: 13 }}>
                           <strong
                             className="cell-link"
-                            onClick={(e) => { e.stopPropagation(); navigate(`/users/${acceptedMatch.userId}`); }}
+                            onClick={(e) => { e.stopPropagation(); navigate(userEntityPath(acceptedMatch.userId)); }}
                           >
                             {acceptedMatch.userName}
                           </strong>
@@ -190,7 +194,7 @@ export default function JobDetail() {
                           <span
                             className="cell-link"
                             style={{ fontWeight: 600, fontSize: 13 }}
-                            onClick={(e) => { e.stopPropagation(); navigate(`/users/${m.userId}`); }}
+                            onClick={(e) => { e.stopPropagation(); navigate(userEntityPath(m.userId)); }}
                           >
                             {m.userName}
                           </span>
@@ -252,8 +256,8 @@ export default function JobDetail() {
               notes={jobNotes}
               onAddNote={async (note) => {
                 try {
-                  await doAddNote('job_posts', id, note.text);
-                  addNotification('moderation_decision', 'Note Added on Job', `Note added to job "${job.jobTitle}"`, `/jobs/${id}`);
+                  await doAddNote('job_posts', jobId, note.text);
+                  addNotification('moderation_decision', 'Note Added on Job', `Note added to job "${job.jobTitle}"`, jobEntityPath(jobId));
                   refetchJobNotes();
                 } catch (err) { console.error('Add note failed:', err); }
               }}

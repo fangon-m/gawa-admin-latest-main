@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import * as usersApi from '../api/users';
@@ -17,7 +16,6 @@ import ConfirmModal from '../components/common/ConfirmModal';
 export default function Settings() {
   const { user, refetchUser } = useAuth();
   const { can } = usePermissions(user?.role);
-  const { preferences, togglePreference } = useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
 
@@ -80,7 +78,7 @@ export default function Settings() {
     { key: 'security', label: 'Password & Security' },
     { key: 'sessions', label: 'Active Sessions' },
     { key: 'activity', label: 'Admin Activity' },
-    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }, { key: 'notifications', label: 'Notifications' }] : []),
+    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }] : []),
   ];
 
   const [activeSessions, setActiveSessions] = useState([
@@ -527,29 +525,6 @@ export default function Settings() {
                 <button type="submit" className="btn btn-primary">Create Account</button>
               </form>
             </div>
-          </div>
-        )}
-
-        {tab === 'notifications' && can('manageSettings') && (
-          <div className="settings-card">
-            <div className="settings-card-title">Notification Preferences</div>
-            <p style={{ fontSize: 14, color: 'var(--color-text-muted)', marginBottom: '1rem' }}>Choose which types of notifications you'd like to receive.</p>
-            {[
-              { key: 'user_registrations', label: 'New user registrations' },
-              { key: 'verification_requests', label: 'Verification requests' },
-              { key: 'dispute_filings', label: 'Dispute filings' },
-              { key: 'appeal_filings', label: 'Appeal filings' },
-              { key: 'flagged_content', label: 'Flagged content' },
-              { key: 'new_reports', label: 'New reports' },
-            ].map(({ key, label }) => (
-              <div key={key} className="settings-row">
-                <span style={{ fontSize: 14 }}>{label}</span>
-                <label className="toggle">
-                  <input type="checkbox" checked={preferences[key]} onChange={() => togglePreference(key)} />
-                  <span className="toggle-slider" />
-                </label>
-              </div>
-            ))}
           </div>
         )}
       </div>

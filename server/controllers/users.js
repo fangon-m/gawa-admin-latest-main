@@ -2,6 +2,7 @@ const supabase = require('../db/supabase');
 const config = require('../config');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
 const { logAdminActivity } = require('../utilities/activityLogger');
+const { stampArchivedContent, clearArchivedContentMarkers } = require('../utilities/archiveContent');
 const invites = require('../services/invites');
 const passwordResets = require('../services/passwordResets');
 const tempPasswords = require('../services/tempPasswords');
@@ -11,6 +12,12 @@ const { renderPasswordResetEmail } = require('../services/emailTemplates/passwor
 const { renderTempPasswordEmail } = require('../services/emailTemplates/tempPassword');
 
 const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, suspension_status, suspended_until, suspension_reason, suspension_updated_at, escalated_to_deletion, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
+
+// Admin activity descriptions should name the account, never expose its UUID.
+function userDisplayName(user, fallbackId) {
+  if (!user) return fallbackId;
+  return getFullName(user) || user.email || fallbackId;
+}
 
 function mapUser(u) {
   const suspensionActive = u.suspension_status === 'active' || u.suspension_status === 'escalated';
@@ -158,6 +165,12 @@ async function getUserById(req, res) {
 
   if (error || !user) return res.status(404).json({ error: 'User not found' });
 
+  // Accounts archived before content archiving existed still show listings as
+  // available on the mobile app; re-stamping is idempotent.
+  if (user.is_archived && user.archived_at) {
+    await stampArchivedContent(user.id, user.archived_at);
+  }
+
   const [notesRes, rolesRes] = await Promise.all([
     supabase.from('user_notes').select('*').eq('user_id', req.params.id),
     supabase.from('user_roles').select('*, roles(role_name)').eq('user_id', req.params.id),
@@ -174,6 +187,16 @@ async function getUserById(req, res) {
 
   const skillsMap = await fetchEntitySkills([req.params.id], 'profile');
 
+  let archivedByName = null;
+  if (user.archived_by) {
+    const { data: archiver } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name')
+      .eq('id', user.archived_by)
+      .maybeSingle();
+    if (archiver) archivedByName = getFullName(archiver) || archiver.id;
+  }
+
   res.json({
     data: {
       ...mapUser(user),
@@ -184,6 +207,7 @@ async function getUserById(req, res) {
       suspendedUntil: user.suspended_until || null,
       suspensionReason: user.suspension_reason || null,
       escalatedToDeletion: user.escalated_to_deletion || false,
+      archivedByName,
     },
   });
 }
@@ -236,7 +260,7 @@ async function suspendUser(req, res) {
     activityType: 'user_suspended',
     category: 'user',
     relatedUserId: req.params.id,
-    description: `Admin suspended user ${req.params.id} for ${days} day(s): ${reason || 'no reason'}`,
+    description: `Admin suspended user ${userDisplayName(user, req.params.id)} for ${days} day(s): ${reason || 'no reason'}`,
   });
 
   res.json({
@@ -268,7 +292,7 @@ async function reinstateUser(req, res) {
     activityType: 'user_reinstated',
     category: 'user',
     relatedUserId: req.params.id,
-    description: `Admin reinstated user ${req.params.id}`,
+    description: `Admin reinstated user ${userDisplayName(user, req.params.id)}`,
   });
 
   res.json({ data: mapUser(user), message: 'User reinstated' });
@@ -277,11 +301,14 @@ async function reinstateUser(req, res) {
 async function flagUser(req, res) {
   const { data: user, error: fetchErr } = await supabase
     .from('users_table')
-    .select('id')
+    .select('id, is_archived, first_name, last_name, email')
     .eq('id', req.params.id)
     .single();
 
   if (fetchErr || !user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_archived) {
+    return res.status(409).json({ error: 'Archived accounts cannot be flagged. Unarchive the account first.' });
+  }
 
   const { data, error } = await supabase
     .from('entity_flags')
@@ -296,13 +323,19 @@ async function flagUser(req, res) {
     activityType: 'user_flagged',
     category: 'user',
     relatedUserId: req.params.id,
-    description: `Admin flagged user ${req.params.id}`,
+    description: `Admin flagged user ${userDisplayName(user, req.params.id)}`,
   });
 
   res.json({ data: { ...mapUser(user), status: 'flagged', flag: data }, message: 'User flagged' });
 }
 
 async function deleteUser(req, res) {
+  const { data: user } = await supabase
+    .from('users_table')
+    .select('id, first_name, last_name, email')
+    .eq('id', req.params.id)
+    .maybeSingle();
+
   const { error } = await supabase.auth.admin.deleteUser(req.params.id);
   if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
 
@@ -311,7 +344,7 @@ async function deleteUser(req, res) {
     activityType: 'user_deleted',
     category: 'user',
     relatedUserId: req.params.id,
-    description: `Admin deleted user ${req.params.id}`,
+    description: `Admin deleted user ${userDisplayName(user, req.params.id)}`,
   });
 
   res.json({ message: 'User deleted' });
@@ -325,7 +358,7 @@ async function archiveUser(req, res) {
 
   const { data: user, error: fetchError } = await supabase
     .from('users_table')
-    .select('id, role, is_archived')
+    .select('id, role, is_archived, first_name, last_name, email')
     .eq('id', userId)
     .maybeSingle();
 
@@ -371,22 +404,28 @@ async function archiveUser(req, res) {
     return res.status(502).json({ error: banError.message });
   }
 
+  const archivedContent = await stampArchivedContent(userId, archivedAt);
+
   logAdminActivity({
     actorId: req.user?.id,
     activityType: 'user_archived',
     category: 'user',
     relatedUserId: userId,
-    description: `Admin archived and banned user ${userId}: ${req.body.reason || 'no reason'}`,
+    description: `Admin archived and banned user ${userDisplayName(user, userId)}: ${req.body.reason || 'no reason'} (hid ${archivedContent.jobPosts} job post(s), ${archivedContent.proposals} proposal(s) and ${archivedContent.listings} listing(s) from active views)`,
   });
 
-  res.json({ data: mapUser(archivedUser), message: 'User archived and banned from signing in' });
+  res.json({
+    data: mapUser(archivedUser),
+    archivedContent,
+    message: 'User archived and banned from signing in',
+  });
 }
 
 async function unarchiveUser(req, res) {
   const userId = req.params.id;
   const { data: user, error: fetchError } = await supabase
     .from('users_table')
-    .select('id, is_archived')
+    .select('id, is_archived, archived_at, first_name, last_name, email')
     .eq('id', userId)
     .maybeSingle();
 
@@ -423,15 +462,23 @@ async function unarchiveUser(req, res) {
     return res.status(502).json({ error: unbanError.message });
   }
 
+  const restoredContent = user.archived_at
+    ? await clearArchivedContentMarkers(userId, user.archived_at)
+    : { jobPosts: 0, proposals: 0, listings: 0 };
+
   logAdminActivity({
     actorId: req.user?.id,
     activityType: 'user_unarchived',
     category: 'user',
     relatedUserId: userId,
-    description: `Admin unarchived and restored access for user ${userId}`,
+    description: `Admin unarchived and restored access for user ${userDisplayName(user, userId)} (restored ${restoredContent.jobPosts} job post(s), ${restoredContent.proposals} proposal(s) and ${restoredContent.listings} listing(s) to active views)`,
   });
 
-  res.json({ data: mapUser(restoredUser), message: 'User unarchived and sign-in restored' });
+  res.json({
+    data: mapUser(restoredUser),
+    restoredContent,
+    message: 'User unarchived and sign-in restored',
+  });
 }
 
 async function updateUser(req, res) {

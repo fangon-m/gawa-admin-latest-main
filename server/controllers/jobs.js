@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { getArchivedUserIds, applyArchivedOwnerFilter } = require('../utilities/visibility');
 
 async function enrichJobPosts(posts) {
   if (!posts || posts.length === 0) return [];
@@ -34,29 +35,43 @@ async function enrichJobPosts(posts) {
 async function listJobPosts(req, res) {
   const { page = 1, limit = 20, jobStatus, clientId, search, hiringOption, participantId } = req.query;
   const offset = (Math.max(1, +page) - 1) * +limit;
+  // Owner-scoped requests (user detail history) must still show archived accounts.
+  const ownerScoped = Boolean(clientId || participantId || req.query.userId);
 
-  let query = supabase.from('job_posts').select('*', { count: 'exact' });
-  if (jobStatus) query = query.eq('job_status', jobStatus);
-  if (hiringOption) query = query.eq('hiring_option', hiringOption);
-  if (participantId) {
-    const { data: matches } = await supabase
-      .from('job_matches')
-      .select('job_post_id')
-      .or(`client_id.eq.${participantId},user_id.eq.${participantId}`);
-    const postIds = [...new Set((matches || []).map(m => m.job_post_id))];
-    if (postIds.length > 0) {
-      query = query.in('job_post_id', postIds);
-    } else {
-      query = query.eq('client_id', participantId);
+  const runQuery = async (useArchiveMarker) => {
+    let query = supabase.from('job_posts').select('*', { count: 'exact' });
+    if (jobStatus) query = query.eq('job_status', jobStatus);
+    if (hiringOption) query = query.eq('hiring_option', hiringOption);
+    if (participantId) {
+      const { data: matches } = await supabase
+        .from('job_matches')
+        .select('job_post_id')
+        .or(`client_id.eq.${participantId},user_id.eq.${participantId}`);
+      const postIds = [...new Set((matches || []).map(m => m.job_post_id))];
+      if (postIds.length > 0) {
+        query = query.in('job_post_id', postIds);
+      } else {
+        query = query.eq('client_id', participantId);
+      }
+    } else if (clientId || req.query.userId) {
+      query = query.eq('client_id', clientId || req.query.userId);
     }
-  } else if (clientId || req.query.userId) {
-    query = query.eq('client_id', clientId || req.query.userId);
-  }
-  if (search) query = query.or(`job_title.ilike.%${search}%,job_description.ilike.%${search}%`);
+    if (search) query = query.or(`job_title.ilike.%${search}%,job_description.ilike.%${search}%`);
+    if (!ownerScoped) {
+      const archivedUserIds = await getArchivedUserIds();
+      query = applyArchivedOwnerFilter(query, 'client_id', archivedUserIds, useArchiveMarker ? 'client_archived_at' : null);
+    }
 
-  const { data, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(offset, offset + +limit - 1);
+    return query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + +limit - 1);
+  };
+
+  let { data, error, count } = await runQuery(true);
+  if (error?.code === '42703' || error?.code === 'PGRST204') {
+    // Older database without the owner archive marker: retry without it.
+    ({ data, error, count } = await runQuery(false));
+  }
 
   if (error) return res.status(500).json({ error: error.message });
 

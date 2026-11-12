@@ -10,8 +10,9 @@ import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
 import * as listingsApi from '../api/listings';
 import * as proposalsApi from '../api/proposals';
+import * as activityLogApi from '../api/activityLog';
 import * as assessmentAttemptsApi from '../api/assessmentAttempts';
-import { formatDate, formatDateTime, formatCurrency, formatEntityIdNumeric, getInitials, capitalizeWords, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, formatEntityIdNumeric, getInitials, capitalizeWords, timeAgo, userEntityPath, jobEntityPath, listingEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import Tabs from '../components/common/Tabs';
@@ -44,16 +45,19 @@ export default function UserDetail() {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
+  // The route carries the friendly ID (USR-123456); every data call needs the
+  // real account id returned by the API.
+  const userId = user?.id || null;
   const [doAddNote] = useMutation(notesApi.add);
-  const { data: userTransactions, loading: transactionsLoading } = useApiData(() => transactionsApi.list({ userId: id, limit: 50 }), [id], {
+  const { data: userTransactions, loading: transactionsLoading } = useApiData(() => (userId ? transactionsApi.list({ userId, limit: 50 }) : Promise.resolve({ data: [] })), [userId], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
   });
   const { data: userJobs, loading: jobsLoading } = useApiData(() => {
-    if (!user) return Promise.resolve([]);
-    if (user.role === 'client') return jobsApi.list({ userId: id, limit: 50 });
-    return proposalsApi.listByUser(id);
-  }, [id, user?.role], {
+    if (!userId) return Promise.resolve({ data: [] });
+    if (user.role === 'client') return jobsApi.list({ userId, limit: 50 });
+    return proposalsApi.listByUser(userId);
+  }, [userId, user?.role], {
     defaultValue: [],
     transform: (r) => {
       const rows = r?.data ?? r ?? [];
@@ -74,8 +78,8 @@ export default function UserDetail() {
     },
   });
   const { data: userListings, loading: listingsLoading } = useApiData(
-    () => listingsApi.list({ ownerId: id, limit: 50 }),
-    [id],
+    () => (userId ? listingsApi.list({ ownerId: userId, limit: 50 }) : Promise.resolve({ data: [] })),
+    [userId],
     {
       defaultValue: [],
       transform: (r) => r?.data ?? r ?? [],
@@ -90,8 +94,8 @@ export default function UserDetail() {
   const [userActionError, setUserActionError] = useState('');
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
-    () => assessmentAttemptsApi.getUserAttempts(id),
-    [id],
+    () => (userId ? assessmentAttemptsApi.getUserAttempts(userId) : Promise.resolve({ data: [], stats: {} })),
+    [userId],
     {
       defaultValue: { data: [], stats: { totalAttempts: 0, passedAttempts: 0, failedAttempts: 0, passRate: 0, lastAttemptDate: null, lastResult: null } },
       immediate: false,
@@ -102,6 +106,26 @@ export default function UserDetail() {
   useEffect(() => {
     if (activeTab === 'assessments') {
       refetchAttempts();
+    }
+  }, [activeTab]);
+
+  // Archive/unarchive history: the target account is activity_log.related_user_id,
+  // so the archive entries survive even after the account is restored.
+  const canViewHistory = can('viewAuditLogs');
+  const { data: userHistory, loading: historyLoading, refetch: refetchHistory } = useApiData(
+    () => (canViewHistory && userId ? activityLogApi.list({ relatedUserId: userId, limit: 100 }) : Promise.resolve([])),
+    [userId, canViewHistory],
+    {
+      defaultValue: [],
+      immediate: false,
+      transform: (r) => r?.data ?? r ?? [],
+    }
+  );
+
+  // Auto-load history when the history tab becomes active
+  useEffect(() => {
+    if (activeTab === 'history') {
+      refetchHistory();
     }
   }, [activeTab]);
 
@@ -138,7 +162,7 @@ export default function UserDetail() {
     );
   }
 
-  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes'];
+  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes', ...(canViewHistory ? ['history'] : [])];
 
   const handleAction = async (action) => {
     try {
@@ -147,17 +171,17 @@ export default function UserDetail() {
           suspensionDays === 'custom'
             ? Math.max(1, Math.min(90, Number(suspensionCustom) || 7))
             : suspensionDays;
-        await suspend(id, { duration, reason: suspensionReason });
+        await suspend(user.id, { duration, reason: suspensionReason });
       } else if (action === 'reinstate') {
-        await reinstate(id);
+        await reinstate(user.id);
       } else if (action === 'archive') {
-        await archiveUser(id, archiveReason.trim());
+        await archiveUser(user.id, archiveReason.trim());
       } else if (action === 'unarchive') {
-        await unarchiveUser(id);
+        await unarchiveUser(user.id);
       } else if (action === 'flag') {
-        await flagUser(id);
+        await flagUser(user.id);
       } else return;
-      addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, `/users/${user.id}`);
+      addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, userEntityPath(user.id));
       setUserActionError('');
       refetch();
       setShowConfirm(null);
@@ -175,26 +199,26 @@ export default function UserDetail() {
   const isExpiredSuspension = isSuspended && user.suspendedUntil && new Date(user.suspendedUntil) < new Date();
 
   const actionButtons = [
-    { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended },
-    { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended },
+    { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended && !isArchived },
+    { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended && !isArchived },
     { label: 'Archive & Ban Account', action: 'archive', permission: 'archiveUser', show: !isArchived },
     { label: 'Unarchive & Restore Access', action: 'unarchive', permission: 'unarchiveUser', show: isArchived },
-    { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: true },
+    { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: !isArchived },
   ];
 
   const getJobId = (row) => row.jobPostId || row.job_post_id || row.id || row.jobPost?.jobPostId || row.jobPost?.job_post_id;
   
   const clientJobColumns = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{getJobId(row)?.slice(0, 8)}</span> },
-    { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(`/jobs/${jobId}`); }}>{row.jobTitle || row.job_title || row.title || 'Untitled job'}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(getJobId(row), 'JOB-')}</span> },
+    { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(jobEntityPath(jobId)); }}>{row.jobTitle || row.job_title || row.title || 'Untitled job'}</span> },
     { key: 'hiringOption', label: 'Type', render: (row) => <StatusBadge status={row.hiringOption || row.hiring_option} /> },
     { key: 'jobStatus', label: 'Status', render: (row) => <StatusBadge status={row.jobStatus || row.job_status || row.status} /> },
     { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt || row.created_at) },
   ];
 
   const matchColumns = [
-    { key: 'id', label: 'Job ID', render: (row) => <span className="text-xs text-muted font-mono">{getJobId(row)?.slice(0, 8)}</span> },
-    { key: 'jobTitle', label: 'Job Title', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(`/jobs/${jobId}`); }}>{row.jobPost?.jobTitle || row.jobPost?.job_title || row.jobTitle || row.job_title || row.jobPostId || row.job_post_id || 'Untitled job'}</span> },
+    { key: 'id', label: 'Job ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(getJobId(row), 'JOB-')}</span> },
+    { key: 'jobTitle', label: 'Job Title', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(jobEntityPath(jobId)); }}>{row.jobPost?.jobTitle || row.jobPost?.job_title || row.jobTitle || row.job_title || row.jobPostId || row.job_post_id || 'Untitled job'}</span> },
     { key: 'agreedPrice', label: 'Agreed Price', render: (row) => formatCurrency(row.agreedPrice || row.agreed_price) },
     { key: 'status', label: 'Match Status', render: (row) => <StatusBadge status={row.status || row.match_status} /> },
     { key: 'connections', label: 'GP Used', render: (row) => row.connections ?? '-' },
@@ -233,7 +257,9 @@ export default function UserDetail() {
           {actionButtons.filter(b => b.show && can(b.permission)).map((btn) => (
             <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => setShowConfirm(btn.action)}>{btn.label}</button>
           ))}
-          <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
+          {!isArchived && (
+            <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
+          )}
         </div>
       </div>
 
@@ -249,7 +275,7 @@ export default function UserDetail() {
                 <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
                 <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
                 <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
-                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={user.id}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
+                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={formatEntityIdNumeric(user.id, 'USR-')}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
                 <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
                 {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
                 {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}
@@ -268,6 +294,24 @@ export default function UserDetail() {
                   <div className="detail-field">
                     <div className="detail-label">Suspension Reason</div>
                     <div className="detail-value">{user.suspensionReason}</div>
+                  </div>
+                )}
+                {isArchived && (
+                  <div className="detail-field">
+                    <div className="detail-label">Archived At</div>
+                    <div className="detail-value">{user.archivedAt ? formatDateTime(user.archivedAt) : 'N/A'}</div>
+                  </div>
+                )}
+                {isArchived && (
+                  <div className="detail-field">
+                    <div className="detail-label">Archived By</div>
+                    <div className="detail-value">{user.archivedByName || (user.archivedBy ? formatEntityIdNumeric(user.archivedBy, 'USR-') : 'N/A')}</div>
+                  </div>
+                )}
+                {isArchived && (
+                  <div className="detail-field">
+                    <div className="detail-label">Archive Reason</div>
+                    <div className="detail-value">{user.archiveReason || 'No reason recorded'}</div>
                   </div>
                 )}
                 <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
@@ -302,10 +346,10 @@ export default function UserDetail() {
             <div className="card-body p-0">
               <DataTable
                 columns={[
-                  { key: 'equipmentName', label: 'Listing', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(`/listings/${row.listingId}`); }}>{row.equipmentName}</span> },
-                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.listingId?.slice(0, 8)}</span> },
+                  { key: 'equipmentName', label: 'Listing', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }}>{row.equipmentName}</span> },
+                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.listingId, 'LST-')}</span> },
                   { key: 'dayPricing', label: 'Daily Rate', render: (row) => formatCurrency(row.dayPricing) },
-                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={isArchived && row.status === 'available' ? 'unavailable' : row.status} /> },
                 ]}
                 data={userListings}
                 loading={listingsLoading}
@@ -400,7 +444,7 @@ export default function UserDetail() {
                       {
                         key: 'assessmentInfo',
                         label: 'Category',
-                        render: (row) => row.assessmentInfo?.categoryName || row.assessmentId?.slice(0, 8) || 'N/A',
+                        render: (row) => row.assessmentInfo?.categoryName || formatEntityIdNumeric(row.assessmentId, 'ASM-') || 'N/A',
                       },
                       {
                         key: 'score',
@@ -456,10 +500,35 @@ export default function UserDetail() {
                 onAddNote={async (note) => {
                   try {
                     await doAddNote(user.id, note.text);
-                    addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, `/users/${user.id}`);
+                    addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, userEntityPath(user.id));
                     refetch();
                   } catch (err) { console.error('Add note failed:', err); }
                 }}
+              />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'history' && (
+          <div className="card">
+            <div className="card-header">
+              <h3>Account History</h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => refetchHistory()}>
+                <RefreshCw size={13} />
+              </button>
+            </div>
+            <div className="card-body p-0">
+              <DataTable
+                columns={[
+                  { key: 'createdAt', label: 'When', render: (row) => <span title={formatDateTime(row.createdAt)}>{formatDateTime(row.createdAt)}</span> },
+                  { key: 'activityTypeLabel', label: 'Action', render: (row) => <StatusBadge status={row.activityType} label={row.activityTypeLabel || row.activityType} /> },
+                  { key: 'agentName', label: 'By', render: (row) => row.agentName || 'System' },
+                  { key: 'description', label: 'Detail' },
+                ]}
+                data={userHistory}
+                loading={historyLoading}
+                emptyMessage="No account history recorded yet."
+                pageSize={10}
               />
             </div>
           </div>
@@ -475,7 +544,7 @@ export default function UserDetail() {
             </div>
             <div className="modal-body">
               <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '1rem' }}>
-                Archive <strong>{user.name}</strong>? Their records will be retained, new sign-ins will be blocked, and their access to this API will be denied. An admin can restore access later.
+                Archive <strong>{user.name}</strong>? Their records will be retained, new sign-ins will be blocked, and their access to this API will be denied. Their job posts, proposals and equipment listings (marked unavailable) will be hidden from active views until an admin restores access.
               </p>
               <label className="detail-label" htmlFor="archive-reason" style={{ display: 'block', marginBottom: '0.375rem' }}>Reason for archiving</label>
               <textarea

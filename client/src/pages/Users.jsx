@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listUsers } from '../api/users';
-import { formatDate, formatEntityIdNumeric, getInitials } from '../utils/helpers';
+import { formatDate, formatEntityIdNumeric, getInitials, userEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
 import FilterBar from '../components/common/FilterBar';
@@ -87,7 +87,7 @@ export default function Users() {
           <DataTable
             columns={columns}
             data={filtered}
-            onRowClick={(row) => { if (row.id) navigate(`/users/${row.id}`); }}
+            onRowClick={(row) => { if (row.id) navigate(userEntityPath(row.id)); }}
             pageSize={10}
             emptyMessage={loading ? 'Loading users...' : 'No users found matching your criteria.'}
           />

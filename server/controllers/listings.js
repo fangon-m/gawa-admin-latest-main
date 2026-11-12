@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { getArchivedUserIds, applyArchivedOwnerFilter } = require('../utilities/visibility');
 
 async function enrichEquipmentListings(listings) {
   if (!listings || listings.length === 0) return [];
@@ -31,14 +32,27 @@ async function listEquipmentListings(req, res) {
   const { page = 1, limit = 20, status, ownerId, search } = req.query;
   const offset = (Math.max(1, +page) - 1) * +limit;
 
-  let query = supabase.from('equipment_listings').select('*', { count: 'exact' });
-  if (status) query = query.eq('status', status);
-  if (ownerId) query = query.eq('owner_id', ownerId);
-  if (search) query = query.or(`equipment_name.ilike.%${search}%,equipment_description.ilike.%${search}%`);
+  const runQuery = async (useArchiveMarker) => {
+    let query = supabase.from('equipment_listings').select('*', { count: 'exact' });
+    if (status) query = query.eq('status', status);
+    if (ownerId) query = query.eq('owner_id', ownerId);
+    if (search) query = query.or(`equipment_name.ilike.%${search}%,equipment_description.ilike.%${search}%`);
+    // Owner-scoped requests (user detail history) must still show archived accounts.
+    if (!ownerId) {
+      const archivedUserIds = await getArchivedUserIds();
+      query = applyArchivedOwnerFilter(query, 'owner_id', archivedUserIds, useArchiveMarker ? 'archived_at' : null);
+    }
 
-  const { data, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(offset, offset + +limit - 1);
+    return query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + +limit - 1);
+  };
+
+  let { data, error, count } = await runQuery(true);
+  if (error?.code === '42703' || error?.code === 'PGRST204') {
+    // Older database without the listing archive marker: retry without it.
+    ({ data, error, count } = await runQuery(false));
+  }
 
   if (error) return res.status(500).json({ error: error.message });
   res.json({

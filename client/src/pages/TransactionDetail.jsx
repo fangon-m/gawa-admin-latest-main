@@ -4,7 +4,7 @@ import { getById as getTransactionById, releaseEscrow, processRefund, approvePay
 import { useApiData } from '../utils/useApiData';
 import { usePermissions } from '../utils/permissions';
 import { useAuth } from '../context/AuthContext';
-import { formatDateTime, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
+import { formatDateTime, formatCurrency, formatEntityIdNumeric, userEntityPath, jobEntityPath, rentalEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import ConfirmModal from '../components/common/ConfirmModal';
@@ -33,17 +33,19 @@ export default function TransactionDetail() {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
+  // The route carries the friendly ID (TXN-123456); data calls need the UUID.
+  const transactionId = txn?.id || id;
 
   const handleReleaseEscrow = async () => {
-    try { await releaseEscrow(id); setModal(null); refetch(); } catch (err) { console.error('Release escrow failed:', err); }
+    try { await releaseEscrow(transactionId); setModal(null); refetch(); } catch (err) { console.error('Release escrow failed:', err); }
   };
 
   const handleProcessRefund = async () => {
-    try { await processRefund(id, {}); setModal(null); refetch(); } catch (err) { console.error('Process refund failed:', err); }
+    try { await processRefund(transactionId, {}); setModal(null); refetch(); } catch (err) { console.error('Process refund failed:', err); }
   };
 
   const handleApprovePayout = async () => {
-    try { await approvePayout(id); setModal(null); refetch(); } catch (err) { console.error('Approve payout failed:', err); }
+    try { await approvePayout(transactionId); setModal(null); refetch(); } catch (err) { console.error('Approve payout failed:', err); }
   };
 
   if (loading) {
@@ -82,13 +84,13 @@ export default function TransactionDetail() {
             <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={txn.status} /></div></div>
             <div className="detail-field"><div className="detail-label">Payment Method</div><div className="detail-value">{txn.paymentMethod || 'N/A'}</div></div>
             <div className="detail-field"><div className="detail-label">Reference</div><div className="detail-value" style={{ fontSize: 13 }}>{txn.reference || 'N/A'}</div></div>
-            <div className="detail-field"><div className="detail-label">User</div><div className="detail-value"><span className="cell-link" onClick={() => navigate(`/users/${txn.userId}`)}>{txn.userName || txn.userId}</span></div></div>
-            <div className="detail-field"><div className="detail-label">Counterparty</div><div className="detail-value">{txn.counterpartyName || '—'}</div></div>
+            <div className="detail-field"><div className="detail-label">User</div><div className="detail-value"><span className="cell-link" onClick={() => navigate(userEntityPath(txn.userId))}>{txn.userName || txn.userId}</span>{txn.userArchived && <StatusBadge status="archived" label="Archived" />}</div></div>
+            <div className="detail-field"><div className="detail-label">Counterparty</div><div className="detail-value">{txn.counterpartyName || '—'}{txn.counterpartyArchived && <StatusBadge status="archived" label="Archived" />}</div></div>
             <div className="detail-field"><div className="detail-label">Related</div><div className="detail-value">
               {txn.relatedTitle && txn.relatedId && txn.relatedType && (
                 <span className="cell-link" onClick={() => {
-                  if (txn.relatedType === 'job_post') navigate(`/jobs/${txn.relatedId}`);
-                  else if (txn.relatedType === 'equipment_rental') navigate(`/rentals/${txn.relatedId}`);
+                  if (txn.relatedType === 'job_post') navigate(jobEntityPath(txn.relatedId));
+                  else if (txn.relatedType === 'equipment_rental') navigate(rentalEntityPath(txn.relatedId));
                 }}>{txn.relatedTitle}</span>
               )}
               {!txn.relatedTitle && '—'}

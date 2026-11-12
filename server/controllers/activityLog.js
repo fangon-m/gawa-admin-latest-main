@@ -69,6 +69,7 @@ const ADMIN_ACTIVITY_TYPES = [
 async function listActivityLog(req, res) {
   const {
     userId,
+    relatedUserId,
     activityType,
     category,
     scope,
@@ -83,6 +84,7 @@ async function listActivityLog(req, res) {
     .select('*, users_table!activity_log_user_id_fkey(first_name, last_name, email), target:users_table!activity_log_related_user_id_fkey(first_name, last_name, email)', { count: 'exact' });
 
   if (userId) query = query.eq('user_id', userId);
+  if (relatedUserId) query = query.eq('related_user_id', relatedUserId);
   if (activityType) query = query.eq('activity_type', activityType);
   if (category) query = query.eq('category', category);
   if (scope === 'admin') query = query.in('activity_type', ADMIN_ACTIVITY_TYPES);
@@ -158,4 +160,10 @@ async function createActivityLog(req, res) {
   res.status(201).json({ data: inserted });
 }
 
-module.exports = { listActivityLog, createActivityLog };
+module.exports = {
+  listActivityLog,
+  createActivityLog,
+  activityTypeLabel,
+  ACTIVITY_TYPE_MAP,
+  ADMIN_ACTIVITY_TYPES,
+};

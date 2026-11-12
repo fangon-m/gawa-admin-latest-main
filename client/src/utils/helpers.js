@@ -130,6 +130,36 @@ export function formatEntityIdNumeric(id, prefix = '') {
   return `${prefix}${num}`;
 }
 
+/**
+ * Build a user detail link that carries the friendly entity ID (USR-123456)
+ * instead of the raw account UUID.
+ */
+export function userEntityPath(id) {
+  const token = formatEntityIdNumeric(id, 'USR-');
+  return token ? `/users/${token}` : '/users';
+}
+
+function entityPath(base, id, prefix) {
+  const token = formatEntityIdNumeric(id, prefix);
+  return token ? `${base}/${token}` : base;
+}
+
+export function jobEntityPath(id) {
+  return entityPath('/jobs', id, 'JOB-');
+}
+
+export function listingEntityPath(id) {
+  return entityPath('/listings', id, 'LST-');
+}
+
+export function rentalEntityPath(id) {
+  return entityPath('/rentals', id, 'RNT-');
+}
+
+export function transactionEntityPath(id) {
+  return entityPath('/transactions', id, 'TXN-');
+}
+
 export function toQueryString(params) {
   const cleaned = {};
   if (params) {

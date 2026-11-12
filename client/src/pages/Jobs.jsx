@@ -8,7 +8,7 @@ import * as skillsApi from '../api/skills';
 import * as skillAssessmentsApi from '../api/skillAssessments';
 import * as assessmentQuestionsApi from '../api/assessmentQuestions';
 import * as assessmentAttemptsApi from '../api/assessmentAttempts';
-import { formatDate, formatCurrency, capitalizeWords, formatEntityIdNumeric } from '../utils/helpers';
+import { formatDate, formatCurrency, capitalizeWords, formatEntityIdNumeric, jobEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
 import FilterBar from '../components/common/FilterBar';
@@ -183,7 +183,7 @@ export default function Jobs() {
           render: (row) => (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Briefcase size={15} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-              <span className="cell-link" onClick={() => { if (row.jobPostId) navigate(`/jobs/${row.jobPostId}`); }}>{row.jobTitle}</span>
+              <span className="cell-link" onClick={() => { if (row.jobPostId) navigate(jobEntityPath(row.jobPostId)); }}>{row.jobTitle}</span>
             </div>
           ),
         },
@@ -200,7 +200,7 @@ export default function Jobs() {
     }
 
     return [
-      { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { if (row.jobPostId) navigate(`/jobs/${row.jobPostId}`); }}>{row.jobTitle}</span> },
+      { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { if (row.jobPostId) navigate(jobEntityPath(row.jobPostId)); }}>{row.jobTitle}</span> },
 { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.jobPostId, 'JOB-')}</span> },
       { key: 'hiringOption', label: 'Type', render: (row) => <StatusBadge status={row.hiringOption} /> },
       { key: 'clientName', label: 'Client' },
@@ -412,7 +412,7 @@ export default function Jobs() {
               )}
             </div>
             <div className="card-body p-0">
-              <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.jobPostId) navigate(`/jobs/${row.jobPostId}`); }} pageSize={10} emptyMessage={jobsLoading ? 'Loading...' : 'No jobs found.'} />
+              <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.jobPostId) navigate(jobEntityPath(row.jobPostId)); }} pageSize={10} emptyMessage={jobsLoading ? 'Loading...' : 'No jobs found.'} />
             </div>
           </div>
 

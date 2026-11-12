@@ -83,6 +83,7 @@ app.use((err, req, res, next) => {
 // Auto-process expired completion reviews every 5 minutes
 const supabase = require('./db/supabase');
 const { runModerationWarningSweep } = require('./utilities/moderationWarnings');
+const { reconcileArchivedAccounts } = require('./utilities/archiveContent');
 const REVIEW_DAYS = 3;
 async function autoProcessExpiredReviews() {
   try {
@@ -228,6 +229,37 @@ function scheduleModerationWarningSweep({
   return { startupDelayMs, intervalMs };
 }
 
+// One-shot pass that re-stamps content for accounts archived before the
+// archive markers existed, so their listings stop showing as available.
+async function runArchiveReconcile() {
+  try {
+    await supabase.ensureConnection();
+  } catch (err) {
+    console.error('[Archive] Database connection unavailable:', err.message);
+  }
+
+  const totals = await reconcileArchivedAccounts();
+  if (totals) {
+    console.log(
+      `  Archive reconcile: ${totals.accounts} account(s), ${totals.jobPosts} job post(s), ` +
+      `${totals.proposals} proposal(s), ${totals.listings} listing(s)`
+    );
+  }
+}
+
+function scheduleArchiveReconcile({ startupDelayMs = 30_000, onTick = runArchiveReconcile } = {}) {
+  if (process.env.DISABLE_ARCHIVE_RECONCILE === 'true') {
+    console.log('  Archive reconcile: disabled by environment');
+    return null;
+  }
+
+  setTimeout(() => {
+    onTick();
+  }, startupDelayMs);
+
+  return { startupDelayMs };
+}
+
 function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempts = 10) {
   const candidatePort = port + attempt;
   const server = app.listen(candidatePort, () => {
@@ -242,8 +274,10 @@ function startServer(port = Number(config.port) || 4000, attempt = 0, maxAttempt
     scheduleAutoProcessExpiredReviews();
     scheduleAutoResolveExpiredSuspensions();
     scheduleModerationWarningSweep();
+    scheduleArchiveReconcile();
     console.log(`  Auto-complete: starting after a 30s warm-up and then running every 5 minutes`);
     console.log(`  Moderation sweep: starting after a 30s warm-up and then running every ${Math.round(config.moderation.sweepIntervalMs / 60000)} minute(s)`);
+    console.log(`  Archive reconcile: one pass after a 30s warm-up`);
   });
 
   server.on('error', (error) => {
@@ -276,5 +310,6 @@ module.exports = {
   scheduleAutoProcessExpiredReviews,
   scheduleAutoResolveExpiredSuspensions,
   scheduleModerationWarningSweep,
+  scheduleArchiveReconcile,
   runModerationSweepTick,
 };

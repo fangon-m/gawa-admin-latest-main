@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { get, post } from '../api/client';
-import { formatDate, formatDateTime, formatCurrency, formatNumber } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, formatNumber, userEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -114,7 +114,7 @@ export default function TrustLedger() {
   };
 
   const columns = [
-    { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.displayId || row.id?.slice(0, 8)}</span> },
+    { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => (
       <StatusBadge status={row.type} label={row.isEquipmentEscrow ? 'Equipment Security Deposit' : row.type === 'deposit' ? 'Security Deposit' : row.type === 'job_payment' ? 'Job Payment' : 'Rental Payment'} />
     )},
@@ -185,7 +185,7 @@ export default function TrustLedger() {
             columns={columns}
             data={filtered}
             pageSize={10}
-            onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)}
+            onRowClick={(row) => row.userId && navigate(userEntityPath(row.userId))}
             emptyMessage={loading ? 'Loading...' : 'No trust ledger entries found.'}
           />
         </div>

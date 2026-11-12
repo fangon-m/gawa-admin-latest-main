@@ -58,6 +58,34 @@ describe('transactions and trust ledger visibility', () => {
     }));
   });
 
+  it('flags transactions whose owner account is archived instead of hiding them', async () => {
+    const transactionsQuery = makeQuery({
+      data: [{ id: 'archived-txn', user_id: 'archived-user', type: 'payout', status: 'pending' }],
+      count: 1,
+      error: null,
+    });
+    const usersQuery = makeQuery({
+      data: [{ id: 'archived-user', first_name: 'Ada', last_name: 'Lovelace', is_archived: true }],
+      error: null,
+    });
+    supabase.from
+      .mockReturnValueOnce(transactionsQuery)
+      .mockReturnValueOnce(usersQuery);
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await listTransactions({ query: {} }, res);
+
+    expect(usersQuery.select).toHaveBeenCalledWith('id, first_name, last_name, is_archived');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        id: 'archived-txn',
+        userName: 'Ada Lovelace',
+        userArchived: true,
+        counterpartyArchived: false,
+      })],
+    }));
+  });
+
   it('allows transaction detail lookup for held client funds', async () => {
     const transaction = {
       id: 'held-transaction-id',

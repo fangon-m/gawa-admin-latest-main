@@ -4,7 +4,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { list as listVerifications, approve, reject } from '../api/verifications';
-import { formatDateTime, capitalizeWords } from '../utils/helpers';
+import { formatDateTime, capitalizeWords, userEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
@@ -57,7 +57,7 @@ export default function Verification() {
     try {
       await doApprove(v.id);
       setSelected(null);
-      addNotification('verification_approved', 'Verification Approved', `Verification approved for ${v.userName}`, `/users/${v.userId}`);
+      addNotification('verification_approved', 'Verification Approved', `Verification approved for ${v.userName}`, userEntityPath(v.userId));
       refetch();
     } catch (err) { console.error('Approve verification failed:', err); }
   };
@@ -72,7 +72,7 @@ export default function Verification() {
     try {
       const remarks = rejectReason.trim() || null;
       await doReject(rejectDialog.id, { remarks });
-      addNotification('verification_rejected', 'Verification Rejected', `Verification rejected for ${rejectDialog.userName}${remarks ? `: ${remarks}` : ''}`, `/users/${rejectDialog.userId}`);
+      addNotification('verification_rejected', 'Verification Rejected', `Verification rejected for ${rejectDialog.userName}${remarks ? `: ${remarks}` : ''}`, userEntityPath(rejectDialog.userId));
       setRejectDialog(null);
       setSelected(null);
       setRejectReason('');

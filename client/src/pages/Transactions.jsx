@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listTransactions } from '../api/transactions';
-import { formatDate, formatCurrency, formatEntityIdNumeric } from '../utils/helpers';
+import { formatDate, formatCurrency, formatEntityIdNumeric, transactionEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -54,7 +54,12 @@ export default function Transactions() {
   const columns = [
     { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
-    { key: 'userName', label: 'User' },
+    { key: 'userName', label: 'User', render: (row) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        {row.userName}
+        {row.userArchived && <StatusBadge status="archived" label="Archived" />}
+      </span>
+    )},
     { key: 'relatedTitle', label: 'Related', render: (row) => <span className="text-xs text-muted">{row.relatedTitle || '—'}</span> },
     { key: 'amount', label: 'Amount', render: (row) => <span className={row.direction === 'out' ? 'text-danger' : 'text-success'}>{(row.direction === 'out' ? '-' : '+')} {formatCurrency(row.amount)}</span> },
     { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
@@ -77,7 +82,7 @@ export default function Transactions() {
           </div>
         </div>
         <div className="card-body p-0">
-          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.id) navigate(`/transactions/${row.id}`); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
+          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.id) navigate(transactionEntityPath(row.id)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
         </div>
       </div>
     </div>
