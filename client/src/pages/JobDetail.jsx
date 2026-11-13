@@ -6,14 +6,15 @@ import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { getById as getJobById, flag as flagJob, remove as removeJob } from '../api/jobs';
 import * as entityNotesApi from '../api/entityNotes';
-import { formatDate, formatCurrency, userEntityPath, jobEntityPath } from '../utils/helpers';
+import { formatDate, formatCurrency, formatPreferredStart, userEntityPath, jobEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
 import StatusBadge from '../components/common/StatusBadge';
 import NotesPanel from '../components/common/NotesPanel';
 import EvidenceGallery from '../components/common/EvidenceGallery';
+import CaseTimeline from '../components/common/CaseTimeline';
 import ConfirmModal from '../components/common/ConfirmModal';
-import { Check } from 'lucide-react';
+import { Check, MapPin } from 'lucide-react';
 
 export default function JobDetail() {
   const { id } = useParams();
@@ -91,6 +92,98 @@ export default function JobDetail() {
   const acceptedMatch = matches.find((m) => m.status === 'accepted');
   const completions = job.completions || [];
 
+  const paymentMethods = (() => {
+    const raw = job.paymentMethod;
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    return list.length
+      ? list.map((method) => String(method).replace(/_/g, ' ')).join(', ')
+      : 'Not specified';
+  })();
+
+  const hasCoordinates = job.jobLatitude != null && job.jobLongitude != null
+    && !Number.isNaN(Number(job.jobLatitude)) && !Number.isNaN(Number(job.jobLongitude));
+  const mapUrl = hasCoordinates
+    ? `https://www.google.com/maps?q=${job.jobLatitude},${job.jobLongitude}`
+    : null;
+
+  const proofItems = (completion) => {
+    const raw = completion.supportingImagesUrl;
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+    return list.map((item, idx) => (
+      typeof item === 'string' ? { url: item, label: `Completion Image ${idx + 1}` } : item
+    ));
+  };
+
+  const buildJobTimeline = () => {
+    const entries = [];
+    if (job.createdAt) {
+      entries.push({
+        date: job.createdAt,
+        title: 'Job Posted',
+        description: `Job "${job.jobTitle}" was created`,
+        completed: true,
+      });
+    }
+    if (acceptedMatch) {
+      const matchedAt = acceptedMatch.matchedAt || acceptedMatch.createdAt;
+      if (matchedAt) {
+        entries.push({
+          date: matchedAt,
+          title: 'Match Accepted',
+          description: `${acceptedMatch.userName} was hired${acceptedMatch.agreedPrice != null ? ` for ${formatCurrency(acceptedMatch.agreedPrice)}` : ''}`,
+          completed: true,
+        });
+      }
+    }
+    if (job.checkIn?.checkedInAt) {
+      entries.push({
+        date: job.checkIn.checkedInAt,
+        title: 'Checked In',
+        description: 'Talent checked in at the job location',
+        completed: true,
+      });
+    }
+    completions.forEach((completion) => {
+      const requestedAt = completion.requestedAt || completion.createdAt;
+      if (requestedAt) {
+        entries.push({
+          date: requestedAt,
+          title: 'Completion Requested',
+          description: completion.talentName
+            ? `${completion.talentName} submitted proof of completion`
+            : 'Proof of completion submitted',
+          completed: true,
+        });
+      }
+      if (completion.confirmedAt) {
+        entries.push({
+          date: completion.confirmedAt,
+          title: 'Completion Confirmed',
+          description: 'Client confirmed the work was completed',
+          completed: true,
+        });
+      } else if (requestedAt) {
+        entries.push({
+          date: requestedAt,
+          title: 'Completion Confirmed',
+          description: 'Awaiting client confirmation',
+          completed: false,
+        });
+      }
+    });
+    if (['completed', 'closed'].includes(job.jobStatus) && job.updatedAt) {
+      entries.push({
+        date: job.updatedAt,
+        title: 'Job Completed',
+        description: 'Job post was completed and closed',
+        completed: true,
+      });
+    }
+    return entries
+      .filter((entry) => entry.date)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+  };
+
   const handleAction = async (action) => {
     try {
       if (action === 'flag') await flagJob(jobId);
@@ -110,8 +203,7 @@ export default function JobDetail() {
               <h2 style={{ fontSize: '1.125rem', fontWeight: 700 }}>{job.jobTitle}</h2>
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', color: 'var(--color-text-muted)', fontSize: 13, marginTop: 2 }}>
                 <span>by {job.clientName}</span>
-                <span>{job.hiringOption?.replace(/_/g, ' ')}</span>
-                {job.jobAddress && <span>{job.jobAddress}</span>}
+                {job.serviceType && <span>{job.serviceType}</span>}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.375rem' }}>
@@ -123,11 +215,29 @@ export default function JobDetail() {
 
           <div className="detail-grid" style={{ gap: 'var(--space-3)' }}>
             <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={job.jobStatus} /></div></div>
-            <div className="detail-field"><div className="detail-label">Preferred Start</div><div className="detail-value">{job.preferredStartTime ? formatDate(job.preferredStartTime) : 'Not set'}</div></div>
+            <div className="detail-field"><div className="detail-label">Hiring Option</div><div className="detail-value" style={{ textTransform: 'capitalize' }}>{job.hiringOption?.replace(/_/g, ' ') || 'Not specified'}</div></div>
+            <div className="detail-field"><div className="detail-label">Budget</div><div className="detail-value">{job.budget != null ? formatCurrency(job.budget) : 'Not set'}</div></div>
+            <div className="detail-field"><div className="detail-label">Preferred Start</div><div className="detail-value">{formatPreferredStart(job.preferredStartTime)}</div></div>
+            <div className="detail-field"><div className="detail-label">Service Type</div><div className="detail-value">{job.serviceType || 'Not specified'}</div></div>
+            <div className="detail-field"><div className="detail-label">Client</div><div className="detail-value">
+              {job.clientId
+                ? <span className="cell-link" onClick={() => navigate(userEntityPath(job.clientId))}>{job.clientName}</span>
+                : job.clientName || 'Unknown'}
+            </div></div>
+            <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">
+              {job.jobAddress ? (
+                mapUrl ? (
+                  <a href={mapUrl} target="_blank" rel="noreferrer" className="cell-link" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <MapPin size={14} />{job.jobAddress}
+                  </a>
+                ) : job.jobAddress
+              ) : 'Not specified'}
+            </div></div>
+            <div className="detail-field"><div className="detail-label">Payment Methods</div><div className="detail-value" style={{ textTransform: 'capitalize' }}>{paymentMethods}</div></div>
             <div className="detail-field"><div className="detail-label">Matches</div><div className="detail-value">{job.matchCount || 0}</div></div>
             <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDate(job.createdAt)}</div></div>
+            <div className="detail-field"><div className="detail-label">Last Updated</div><div className="detail-value">{job.updatedAt ? formatDate(job.updatedAt) : '—'}</div></div>
             <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{job.flags?.length > 0 ? <StatusBadge status="flagged" label={job.flags.length} /> : 'None'}</div></div>
-            <div className="detail-field"><div className="detail-label">Payment Method</div><div className="detail-value">{job.paymentMethod || 'Not specified'}</div></div>
           </div>
           {job.jobDescription && (
             <div style={{ marginTop: '0.5rem' }}>
@@ -140,6 +250,14 @@ export default function JobDetail() {
               <div className="detail-label" style={{ marginBottom: '0.25rem' }}>Skills Required</div>
               <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
                 {job.skills.map((s, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{s}</span>)}
+              </div>
+            </div>
+          )}
+          {job.jobTrades?.length > 0 && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <div className="detail-label" style={{ marginBottom: '0.25rem' }}>Job Trades</div>
+              <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+                {job.jobTrades.map((trade, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{trade}</span>)}
               </div>
             </div>
           )}
@@ -183,6 +301,9 @@ export default function JobDetail() {
                         </span>
                         <StatusBadge status={acceptedMatch.status} />
                       </div>
+                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                        GP Used: {acceptedMatch.connections ?? '—'}
+                      </div>
                     </div>
                   )}
                   {matches.length === 0 ? (
@@ -201,7 +322,7 @@ export default function JobDetail() {
                           <span style={{ fontSize: 13 }}>{formatCurrency(m.agreedPrice)}</span>
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--color-text-muted)', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                          <span>Connections: {m.connections || 0}</span>
+                          <span>GP Used: {m.connections ?? '—'}</span>
                           <span><StatusBadge status={m.status} /></span>
                           <span>{formatDate(m.matchedAt)}</span>
                         </div>
@@ -212,38 +333,50 @@ export default function JobDetail() {
               </div>
             )}
             {activeTab === 'completions' && (
-              <div className="card">
-                <div className="card-header">
-                  <h3>Completions</h3>
-                  {completions.length > 0 && (
-                    <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
-                      {completions.filter((c) => c.confirmedAt).length}/{completions.length} confirmed
-                    </span>
-                  )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                <div className="card">
+                  <div className="card-header"><h3>Job Timeline</h3></div>
+                  <div className="card-body">
+                    <CaseTimeline entries={buildJobTimeline()} />
+                  </div>
                 </div>
-                <div className="card-body">
-                  {completions.length === 0 ? (
-                    <div className="empty-state"><div className="empty-state-text">No completions recorded.</div></div>
-                  ) : (
-                    completions.map((c) => (
-                      <div key={c.jobCompletionId || c.id} style={{ padding: '0.75rem', borderBottom: '1px solid var(--color-divider)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>{c.message || 'Completion request'}</span>
-                          <StatusBadge status={c.confirmedAt ? 'completed' : 'pending'} label={c.confirmedAt ? 'Confirmed' : 'Pending'} />
-                        </div>
-                        {c.supportingImagesUrl && (
-                          <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                            <a href={c.supportingImagesUrl} target="_blank" rel="noreferrer">View attachment</a>
+                <div className="card">
+                  <div className="card-header">
+                    <h3>Completions</h3>
+                    {completions.length > 0 && (
+                      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                        {completions.filter((c) => c.confirmedAt).length}/{completions.length} confirmed
+                      </span>
+                    )}
+                  </div>
+                  <div className="card-body">
+                    {completions.length === 0 ? (
+                      <div className="empty-state"><div className="empty-state-text">No completions recorded.</div></div>
+                    ) : (
+                      completions.map((c) => {
+                        const proofs = proofItems(c);
+                        return (
+                          <div key={c.jobCompletionId || c.id} style={{ padding: '0.75rem', borderBottom: '1px solid var(--color-divider)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span style={{ fontSize: 13, fontWeight: 600 }}>{c.message || 'Completion request'}</span>
+                              <StatusBadge status={c.confirmedAt ? 'completed' : 'pending'} label={c.confirmedAt ? 'Confirmed' : 'Pending'} />
+                            </div>
+                            {proofs.length > 0 && (
+                              <div style={{ marginTop: '0.5rem' }}>
+                                <EvidenceGallery items={proofs} />
+                              </div>
+                            )}
+                            <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 2, display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                              {c.talentName && <span>Submitted by {c.talentName}</span>}
+                              {c.matchStatus && <StatusBadge status={c.matchStatus} />}
+                              <span>Requested: {c.requestedAt ? formatDate(c.requestedAt) : '—'}</span>
+                              {c.confirmedAt && <span>Confirmed: {formatDate(c.confirmedAt)}</span>}
+                            </div>
                           </div>
-                        )}
-                        <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 2 }}>
-                          {c.talentName && <>Submitted by {c.talentName} · </>}
-                          Requested: {formatDate(c.requestedAt)}
-                          {c.confirmedAt && <> · Confirmed: {formatDate(c.confirmedAt)}</>}
-                        </div>
-                      </div>
-                    ))
-                  )}
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               </div>
             )}

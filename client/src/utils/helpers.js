@@ -8,6 +8,20 @@ export function formatDate(dateStr) {
   });
 }
 
+/**
+ * Preferred start times are free text in the database ("Within 3 days",
+ * "ASAP") rather than timestamps. Format real dates, but show free-text
+ * values verbatim instead of "Invalid Date".
+ */
+export function formatPreferredStart(value) {
+  if (!value) return 'Not set';
+  const text = String(value).trim();
+  if (!text) return 'Not set';
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  return formatDate(text);
+}
+
 export function formatDateTime(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
