@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gawa-admin-latest-main",
+  "compatibility_date": "2026-11-14",
+  "observability": {
+    "enabled": true
+  },
+  // Static SPA build output. Committing this file keeps `wrangler deploy` from
+  // running its auto-setup, which would otherwise rewrite vite.config.js to use
+  // the ESM-only @cloudflare/vite-plugin from a CommonJS config load.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
