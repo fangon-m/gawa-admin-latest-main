@@ -16,3 +16,5 @@ supabase/supabase/.temp/
 
 # Local smoke-test script: credentials are supplied via ADMIN_EMAIL/ADMIN_PASSWORD
 server/test_endpoints.js
+.vercel
+.env*
