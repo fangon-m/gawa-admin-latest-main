@@ -157,6 +157,7 @@ const schemas = {
     scope: z.enum(['all', 'admin']).optional().default('all'),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
+    order: z.enum(['asc', 'desc']).optional().default('desc'),
     limit: z.coerce.number().int().positive().max(1000).optional().default(50),
     page: z.coerce.number().int().positive().optional().default(1),
   }),

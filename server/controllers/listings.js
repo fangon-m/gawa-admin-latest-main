@@ -8,9 +8,12 @@ async function enrichEquipmentListings(listings) {
   const listingIds = listings.map(l => l.listing_id);
   listings.forEach(l => { if (l.owner_id) userIds.add(l.owner_id); });
 
-  const [userRes, skillsRes] = await Promise.all([
+  const [userRes, skillsRes, flagRes] = await Promise.all([
     userIds.size > 0 ? supabase.from('users_table').select('id, first_name, last_name').in('id', [...userIds]) : { data: [] },
     listingIds.length > 0 ? supabase.from('equipment_listing_skills').select('listing_id, skills(skill_name)').in('listing_id', listingIds) : { data: [] },
+    listingIds.length > 0
+      ? supabase.from('entity_flags').select('entity_id, status').eq('entity_type', 'equipment_listing').in('entity_id', listingIds)
+      : { data: [] },
   ]);
 
   const userMap = {};
@@ -20,17 +23,24 @@ async function enrichEquipmentListings(listings) {
     if (!skillsByListing[es.listing_id]) skillsByListing[es.listing_id] = [];
     if (es.skills?.skill_name) skillsByListing[es.listing_id].push(es.skills.skill_name);
   });
+  const openFlagCount = {};
+  (flagRes.data || []).forEach(flag => {
+    if (flag.status && flag.status !== 'open') return;
+    openFlagCount[flag.entity_id] = (openFlagCount[flag.entity_id] || 0) + 1;
+  });
 
   return listings.map(l => ({
     ...toCamelCase(l),
     ownerName: userMap[l.owner_id] || l.owner_id,
     skills: skillsByListing[l.listing_id] || [],
+    openFlagCount: openFlagCount[l.listing_id] || 0,
   }));
 }
 
 async function listEquipmentListings(req, res) {
   const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
   const { status } = req.query;
+  const moderationFlagged = status === 'flagged';
 
   // `ownerId` selects a single owner, so it must be a well-formed identifier
   // rather than a free-text filter fragment.
@@ -42,9 +52,27 @@ async function listEquipmentListings(req, res) {
   // Normalised before it reaches the PostgREST filter expression.
   const search = sanitizeSearchTerm(req.query.search);
 
+  let flaggedListingIds = null;
+  if (moderationFlagged) {
+    const { data: flaggedRows, error: flaggedErr } = await supabase
+      .from('entity_flags')
+      .select('entity_id')
+      .eq('entity_type', 'equipment_listing')
+      .or('status.eq.open,status.is.null');
+    if (flaggedErr) return sendError(res, flaggedErr, { status: 500 });
+    flaggedListingIds = [...new Set((flaggedRows || []).map(row => row.entity_id).filter(Boolean))];
+    if (flaggedListingIds.length === 0) {
+      return res.json({
+        data: [],
+        pagination: { total: 0, page: +page, limit: +limit, totalPages: 0 },
+      });
+    }
+  }
+
   const runQuery = async (useArchiveMarker) => {
     let query = supabase.from('equipment_listings').select('*', { count: 'exact' });
-    if (status) query = query.eq('status', status);
+    if (status && !moderationFlagged) query = query.eq('status', status);
+    if (moderationFlagged) query = query.in('listing_id', flaggedListingIds);
     if (ownerId) query = query.eq('owner_id', ownerId);
     if (search) query = query.or(`equipment_name.ilike.%${search}%,equipment_description.ilike.%${search}%`);
     // Owner-scoped requests (user detail history) must still show archived accounts.
@@ -92,24 +120,45 @@ async function getEquipmentListingById(req, res) {
 }
 
 async function flagEquipmentListing(req, res) {
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) {
+    return res.status(400).json({ error: 'A reason is required to flag an equipment listing' });
+  }
+
+  const listingId = req.params.id;
+  const { data: listing, error: listingErr } = await supabase
+    .from('equipment_listings')
+    .select('listing_id')
+    .eq('listing_id', listingId)
+    .maybeSingle();
+  if (listingErr) return sendError(res, listingErr, { status: 500 });
+  if (!listing) return res.status(404).json({ error: 'Equipment listing not found' });
+
+  const { data: existing, error: existingErr } = await supabase
+    .from('entity_flags')
+    .select('flag_id')
+    .eq('entity_type', 'equipment_listing')
+    .eq('entity_id', listingId)
+    .or('status.eq.open,status.is.null')
+    .limit(1);
+  if (existingErr) return sendError(res, existingErr, { status: 500 });
+  if (existing?.length) {
+    return res.status(409).json({ error: 'This equipment listing already has an open flag' });
+  }
+
   const { data: flag, error } = await supabase
     .from('entity_flags')
     .insert({
       entity_type: 'equipment_listing',
-      entity_id: req.params.id,
+      entity_id: listingId,
       flagged_by: req.user?.id || null,
-      reason: req.body?.reason || 'Flagged by admin',
+      reason,
+      status: 'open',
     })
     .select()
     .single();
 
   if (error) return sendError(res, error, { status: 500 });
-
-  await supabase
-    .from('equipment_listings')
-    .update({ status: 'flagged', updated_at: new Date().toISOString() })
-    .eq('listing_id', req.params.id);
-
   res.json({ data: toCamelCase(flag), message: 'Equipment listing flagged' });
 }
 

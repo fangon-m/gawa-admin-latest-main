@@ -662,3 +662,19 @@ CREATE TABLE public.password_resets (
 );
 CREATE INDEX password_resets_user_idx ON public.password_resets (user_id, created_at DESC);
 CREATE INDEX password_resets_expiry_idx ON public.password_resets (expires_at);
+CREATE TABLE public.entity_flags (
+  flag_id uuid NOT NULL DEFAULT gen_random_uuid(),
+  entity_type text NOT NULL,
+  entity_id uuid NOT NULL,
+  flagged_by uuid,
+  reason text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  status text NOT NULL DEFAULT 'open'::text CHECK (status = ANY (ARRAY['open'::text, 'resolved'::text, 'dismissed'::text])),
+  resolved_by uuid,
+  resolved_at timestamp with time zone,
+  resolution_note text,
+  CONSTRAINT entity_flags_pkey PRIMARY KEY (flag_id),
+  CONSTRAINT entity_flags_flagged_by_fkey FOREIGN KEY (flagged_by) REFERENCES public.users_table(id) ON DELETE SET NULL,
+  CONSTRAINT entity_flags_resolved_by_fkey FOREIGN KEY (resolved_by) REFERENCES public.users_table(id) ON DELETE SET NULL
+);
+CREATE INDEX entity_flags_open_entity_idx ON public.entity_flags USING btree (entity_type, entity_id) WHERE (status = 'open'::text);

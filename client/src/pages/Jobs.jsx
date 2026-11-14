@@ -83,9 +83,10 @@ export default function Jobs() {
     () => {
       const params = { limit: 100 };
       if (fil.type) params.hiringOption = fil.type;
+      if (fil.status) params.jobStatus = fil.status;
       return listJobs(params);
     },
-    [fil.type],
+    [fil.type, fil.status],
     { defaultValue: [], transform: (r) => r?.data ?? r ?? [] }
   );
   const { data: allSkills, refetch: refetchSkills } = useApiData(() => skillsApi.listSkills(), [], {
@@ -170,7 +171,11 @@ export default function Jobs() {
       data = data.filter((j) => j.jobTitle?.toLowerCase().includes(q) || j.clientName?.toLowerCase().includes(q));
     }
     if (fil.type) data = data.filter((j) => j.hiringOption === fil.type);
-    if (fil.status) data = data.filter((j) => j.jobStatus === fil.status);
+    if (fil.status) {
+      data = fil.status === 'flagged'
+        ? data.filter((j) => (j.openFlagCount || 0) > 0)
+        : data.filter((j) => j.jobStatus === fil.status);
+    }
     return data;
   }, [search, fil, jobs]);
 
@@ -193,7 +198,12 @@ export default function Jobs() {
         {
           key: 'jobStatus',
           label: 'Status',
-          render: (row) => <StatusBadge status={row.jobStatus} label={capitalizeWords(row.jobStatus)} />,
+          render: (row) => (
+            <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <StatusBadge status={row.jobStatus} label={capitalizeWords(row.jobStatus)} />
+              {(row.openFlagCount || 0) > 0 && <StatusBadge status="flagged" label="Flagged" />}
+            </div>
+          ),
         },
         { key: 'createdAt', label: 'Posted', render: (row) => formatDate(row.createdAt) },
       ];
@@ -204,7 +214,12 @@ export default function Jobs() {
 { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.jobPostId, 'JOB-')}</span> },
       { key: 'hiringOption', label: 'Type', render: (row) => <StatusBadge status={row.hiringOption} /> },
       { key: 'clientName', label: 'Client' },
-      { key: 'jobStatus', label: 'Status', render: (row) => <StatusBadge status={row.jobStatus} /> },
+      { key: 'jobStatus', label: 'Status', render: (row) => (
+        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <StatusBadge status={row.jobStatus} />
+          {(row.openFlagCount || 0) > 0 && <StatusBadge status="flagged" label="Flagged" />}
+        </div>
+      ) },
       { key: 'matchCount', label: 'Matches' },
       { key: 'createdAt', label: 'Posted', render: (row) => formatDate(row.createdAt) },
     ];

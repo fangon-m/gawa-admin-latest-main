@@ -3,31 +3,27 @@ import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
-import { list as listReports, getActions as getReportActions, executeAction as executeReportAction } from '../api/reports';
-import { list as listReviews } from '../api/reviews';
-import { formatDate, formatDateTime, formatEntityIdNumeric, timeAgo } from '../utils/helpers';
+import { listAll as listAllReports, getActions as getReportActions, executeAction as executeReportAction } from '../api/reports';
+import { formatDateTime, formatEntityIdNumeric, timeAgo } from '../utils/helpers';
+import { createIncidentReportCsv, filterIncidentReports } from '../utils/incidentReportExport';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
-import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import DetailPanel from '../components/common/DetailPanel';
-import { Star, X } from 'lucide-react';
+import { X } from 'lucide-react';
 
 const oversightTabs = [
-  { key: 'issue-reports', label: 'Issue Reports' },
-  { key: 'reviews', label: 'Reviews' },
+  { key: 'all', label: 'All statuses' },
+  { key: 'open', label: 'Open' },
+  { key: 'resolved', label: 'Resolved' },
 ];
 
-const issueReportFilters = [
-  { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-    { value: 'open', label: 'Open' },
-    { value: 'under_review', label: 'Under Review' },
-    { value: 'warned', label: 'Warned' },
-    { value: 'resolved', label: 'Resolved' },
-    { value: 'dismissed', label: 'Dismissed' },
-  ]},
-];
+// Reports that are still being worked stay under "Open"; everything closed
+// (resolved or dismissed) moves to "Resolved". Grouping them this way keeps
+// under_review and warned reports reachable.
+const OPEN_REPORT_STATUSES = ['open', 'under_review', 'warned'];
+const RESOLVED_REPORT_STATUSES = ['resolved', 'dismissed'];
 
 function formatRemaining(seconds) {
   if (seconds === null || seconds === undefined) return '—';
@@ -48,7 +44,7 @@ const issueReportColumns = [
       {row.targetType === 'profile' ? formatEntityIdNumeric(row.targetId, 'USR-') : row.targetId}
     </span>
   ) },
-  { key: 'issueType', label: 'Issue Type' },
+  { key: 'issueType', label: 'Incident Type' },
   { key: 'comment', label: 'Comment', render: (row) => <span className="truncate" style={{ maxWidth: 260, display: 'inline-block' }}>{row.comment}</span> },
   { key: 'attachmentPaths', label: 'Attachments', render: (row) => row.attachmentPaths?.length || 0 },
   { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
@@ -92,28 +88,12 @@ const issueReportActionUnavailableReasons = {
   SUSPENSION_STORAGE_UNAVAILABLE: 'Suspension is disabled because the user_suspensions table is not installed.',
 };
 
-const reviewColumns = [
-  { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.id}</span> },
-  { key: 'reviewerName', label: 'Reviewer' },
-  { key: 'revieweeName', label: 'Reviewee' },
-  { key: 'rating', label: 'Rating', render: (row) => (
-    <div className="flex items-center gap-0" style={{ whiteSpace: 'nowrap' }}>
-      {Array.from({length: row.rating || 0}, (_, i) => <Star key={`f-${i}`} size={13} fill="var(--color-warning)" color="var(--color-warning)" />)}
-      {Array.from({length: 5 - (row.rating || 0)}, (_, i) => <Star key={`e-${i}`} size={13} color="var(--color-border)" />)}
-    </div>
-  )},
-  { key: 'comment', label: 'Content', render: (row) => <span className="truncate" style={{ maxWidth: 250, display: 'inline-block' }}>{row.comment}</span> },
-  { key: 'createdAt', label: 'Date', render: (row) => formatDate(row.createdAt) },
-];
-
 export default function Oversight() {
   const { user: currentUser } = useAuth();
   usePermissions(currentUser?.role);
   const { addNotification } = useNotifications();
-  const [tab, setTab] = useState('issue-reports');
-  const [reportFilter, setReportFilter] = useState({ status: '' });
+  const [tab, setTab] = useState('all');
   const [selectedReport, setSelectedReport] = useState(null);
-  const [selectedReview, setSelectedReview] = useState(null);
   const [reportActions, setReportActions] = useState([]);
   const [reportActionTarget, setReportActionTarget] = useState(null);
   const [reportWarning, setReportWarning] = useState(null);
@@ -133,12 +113,13 @@ export default function Oversight() {
   const [reportActionDeliveryPending, setReportActionDeliveryPending] = useState(false);
   const [reportActionError, setReportActionError] = useState('');
   const [reportActionIdempotencyKey, setReportActionIdempotencyKey] = useState('');
+  const [exportStartDate, setExportStartDate] = useState('');
+  const [exportEndDate, setExportEndDate] = useState('');
+  const [exportReportType, setExportReportType] = useState('all');
+  const [exportError, setExportError] = useState('');
   const reportActionButtonRef = useRef(null);
 
-  const { data: allReports, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useApiData(() => listReports({ limit: 100 }), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
-  const { data: reviews } = useApiData(() => listReviews({ limit: 100 }), [], {
+  const { data: allReports, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useApiData(() => listAllReports(), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
@@ -284,7 +265,7 @@ export default function Oversight() {
     setReportActionIdempotencyKey('');
     addNotification(
       'moderation_decision',
-      'Issue Report Action Recorded',
+      'Incident Report Action Recorded',
       `${issueReportActionLabels[actionPrompt.id]} — ${selectedReport.issueType}`,
       '/oversight'
     );
@@ -304,10 +285,61 @@ export default function Oversight() {
       });
   };
 
-  const filteredReports = useMemo(() => {
-    if (!reportFilter.status) return allReports;
-    return allReports.filter(report => report.status === reportFilter.status);
-  }, [allReports, reportFilter.status]);
+  const visibleReports = useMemo(() => {
+    const allowed = tab === 'resolved'
+      ? RESOLVED_REPORT_STATUSES
+      : tab === 'open' ? OPEN_REPORT_STATUSES : null;
+    const reportsByType = exportReportType === 'all'
+      ? allReports
+      : allReports.filter(report => report.issueType === exportReportType);
+    const reportsInDateRange = exportStartDate && exportEndDate && exportStartDate <= exportEndDate
+      ? filterIncidentReports(reportsByType, {
+        startDate: exportStartDate,
+        endDate: exportEndDate,
+        reportType: 'all',
+      })
+      : reportsByType;
+    return allowed
+      ? reportsInDateRange.filter(report => allowed.includes(report.status))
+      : reportsInDateRange;
+  }, [allReports, tab, exportStartDate, exportEndDate, exportReportType]);
+
+  const reportTypes = useMemo(
+    () => [...new Set(allReports.map((report) => report.issueType).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [allReports]
+  );
+
+  const handleExport = () => {
+    setExportError('');
+    if (!exportStartDate || !exportEndDate || exportEndDate < exportStartDate) {
+      setExportError('Select a valid start and end date before exporting.');
+      return;
+    }
+
+    const reports = filterIncidentReports(allReports, {
+      startDate: exportStartDate,
+      endDate: exportEndDate,
+      reportType: exportReportType,
+    });
+    if (reports.length === 0) {
+      setExportError('No incident reports match the selected date range and report type.');
+      return;
+    }
+
+    const csv = createIncidentReportCsv(reports);
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const typeLabel = exportReportType === 'all'
+      ? 'all-types'
+      : exportReportType.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    link.href = url;
+    link.download = `incident-reports_${exportStartDate}_to_${exportEndDate}_${typeLabel || 'type'}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+  };
 
   const warningView = useMemo(() => {
     if (!selectedReport) return null;
@@ -329,366 +361,386 @@ export default function Oversight() {
     };
   }, [selectedReport, reportWarning]);
 
-  const renderReviews = () => (
-    <div className="card">
-      <div className="card-body p-0">
-        <DataTable
-          columns={reviewColumns}
-          data={reviews || []}
-          onRowClick={(row) => setSelectedReview(row)}
-          pageSize={10}
-          emptyMessage="No reviews found."
-        />
-      </div>
-      <DetailPanel open={!!selectedReview} onClose={() => setSelectedReview(null)} title="Review Details">
-        {selectedReview && (
-          <div>
-            <div className="detail-panel-section">
-              <h4>Details</h4>
-              <div className="detail-field"><div className="detail-label">ID</div><div className="detail-value">{selectedReview.id}</div></div>
-              {selectedReview.reviewerName && <div className="detail-field"><div className="detail-label">Reviewer</div><div className="detail-value">{selectedReview.reviewerName}</div></div>}
-              {selectedReview.revieweeName && <div className="detail-field"><div className="detail-label">Reviewee</div><div className="detail-value">{selectedReview.revieweeName}</div></div>}
-              {selectedReview.jobCompletionId && <div className="detail-field"><div className="detail-label">Job Completion</div><div className="detail-value">{selectedReview.jobCompletionId}</div></div>}
-              {selectedReview.comment && <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReview.comment}</div></div>}
-              {selectedReview.rating && (
-                <div className="detail-field">
-                  <div className="detail-label">Rating</div>
-                  <div className="detail-value flex items-center gap-0" style={{ whiteSpace: 'nowrap' }}>
-                    {Array.from({length: selectedReview.rating}, (_, i) => <Star key={`f-${i}`} size={13} fill="var(--color-warning)" color="var(--color-warning)" />)}
-                    {Array.from({length: 5 - selectedReview.rating}, (_, i) => <Star key={`e-${i}`} size={13} color="var(--color-border)" />)}
-                  </div>
-                </div>
-              )}
-              {selectedReview.createdAt && <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDateTime(selectedReview.createdAt)}</div></div>}
-            </div>
-          </div>
-        )}
-      </DetailPanel>
-    </div>
-  );
-
   return (
     <div>
-      <Header title="Oversight" />
+      <Header title="Incident Reports" />
       <Tabs tabs={oversightTabs} activeTab={tab} onChange={setTab} />
       <div className="tab-content">
-        {tab === 'issue-reports' && (
-          <div>
-            <div className="card">
-              <div className="card-header">
-                <FilterBar
-                  filters={issueReportFilters}
-                  values={reportFilter}
-                  onChange={(key, value) => setReportFilter(previous => ({ ...previous, [key]: value }))}
-                />
-              </div>
-              {reportsError && <div className="alert alert-error" role="alert">Unable to load issue reports: {reportsError}</div>}
-              <div className="card-body p-0">
-                <DataTable
-                  columns={issueReportColumns}
-                  data={filteredReports}
-                  onRowClick={setSelectedReport}
-                  pageSize={10}
-                  loading={reportsLoading}
-                  emptyMessage="No issue reports found."
-                />
-              </div>
-            </div>
-            <DetailPanel
-              open={!!selectedReport}
-              onClose={() => setSelectedReport(null)}
-              title={selectedReport?.issueType || 'Issue Report'}
-            >
-              {selectedReport && (
-                <div className="detail-panel-section">
-                  <h4>Issue Report</h4>
-                  <div className="detail-field"><div className="detail-label">Report ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.id}</div></div>
-                  <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedReport.reporterName}</div></div>
-                  {selectedReport.targetType === 'profile' && (
-                    <div className="detail-field"><div className="detail-label">Reported User</div><div className="detail-value">{selectedReport.reportedName || selectedReport.targetId}</div></div>
-                  )}
-                  <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedReport.targetType}</div></div>
-                  <div className="detail-field">
-                    <div className="detail-label">Target ID</div>
-                    <div className="detail-value text-xs text-muted font-mono" title={selectedReport.targetId}>
-                      {selectedReport.targetType === 'profile'
-                        ? formatEntityIdNumeric(selectedReport.targetId, 'USR-')
-                        : selectedReport.targetId}
-                    </div>
-                  </div>
-                  <div className="detail-field"><div className="detail-label">Issue Type</div><div className="detail-value">{selectedReport.issueType}</div></div>
-                  <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReport.comment}</div></div>
-                  <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedReport.status} /></div></div>
-                  <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDateTime(selectedReport.createdAt)}</div></div>
-                  <div className="detail-field">
-                    <div className="detail-label">Attachments</div>
-                    <div className="detail-value">
-                      {selectedReport.attachmentPaths?.length
-                        ? selectedReport.attachmentPaths.map((path, index) => <div key={`${path}-${index}`}>{path}</div>)
-                        : 'None'}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {warningView && (
-                <div className="detail-panel-section">
-                  <h4>Warning</h4>
-                  <div className="detail-field">
-                    <div className="detail-label">State</div>
-                    <div className="detail-value">
-                      {warningView.complianceFlag
-                        ? 'Complied'
-                        : warningView.autoSuspendedAt
-                          ? 'Auto-suspended'
-                          : warningView.autoSuspensionSkippedReason
-                            ? `Closed — ${warningView.autoSuspensionSkippedReason.replaceAll('_', ' ')}`
-                            : 'Pending compliance'}
-                    </div>
-                  </div>
-                  <div className="detail-field">
-                    <div className="detail-label">Warned</div>
-                    <div className="detail-value">{formatDateTime(warningView.warnedAt)}</div>
-                  </div>
-                  <div className="detail-field">
-                    <div className="detail-label">Compliance due</div>
-                    <div className="detail-value">
-                      {formatDateTime(warningView.dueAt)}
-                      {warningView.windowDays ? ` (${warningView.windowDays}-day window)` : ''}
-                    </div>
-                  </div>
-                  {!warningView.complianceFlag && !warningView.autoSuspendedAt && !warningView.autoSuspensionSkippedReason && (
-                    <div className="detail-field">
-                      <div className="detail-label">Time remaining</div>
-                      <div className="detail-value">{formatRemaining(warningView.remainingSeconds)}</div>
-                    </div>
-                  )}
-                  {warningView.compliedAt && (
-                    <div className="detail-field">
-                      <div className="detail-label">Complied</div>
-                      <div className="detail-value">{formatDateTime(warningView.compliedAt)}</div>
-                    </div>
-                  )}
-                  {warningView.autoSuspendedAt && (
-                    <div className="detail-field">
-                      <div className="detail-label">Auto-suspended</div>
-                      <div className="detail-value">
-                        {formatDateTime(warningView.autoSuspendedAt)}
-                        {warningView.autoSuspensionUntil ? ` until ${formatDateTime(warningView.autoSuspensionUntil)}` : ''}
-                      </div>
-                    </div>
-                  )}
-                  <p className="text-muted text-xs">
-                    An unresolved warning is suspended automatically for {moderationSettings.autoSuspendDays} days.
-                    The day-{moderationSettings.reminderDay} reminder and suspension are sent as in-app notifications.
-                  </p>
-                </div>
-              )}
-              {selectedReport && (
-                <div className="detail-panel-section">
-                  <h4>Available Actions</h4>
-                  {!reportActionsLoading && reportActionTarget && !reportActionTarget.exists && (
-                    <p className="text-muted text-sm" role="status">The reported target no longer exists. Resolve the report with a reason; actions on the missing target are disabled.</p>
-                  )}
-                  {reportActionsError && <div className="alert alert-error" role="alert">{reportActionsError}</div>}
-                  {reportActionsLoading ? (
-                    <p className="text-muted text-sm" role="status">Loading permitted actions...</p>
-                  ) : reportActions.length ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
-                      {reportActions.map((availableAction) => (
-                        <button
-                          key={availableAction.id}
-                          type="button"
-                          className={`btn btn-sm ${availableAction.id === 'suspend' ? 'btn-danger' : 'btn-outline'}`}
-                          disabled={!availableAction.allowed}
-                          title={
-                            issueReportActionUnavailableReasons[availableAction.unavailableReason]
-                            || (!availableAction.allowed ? 'Administrator role required' : availableAction.description)
-                          }
-                          aria-describedby={`issue-action-description-${availableAction.id}`}
-                          onClick={(event) => {
-                            reportActionButtonRef.current = event.currentTarget;
-                            setReportActionPrompt(availableAction);
-                            setReportActionReason('');
-                            setReportActionDeliveryPending(false);
-                            setReportActionMessage(
-                              availableAction.id === 'warn'
-                                ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. `
-                                  + `If you believe this warning is mistaken, reply here to appeal within ${moderationSettings.warningDays} days. `
-                                  + `If the warning is not resolved, your account will be automatically suspended for ${moderationSettings.autoSuspendDays} days.`
-                                : ''
-                            );
-                            setReportActionDuration(7);
-                            setReportActionError('');
-                            setReportActionIdempotencyKey('');
-                          }}
-                        >
-                          {issueReportActionLabels[availableAction.id] || availableAction.id}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    !reportActionsError && <p className="text-muted text-sm">No actions are currently available for this report.</p>
-                  )}
-                  {reportActions.map(availableAction => (
-                    <p
-                      key={`${availableAction.id}-description`}
-                      id={`issue-action-description-${availableAction.id}`}
-                      className="text-muted text-xs"
-                    >
-                      {availableAction.description}
-                      {!availableAction.allowed && availableAction.adminOnly && !availableAction.unavailableReason && ' Administrator role required.'}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </DetailPanel>
-            {reportActionPrompt && (
-              <div className="modal-overlay" onClick={closeReportActionPrompt}>
-                <section
-                  className="modal"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="issue-report-action-title"
-                  aria-describedby="issue-report-action-description"
-                  onClick={event => event.stopPropagation()}
-                  onKeyDown={event => {
-                    if (event.key !== 'Tab') return;
-                    const focusable = event.currentTarget.querySelectorAll('button:not(:disabled), textarea:not(:disabled), input:not(:disabled)');
-                    if (!focusable.length) return;
-                    const first = focusable[0];
-                    const last = focusable[focusable.length - 1];
-                    if (event.shiftKey && document.activeElement === first) {
-                      event.preventDefault();
-                      last.focus();
-                    } else if (!event.shiftKey && document.activeElement === last) {
-                      event.preventDefault();
-                      first.focus();
-                    }
-                  }}
+        <div>
+          <div className="card">
+            <div className="card-header"><h3>Incident Reports</h3></div>
+            {reportsError && <div className="alert alert-error" role="alert">Unable to load incident reports: {reportsError}</div>}
+            <div className="card-body">
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+                <label className="form-label" style={{ minWidth: 180 }}>
+                  From
+                  <input
+                    className="form-input"
+                    type="date"
+                    max={exportEndDate || undefined}
+                    value={exportStartDate}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (!exportEndDate || value <= exportEndDate) setExportStartDate(value);
+                    }}
+                  />
+                </label>
+                <label className="form-label" style={{ minWidth: 180 }}>
+                  To
+                  <input
+                    className="form-input"
+                    type="date"
+                    min={exportStartDate || undefined}
+                    value={exportEndDate}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (!exportStartDate || value >= exportStartDate) setExportEndDate(value);
+                    }}
+                  />
+                </label>
+                <label className="form-label" style={{ minWidth: 180 }}>
+                  Report Type
+                  <select
+                    className="form-input"
+                    value={exportReportType}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setExportReportType(value);
+                      if (value === 'all') setTab('all');
+                    }}
+                  >
+                    <option value="all">All types</option>
+                    {reportTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+                <button
+                  className="btn btn-outline"
+                  type="button"
+                  onClick={handleExport}
+                  disabled={reportsLoading || !exportStartDate || !exportEndDate || exportEndDate < exportStartDate}
                 >
-                  <div className="modal-header">
-                    <h3 id="issue-report-action-title">{issueReportActionLabels[reportActionPrompt.id] || 'Confirm action'}</h3>
-                    <button type="button" className="modal-close" aria-label="Close confirmation" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}><X size={18} /></button>
+                  Export CSV
+                </button>
+              </div>
+              {exportError && <div className="alert alert-error mt-3" role="alert">{exportError}</div>}
+            </div>
+            <div className="card-body p-0">
+              <div className="card-body text-muted text-sm">
+                {exportStartDate && exportEndDate && exportStartDate <= exportEndDate
+                  ? `Showing ${tab === 'all' ? 'all statuses' : `${tab} reports`} for ${exportReportType === 'all' ? 'all types' : exportReportType}, filed from ${exportStartDate} through ${exportEndDate} (inclusive).`
+                  : exportStartDate || exportEndDate
+                    ? 'Choose both dates to filter the table.'
+                    : `Showing ${tab === 'all' ? 'all statuses' : `${tab} reports`} for ${exportReportType === 'all' ? 'all types' : exportReportType}, from all dates.`}
+              </div>
+              <DataTable
+                columns={issueReportColumns}
+                data={visibleReports}
+                onRowClick={setSelectedReport}
+                pageSize={10}
+                loading={reportsLoading}
+                emptyMessage={
+                  tab === 'all'
+                    ? 'No incident reports found matching the selected filters.'
+                    : exportStartDate && exportEndDate && exportStartDate <= exportEndDate
+                      ? `No ${tab} incident reports found in the selected date range.`
+                      : `No ${tab} incident reports found.`
+                }
+              />
+            </div>
+          </div>
+          <DetailPanel
+            open={!!selectedReport}
+            onClose={() => setSelectedReport(null)}
+            title={selectedReport?.issueType || 'Incident Report'}
+          >
+            {selectedReport && (
+              <div className="detail-panel-section">
+                <h4>Incident Report</h4>
+                <div className="detail-field"><div className="detail-label">Report ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.id}</div></div>
+                <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedReport.reporterName}</div></div>
+                {selectedReport.targetType === 'profile' && (
+                  <div className="detail-field"><div className="detail-label">Reported User</div><div className="detail-value">{selectedReport.reportedName || selectedReport.targetId}</div></div>
+                )}
+                <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedReport.targetType}</div></div>
+                <div className="detail-field">
+                  <div className="detail-label">Target ID</div>
+                  <div className="detail-value text-xs text-muted font-mono" title={selectedReport.targetId}>
+                    {selectedReport.targetType === 'profile'
+                      ? formatEntityIdNumeric(selectedReport.targetId, 'USR-')
+                      : selectedReport.targetId}
                   </div>
-                  <form onSubmit={submitReportAction}>
-                    <div className="modal-body">
-                      <p id="issue-report-action-description" style={{ color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
-                        {reportActionPrompt.id === 'warn'
-                          ? reportActionDeliveryPending
-                            ? 'The warning is recorded. Retry delivery with the same message.'
-                            : reportActionPrompt.description
-                          : reportActionPrompt.description}
-                        {reportActionPrompt.id === 'warn'
-                          ? ' The message will be sent in the existing chat and the moderation action recorded in the audit log.'
-                          : reportActionPrompt.id === 'mark_compliant'
-                            ? ' This closes the warning and cancels the automatic suspension. The action is recorded in the immutable moderation audit log.'
-                            : ' This action will be recorded in the immutable moderation audit log.'}
-                      </p>
-                      {['warn', 'mark_compliant', 'suspend'].includes(reportActionPrompt.id) && (
-                        <div
-                          role="status"
-                          style={{
-                            padding: 'var(--space-3)',
-                            marginBottom: 'var(--space-3)',
-                            borderLeft: '3px solid var(--color-warning)',
-                            borderRadius: 'var(--radius-md)',
-                            background: 'var(--color-warning-subtle)',
-                          }}
-                        >
-                          Confirming action for <strong>{selectedReport?.reportedName || 'Unknown reported user'}</strong>
-                          <span className="text-xs text-muted" title={selectedReport?.targetId}>
-                            {' '}({formatEntityIdNumeric(selectedReport?.targetId, 'USR-')})
-                          </span>
-                        </div>
-                      )}
-                      {reportActionPrompt.id !== 'warn' && <div className="form-group">
-                        <label className="form-label" htmlFor="issue-report-action-reason">Reason (required)</label>
-                        <textarea
-                          id="issue-report-action-reason"
-                          className="form-textarea"
-                          rows={4}
-                          maxLength={1000}
-                          required
-                          autoFocus
-                          value={reportActionReason}
-                          onChange={event => setReportActionReason(event.target.value)}
-                          disabled={reportActionSubmitting || reportActionDeliveryPending}
-                        />
-                      </div>}
-                      {reportActionPrompt.id === 'warn' && (
-                        <div className="form-group">
-                          <label className="form-label" htmlFor="issue-report-warning-message">Chat message (editable)</label>
-                          <textarea
-                            id="issue-report-warning-message"
-                            className="form-textarea"
-                            rows={5}
-                            maxLength={2000}
-                            required
-                            value={reportActionMessage}
-                            onChange={event => setReportActionMessage(event.target.value)}
-                            disabled={reportActionSubmitting || reportActionDeliveryPending}
-                          />
-                          <p className="text-muted text-xs">This will be sent in the existing chat. Do not include reporter identity or private details.</p>
-                        </div>
-                      )}
-                      {reportActionPrompt.id === 'suspend' && (
-                        <div className="form-group">
-                          <label className="form-label" htmlFor="issue-report-action-duration">Suspension duration</label>
-                          <select
-                            id="issue-report-action-duration"
-                            className="form-select"
-                            value={reportActionDuration === 'custom' ? 'custom' : reportActionDuration}
-                            onChange={event => {
-                              const val = event.target.value;
-                              if (val === 'custom') {
-                                setReportActionDuration('custom');
-                              } else {
-                                setReportActionDuration(Number(val));
-                                setReportActionCustom('');
-                              }
-                            }}
-                            disabled={reportActionSubmitting || reportActionDeliveryPending}
-                            style={{ width: '100%' }}
-                          >
-                            <option value={7}>7 days (1 week)</option>
-                            <option value={14}>14 days (2 weeks)</option>
-                            <option value={21}>21 days (3 weeks)</option>
-                            <option value={30}>30 days (1 month)</option>
-                            <option value={60}>60 days (2 months)</option>
-                            <option value={90}>90 days (3 months)</option>
-                            <option value="custom">Custom — enter days</option>
-                          </select>
-                          {reportActionDuration === 'custom' && (
-                            <input
-                              id="issue-report-action-custom-days"
-                              className="form-input"
-                              type="number"
-                              min="1"
-                              max="90"
-                              placeholder="Days"
-                              value={reportActionCustom}
-                              onChange={event => setReportActionCustom(event.target.value)}
-                              disabled={reportActionSubmitting || reportActionDeliveryPending}
-                              style={{ width: '100%', marginTop: '0.5rem' }}
-                            />
-                          )}
-                        </div>
-                      )}
-                      {reportActionError && <div className="alert alert-error" role="alert">{reportActionError}</div>}
-                    </div>
-                    <div className="modal-footer">
-                      <button type="button" className="btn btn-outline" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}>{reportActionDeliveryPending ? 'Close' : 'Cancel'}</button>
-                      <button type="submit" className={`btn ${reportActionPrompt.id === 'suspend' ? 'btn-danger' : 'btn-accent'}`} disabled={reportActionSubmitting || (reportActionPrompt.id !== 'warn' && !reportActionReason.trim()) || (reportActionPrompt.id === 'warn' && !reportActionMessage.trim())}>
-                        {reportActionSubmitting ? 'Applying...' : reportActionPrompt.id === 'warn' ? reportActionDeliveryPending ? 'Retry delivery' : 'Send warning' : 'Confirm action'}
-                      </button>
-                    </div>
-                  </form>
-                </section>
+                </div>
+                <div className="detail-field"><div className="detail-label">Incident Type</div><div className="detail-value">{selectedReport.issueType}</div></div>
+                <div className="detail-field"><div className="detail-label">Comment</div><div className="detail-value">{selectedReport.comment}</div></div>
+                <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={selectedReport.status} /></div></div>
+                <div className="detail-field"><div className="detail-label">Created</div><div className="detail-value">{formatDateTime(selectedReport.createdAt)}</div></div>
+                <div className="detail-field">
+                  <div className="detail-label">Attachments</div>
+                  <div className="detail-value">
+                    {selectedReport.attachmentPaths?.length
+                      ? selectedReport.attachmentPaths.map((path, index) => <div key={`${path}-${index}`}>{path}</div>)
+                      : 'None'}
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        )}
-        {tab === 'reviews' && renderReviews()}
+            {warningView && (
+              <div className="detail-panel-section">
+                <h4>Warning</h4>
+                <div className="detail-field">
+                  <div className="detail-label">State</div>
+                  <div className="detail-value">
+                    {warningView.complianceFlag
+                      ? 'Complied'
+                      : warningView.autoSuspendedAt
+                        ? 'Auto-suspended'
+                        : warningView.autoSuspensionSkippedReason
+                          ? `Closed — ${warningView.autoSuspensionSkippedReason.replaceAll('_', ' ')}`
+                          : 'Pending compliance'}
+                  </div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Warned</div>
+                  <div className="detail-value">{formatDateTime(warningView.warnedAt)}</div>
+                </div>
+                <div className="detail-field">
+                  <div className="detail-label">Compliance due</div>
+                  <div className="detail-value">
+                    {formatDateTime(warningView.dueAt)}
+                    {warningView.windowDays ? ` (${warningView.windowDays}-day window)` : ''}
+                  </div>
+                </div>
+                {!warningView.complianceFlag && !warningView.autoSuspendedAt && !warningView.autoSuspensionSkippedReason && (
+                  <div className="detail-field">
+                    <div className="detail-label">Time remaining</div>
+                    <div className="detail-value">{formatRemaining(warningView.remainingSeconds)}</div>
+                  </div>
+                )}
+                {warningView.compliedAt && (
+                  <div className="detail-field">
+                    <div className="detail-label">Complied</div>
+                    <div className="detail-value">{formatDateTime(warningView.compliedAt)}</div>
+                  </div>
+                )}
+                {warningView.autoSuspendedAt && (
+                  <div className="detail-field">
+                    <div className="detail-label">Auto-suspended</div>
+                    <div className="detail-value">
+                      {formatDateTime(warningView.autoSuspendedAt)}
+                      {warningView.autoSuspensionUntil ? ` until ${formatDateTime(warningView.autoSuspensionUntil)}` : ''}
+                    </div>
+                  </div>
+                )}
+                <p className="text-muted text-xs">
+                  An unresolved warning is suspended automatically for {moderationSettings.autoSuspendDays} days.
+                  The day-{moderationSettings.reminderDay} reminder and suspension are sent as in-app notifications.
+                </p>
+              </div>
+            )}
+            {selectedReport && (
+              <div className="detail-panel-section">
+                <h4>Available Actions</h4>
+                {!reportActionsLoading && reportActionTarget && !reportActionTarget.exists && (
+                  <p className="text-muted text-sm" role="status">The reported target no longer exists. Resolve the report with a reason; actions on the missing target are disabled.</p>
+                )}
+                {reportActionsError && <div className="alert alert-error" role="alert">{reportActionsError}</div>}
+                {reportActionsLoading ? (
+                  <p className="text-muted text-sm" role="status">Loading permitted actions...</p>
+                ) : reportActions.length ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+                    {reportActions.map((availableAction) => (
+                      <button
+                        key={availableAction.id}
+                        type="button"
+                        className={`btn btn-sm ${availableAction.id === 'suspend' ? 'btn-danger' : 'btn-outline'}`}
+                        disabled={!availableAction.allowed}
+                        title={
+                          issueReportActionUnavailableReasons[availableAction.unavailableReason]
+                          || (!availableAction.allowed ? 'Administrator role required' : availableAction.description)
+                        }
+                        aria-describedby={`issue-action-description-${availableAction.id}`}
+                        onClick={(event) => {
+                          reportActionButtonRef.current = event.currentTarget;
+                          setReportActionPrompt(availableAction);
+                          setReportActionReason('');
+                          setReportActionDeliveryPending(false);
+                          setReportActionMessage(
+                            availableAction.id === 'warn'
+                              ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. `
+                                + `If you believe this warning is mistaken, reply here to appeal within ${moderationSettings.warningDays} days. `
+                                + `If the warning is not resolved, your account will be automatically suspended for ${moderationSettings.autoSuspendDays} days.`
+                              : ''
+                          );
+                          setReportActionDuration(7);
+                          setReportActionError('');
+                          setReportActionIdempotencyKey('');
+                        }}
+                      >
+                        {issueReportActionLabels[availableAction.id] || availableAction.id}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  !reportActionsError && <p className="text-muted text-sm">No actions are currently available for this report.</p>
+                )}
+                {reportActions.map(availableAction => (
+                  <p
+                    key={`${availableAction.id}-description`}
+                    id={`issue-action-description-${availableAction.id}`}
+                    className="text-muted text-xs"
+                  >
+                    {availableAction.description}
+                    {!availableAction.allowed && availableAction.adminOnly && !availableAction.unavailableReason && ' Administrator role required.'}
+                  </p>
+                ))}
+              </div>
+            )}
+          </DetailPanel>
+          {reportActionPrompt && (
+            <div className="modal-overlay" onClick={closeReportActionPrompt}>
+              <section
+                className="modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="issue-report-action-title"
+                aria-describedby="issue-report-action-description"
+                onClick={event => event.stopPropagation()}
+                onKeyDown={event => {
+                  if (event.key !== 'Tab') return;
+                  const focusable = event.currentTarget.querySelectorAll('button:not(:disabled), textarea:not(:disabled), input:not(:disabled)');
+                  if (!focusable.length) return;
+                  const first = focusable[0];
+                  const last = focusable[focusable.length - 1];
+                  if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                  } else if (!event.shiftKey && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
+                  }
+                }}
+              >
+                <div className="modal-header">
+                  <h3 id="issue-report-action-title">{issueReportActionLabels[reportActionPrompt.id] || 'Confirm action'}</h3>
+                  <button type="button" className="modal-close" aria-label="Close confirmation" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}><X size={18} /></button>
+                </div>
+                <form onSubmit={submitReportAction}>
+                  <div className="modal-body">
+                    <p id="issue-report-action-description" style={{ color: 'var(--color-text-muted)', lineHeight: 1.6 }}>
+                      {reportActionPrompt.id === 'warn'
+                        ? reportActionDeliveryPending
+                          ? 'The warning is recorded. Retry delivery with the same message.'
+                          : reportActionPrompt.description
+                        : reportActionPrompt.description}
+                      {reportActionPrompt.id === 'warn'
+                        ? ' The message will be sent in the existing chat and the moderation action recorded in the audit log.'
+                        : reportActionPrompt.id === 'mark_compliant'
+                          ? ' This closes the warning and cancels the automatic suspension. The action is recorded in the immutable moderation audit log.'
+                          : ' This action will be recorded in the immutable moderation audit log.'}
+                    </p>
+                    {['warn', 'mark_compliant', 'suspend'].includes(reportActionPrompt.id) && (
+                      <div
+                        role="status"
+                        style={{
+                          padding: 'var(--space-3)',
+                          marginBottom: 'var(--space-3)',
+                          borderLeft: '3px solid var(--color-warning)',
+                          borderRadius: 'var(--radius-md)',
+                          background: 'var(--color-warning-subtle)',
+                        }}
+                      >
+                        Confirming action for <strong>{selectedReport?.reportedName || 'Unknown reported user'}</strong>
+                        <span className="text-xs text-muted" title={selectedReport?.targetId}>
+                          {' '}({formatEntityIdNumeric(selectedReport?.targetId, 'USR-')})
+                        </span>
+                      </div>
+                    )}
+                    {reportActionPrompt.id !== 'warn' && <div className="form-group">
+                      <label className="form-label" htmlFor="issue-report-action-reason">Reason (required)</label>
+                      <textarea
+                        id="issue-report-action-reason"
+                        className="form-textarea"
+                        rows={4}
+                        maxLength={1000}
+                        required
+                        autoFocus
+                        value={reportActionReason}
+                        onChange={event => setReportActionReason(event.target.value)}
+                        disabled={reportActionSubmitting || reportActionDeliveryPending}
+                      />
+                    </div>}
+                    {reportActionPrompt.id === 'warn' && (
+                      <div className="form-group">
+                        <label className="form-label" htmlFor="issue-report-warning-message">Chat message (editable)</label>
+                        <textarea
+                          id="issue-report-warning-message"
+                          className="form-textarea"
+                          rows={5}
+                          maxLength={2000}
+                          required
+                          value={reportActionMessage}
+                          onChange={event => setReportActionMessage(event.target.value)}
+                          disabled={reportActionSubmitting || reportActionDeliveryPending}
+                        />
+                        <p className="text-muted text-xs">This will be sent in the existing chat. Do not include reporter identity or private details.</p>
+                      </div>
+                    )}
+                    {reportActionPrompt.id === 'suspend' && (
+                      <div className="form-group">
+                        <label className="form-label" htmlFor="issue-report-action-duration">Suspension duration</label>
+                        <select
+                          id="issue-report-action-duration"
+                          className="form-select"
+                          value={reportActionDuration === 'custom' ? 'custom' : reportActionDuration}
+                          onChange={event => {
+                            const val = event.target.value;
+                            if (val === 'custom') {
+                              setReportActionDuration('custom');
+                            } else {
+                              setReportActionDuration(Number(val));
+                              setReportActionCustom('');
+                            }
+                          }}
+                          disabled={reportActionSubmitting || reportActionDeliveryPending}
+                          style={{ width: '100%' }}
+                        >
+                          <option value={7}>7 days (1 week)</option>
+                          <option value={14}>14 days (2 weeks)</option>
+                          <option value={21}>21 days (3 weeks)</option>
+                          <option value={30}>30 days (1 month)</option>
+                          <option value={60}>60 days (2 months)</option>
+                          <option value={90}>90 days (3 months)</option>
+                          <option value="custom">Custom — enter days</option>
+                        </select>
+                        {reportActionDuration === 'custom' && (
+                          <input
+                            id="issue-report-action-custom-days"
+                            className="form-input"
+                            type="number"
+                            min="1"
+                            max="90"
+                            placeholder="Days"
+                            value={reportActionCustom}
+                            onChange={event => setReportActionCustom(event.target.value)}
+                            disabled={reportActionSubmitting || reportActionDeliveryPending}
+                            style={{ width: '100%', marginTop: '0.5rem' }}
+                          />
+                        )}
+                      </div>
+                    )}
+                    {reportActionError && <div className="alert alert-error" role="alert">{reportActionError}</div>}
+                  </div>
+                  <div className="modal-footer">
+                    <button type="button" className="btn btn-outline" onClick={closeReportActionPrompt} disabled={reportActionSubmitting}>{reportActionDeliveryPending ? 'Close' : 'Cancel'}</button>
+                    <button type="submit" className={`btn ${reportActionPrompt.id === 'suspend' ? 'btn-danger' : 'btn-accent'}`} disabled={reportActionSubmitting || (reportActionPrompt.id !== 'warn' && !reportActionReason.trim()) || (reportActionPrompt.id === 'warn' && !reportActionMessage.trim())}>
+                      {reportActionSubmitting ? 'Applying...' : reportActionPrompt.id === 'warn' ? reportActionDeliveryPending ? 'Retry delivery' : 'Send warning' : 'Confirm action'}
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

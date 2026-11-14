@@ -11,6 +11,7 @@ const { sendEmail } = require('../services/mailer');
 const { renderInviteEmail, ROLE_LABELS } = require('../services/emailTemplates/invite');
 const { renderPasswordResetEmail } = require('../services/emailTemplates/passwordReset');
 const { renderTempPasswordEmail } = require('../services/emailTemplates/tempPassword');
+const { renderSuspensionEmail } = require('../services/emailTemplates/suspension');
 
 const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, suspension_status, suspended_until, suspension_reason, suspension_updated_at, escalated_to_deletion, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
 
@@ -273,8 +274,31 @@ async function suspendUser(req, res) {
     description: `Admin suspended user ${userDisplayName(user, req.params.id)} for ${days} day(s): ${reason || 'no reason'}`,
   });
 
+  const suspensionEmail = user.email
+    ? renderSuspensionEmail({
+      name: getFullName(user),
+      email: user.email,
+      reason: user.suspension_reason,
+      duration: days,
+      suspendedUntil: user.suspended_until,
+      supportEmail: config.email.supportEmail,
+    })
+    : null;
+  const emailResult = suspensionEmail
+    ? await sendEmail({
+      to: user.email,
+      ...suspensionEmail,
+      template: 'user_suspension',
+    })
+    : { delivered: false, attempts: 0, errorCode: 'NO_RECIPIENT' };
+
+  if (!emailResult.delivered) {
+    console.error(`[Users] Suspension email was not delivered (${emailResult.errorCode || 'E_MAIL'})`);
+  }
+
   res.json({
     data: { ...mapUser(user), status: 'suspended', suspendedUntil: user.suspended_until, suspensionReason: user.suspension_reason },
+    emailNotification: { delivered: emailResult.delivered, errorCode: emailResult.errorCode },
     message: `User suspended for ${days} day(s)`,
   });
 }
@@ -930,12 +954,31 @@ async function listUserProposals(req, res) {
     }
   }
 
+  // GP spent to submit a proposal is recorded in the points ledger as a
+  // negative `proposal_charge` row keyed by proposal_id. The legacy
+  // job_matches.connections column is null for newer matches, so derive the
+  // figure from the ledger and keep the column as a fallback.
+  const proposalIds = [...new Set((matches || []).map(m => m.proposal_id).filter(Boolean))];
+  const { data: charges } = proposalIds.length
+    ? await supabase
+      .from('gawa_points_transactions')
+      .select('proposal_id, amount')
+      .eq('transaction_type', 'proposal_charge')
+      .in('proposal_id', proposalIds)
+    : { data: [] };
+  const gpByProposal = {};
+  (charges || []).forEach(charge => {
+    if (!charge.proposal_id) return;
+    gpByProposal[charge.proposal_id] = (gpByProposal[charge.proposal_id] || 0) + Math.abs(charge.amount);
+  });
+
   const enriched = (matches || []).map(m => ({
     ...toCamelCase(m),
     jobPost: m.job_post ? {
       ...toCamelCase(m.job_post),
       clientName: clientNameMap[m.job_post.client_id] || m.job_post.client_id,
     } : null,
+    gpUsed: gpByProposal[m.proposal_id] ?? m.connections ?? null,
   }));
 
   res.json({ data: enriched });

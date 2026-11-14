@@ -50,16 +50,47 @@ export default function Settings() {
   const [inviteForm, setInviteForm] = useState({ name: '', email: '', role: 'admin' });
   const [inviteMsg, setInviteMsg] = useState('');
 
-  const { data: activityLogs, refetch: refetchActivityLogs } = useApiData(() => activityLogApi.list({ limit: 50, scope: 'admin' }), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
-  });
+  // Admin activity (Settings → Admin Activity): filterable, chronological, paginated.
+  const canViewAdminActivity = can('manageSettings');
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [activityPagination, setActivityPagination] = useState({ total: 0, page: 1, limit: 25, totalPages: 0 });
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState('');
+  const [activityFilters, setActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
+  const [appliedActivityFilters, setAppliedActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
+  const [activityPage, setActivityPage] = useState(1);
+
+  const fetchActivityLogs = React.useCallback(async (filters, page) => {
+    if (!canViewAdminActivity) return;
+    setActivityLoading(true);
+    setActivityError('');
+    try {
+      const params = {
+        scope: 'admin',
+        order: 'asc',
+        page,
+        limit: 25,
+      };
+      if (filters.agentId) params.userId = filters.agentId;
+      if (filters.startDate) params.startDate = filters.startDate;
+      if (filters.endDate) params.endDate = filters.endDate;
+      const res = await activityLogApi.list(params);
+      setActivityLogs(res?.data ?? []);
+      setActivityPagination(res?.pagination ?? { total: 0, page, limit: 25, totalPages: 0 });
+    } catch (err) {
+      setActivityError(err?.error || err?.message || 'Failed to load admin activity');
+      setActivityLogs([]);
+      setActivityPagination({ total: 0, page, limit: 25, totalPages: 0 });
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [canViewAdminActivity]);
 
   useEffect(() => {
-    if (tab === 'activity') {
-      refetchActivityLogs();
+    if (tab === 'activity' && canViewAdminActivity) {
+      fetchActivityLogs(appliedActivityFilters, activityPage);
     }
-  }, [tab, refetchActivityLogs]);
+  }, [tab, canViewAdminActivity, appliedActivityFilters, activityPage, fetchActivityLogs]);
 
   // Team members (admin-managed staff accounts) and pending invitations
   const [inviteResult, setInviteResult] = useState(null);
@@ -375,28 +406,150 @@ export default function Settings() {
           <div className="settings-card">
             <div className="settings-card-title">Admin Activity Log</div>
             <div className="card-body" style={{ padding: 0 }}>
-              <DataTable
-                columns={[
-                  { key: 'agentName', label: 'Agent' },
-                  { key: 'activityTypeLabel', label: 'Activity Type' },
-                  { key: 'category', label: 'Category' },
-                  {
-                    key: 'description',
-                    label: 'Description',
-                    render: (row) => {
-                      const name = row.relatedUserName;
-                      const id = row.relatedUserId;
-                      if (!name || !id || typeof row.description !== 'string') return row.description;
-                      return row.description.split(id).join(name);
-                    },
-                  },
-                  { key: 'createdAt', label: 'Timestamp', render: (row) => formatDateTime(row.createdAt) },
-                ]}
-                data={activityLogs}
-                pageSize={15}
-                emptyMessage="No activity logs."
-                sortable={false}
-              />
+              {canViewAdminActivity ? (
+                <>
+                  <div style={{ padding: '1rem', borderBottom: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                      View a chronological history of actions performed by a staff agent. Filter by agent account and date range to review incident and moderation activity.
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div className="form-group" style={{ minWidth: 240, flex: '1 1 240px', margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-agent">Agent account</label>
+                        <select
+                          id="activity-agent"
+                          className="form-select"
+                          value={activityFilters.agentId}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, agentId: e.target.value }))}
+                        >
+                          <option value="">All agents</option>
+                          {(teamMembers || [])
+                            .filter((m) => m && m.kind !== 'invite' && m.id)
+                            .sort((a, b) => {
+                              const ra = a.role === 'customer_support' ? 0 : 1;
+                              const rb = b.role === 'customer_support' ? 0 : 1;
+                              if (ra !== rb) return ra - rb;
+                              return String(a.name || a.email || '').localeCompare(String(b.name || b.email || ''));
+                            })
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {(m.name || m.email || 'Unknown')} — {formatLabel(m.role)}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-start">From</label>
+                        <input
+                          id="activity-start"
+                          className="form-input"
+                          type="date"
+                          value={activityFilters.startDate}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, startDate: e.target.value }))}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-end">To</label>
+                        <input
+                          id="activity-end"
+                          className="form-input"
+                          type="date"
+                          value={activityFilters.endDate}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, endDate: e.target.value }))}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => { setAppliedActivityFilters({ ...activityFilters }); setActivityPage(1); }}
+                        >
+                          Apply
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          onClick={() => {
+                            const cleared = { agentId: '', startDate: '', endDate: '' };
+                            setActivityFilters(cleared);
+                            setAppliedActivityFilters(cleared);
+                            setActivityPage(1);
+                          }}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {(appliedActivityFilters.agentId || appliedActivityFilters.startDate || appliedActivityFilters.endDate) && (
+                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                        Showing {activityPagination.total || 0} action{(activityPagination.total || 0) === 1 ? '' : 's'}
+                        {appliedActivityFilters.agentId ? (() => {
+                          const agent = (teamMembers || []).find((m) => m.id === appliedActivityFilters.agentId);
+                          return agent ? ` for ${agent.name || agent.email}` : '';
+                        })() : ''}
+                        {appliedActivityFilters.startDate ? ` from ${appliedActivityFilters.startDate}` : ''}
+                        {appliedActivityFilters.endDate ? ` to ${appliedActivityFilters.endDate}` : ''}
+                        {' '}in chronological order.
+                      </div>
+                    )}
+                  </div>
+
+                  {activityError && <div className="alert alert-error" role="alert" style={{ margin: '0.75rem 1rem 0' }}>{activityError}</div>}
+
+                  <DataTable
+                    columns={[
+                      { key: 'agentName', label: 'Agent' },
+                      { key: 'activityTypeLabel', label: 'Activity Type' },
+                      { key: 'category', label: 'Category' },
+                      {
+                        key: 'description',
+                        label: 'Description',
+                        render: (row) => {
+                          const name = row.relatedUserName;
+                          const id = row.relatedUserId;
+                          if (!name || !id || typeof row.description !== 'string') return row.description;
+                          return row.description.split(id).join(name);
+                        },
+                      },
+                      { key: 'createdAt', label: 'Timestamp', render: (row) => formatDateTime(row.createdAt) },
+                    ]}
+                    data={activityLogs}
+                    loading={activityLoading}
+                    pageSize={Math.max(activityLogs.length, 1)}
+                    emptyMessage="No activity logs found for the selected filters."
+                    sortable={false}
+                  />
+
+                  {activityPagination.totalPages > 1 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderTop: '1px solid var(--color-border)', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                        Page {activityPagination.page} of {activityPagination.totalPages} · {activityPagination.total} total action{activityPagination.total === 1 ? '' : 's'}
+                      </span>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={activityLoading || activityPage <= 1}
+                          onClick={() => setActivityPage((p) => Math.max(1, p - 1))}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={activityLoading || activityPage >= activityPagination.totalPages}
+                          onClick={() => setActivityPage((p) => Math.min(activityPagination.totalPages, p + 1))}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty-state" style={{ padding: '1.5rem' }}>
+                  <div className="empty-state-text">Admin activity history is available to administrators.</div>
+                </div>
+              )}
             </div>
           </div>
         )}

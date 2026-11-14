@@ -26,6 +26,73 @@ async function enrichWallets(wallets) {
   return enrichWithUser(wallets, 'user_id');
 }
 
+// The `gawa_points_packs` table has no `description`, `created_at` or
+// `updated_at` columns, so the controller must only ever touch the columns
+// that actually exist: pack_id, display_name, points, price_php,
+// cost_per_point, sort_order and is_active.
+//
+// `cost_per_point` is a GENERATED ALWAYS AS (round(price_php / points, 2))
+// STORED column, so it is read-only: PostgREST rejects any insert or update
+// that names it (SQLSTATE 428C9). The database derives it for us and we only
+// read it back.
+function serializePack(pack) {
+  return {
+    packId: pack.pack_id,
+    displayName: pack.display_name,
+    points: pack.points,
+    pricePhp: pack.price_php,
+    costPerPoint: pack.cost_per_point,
+    sortOrder: pack.sort_order,
+    isActive: pack.is_active,
+  };
+}
+
+function toPositiveNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function slugifyPackId(value) {
+  return String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+/**
+ * `pack_id` is a text primary key with no database default, so a new pack has
+ * to be given one. A slug of the display name is readable and stable; a
+ * numeric suffix keeps it unique when two packs share a name.
+ */
+async function uniquePackId(displayName) {
+  const root = slugifyPackId(displayName) || 'pack';
+  let candidate = root;
+  let suffix = 2;
+  for (;;) {
+    const { data, error } = await supabase
+      .from('gawa_points_packs')
+      .select('pack_id')
+      .eq('pack_id', candidate)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return candidate;
+    candidate = `${root}-${suffix++}`;
+  }
+}
+
+/** `sort_order` is NOT NULL and UNIQUE with no default, so pick the next slot. */
+async function nextSortOrder() {
+  const { data, error } = await supabase
+    .from('gawa_points_packs')
+    .select('sort_order')
+    .order('sort_order', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  return data && data.length ? (Number(data[0].sort_order) || 0) + 1 : 1;
+}
+
 async function listPacks(req, res) {
   const { isActive } = req.query;
   let query = supabase.from('gawa_points_packs').select('*');
@@ -34,41 +101,97 @@ async function listPacks(req, res) {
 
   const { data, error } = await query;
   if (error) return sendError(res, error, { status: 500 });
-  res.json({ data: data.map(p => ({ ...p, isActive: p.is_active, packId: p.pack_id, displayName: p.display_name, pricePhp: p.price_php, costPerPoint: p.cost_per_point, sortOrder: p.sort_order, createdAt: p.created_at, updatedAt: p.updated_at })) });
+  res.json({ data: (data || []).map(serializePack) });
 }
 
 async function createPack(req, res) {
-  const { displayName, points, pricePhp, description, costPerPoint, sortOrder } = req.body;
-  if (!displayName || !points || !pricePhp) return res.status(400).json({ error: 'Display name, points, and price are required' });
+  const { displayName, points, pricePhp, sortOrder } = req.body;
+  const parsedPoints = toPositiveNumber(points);
+  const parsedPrice = toPositiveNumber(pricePhp);
+
+  if (!displayName || !String(displayName).trim()) {
+    return res.status(400).json({ error: 'Pack name is required' });
+  }
+  if (!parsedPoints) return res.status(400).json({ error: 'Points must be a positive number' });
+  if (!parsedPrice) return res.status(400).json({ error: 'Price must be a positive number' });
+
+  let packId;
+  let order;
+  try {
+    packId = await uniquePackId(displayName);
+    order = sortOrder === undefined || sortOrder === null || sortOrder === ''
+      ? await nextSortOrder()
+      : Number(sortOrder);
+  } catch (err) {
+    return sendError(res, err, { status: 500, fallback: 'Could not prepare the new pack' });
+  }
+  if (!Number.isFinite(order) || order < 0) {
+    return res.status(400).json({ error: 'Sort order must be zero or greater' });
+  }
 
   const { data, error } = await supabase
     .from('gawa_points_packs')
     .insert({
-      display_name: displayName,
-      points: +points,
-      price_php: +pricePhp,
-      description: description || null,
-      cost_per_point: costPerPoint ? +costPerPoint : +pricePhp / +points,
-      sort_order: sortOrder || 0,
+      pack_id: packId,
+      display_name: String(displayName).trim(),
+      points: parsedPoints,
+      price_php: parsedPrice,
+      sort_order: order,
       is_active: true,
     })
     .select()
     .single();
 
-  if (error) return sendError(res, error, { status: 500 });
-  res.status(201).json({ data: { ...data, isActive: data.is_active, packId: data.pack_id, displayName: data.display_name, pricePhp: data.price_php, costPerPoint: data.cost_per_point, sortOrder: data.sort_order, createdAt: data.created_at }, message: 'Pack created' });
+  if (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'That sort order is already in use. Choose a different one.' });
+    }
+    return sendError(res, error, { status: 500, fallback: 'Could not create the pack' });
+  }
+  res.status(201).json({ data: serializePack(data), message: 'Pack created' });
 }
 
 async function updatePack(req, res) {
-  const allowed = ['displayName', 'points', 'pricePhp', 'description', 'costPerPoint', 'sortOrder', 'isActive'];
+  const { data: existing, error: fetchErr } = await supabase
+    .from('gawa_points_packs')
+    .select('*')
+    .eq('pack_id', req.params.id)
+    .maybeSingle();
+
+  if (fetchErr) return sendError(res, fetchErr, { status: 500 });
+  if (!existing) return res.status(404).json({ error: 'Pack not found' });
+
   const updates = {};
-  for (const key of allowed) {
-    if (req.body[key] !== undefined) {
-      const dbKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
-      updates[dbKey] = req.body[key];
-    }
+  if (req.body.displayName !== undefined) {
+    if (!String(req.body.displayName).trim()) return res.status(400).json({ error: 'Pack name is required' });
+    updates.display_name = String(req.body.displayName).trim();
   }
-  updates.updated_at = new Date().toISOString();
+  if (req.body.points !== undefined) {
+    const parsed = toPositiveNumber(req.body.points);
+    if (!parsed) return res.status(400).json({ error: 'Points must be a positive number' });
+    updates.points = parsed;
+  }
+  if (req.body.pricePhp !== undefined) {
+    const parsed = toPositiveNumber(req.body.pricePhp);
+    if (!parsed) return res.status(400).json({ error: 'Price must be a positive number' });
+    updates.price_php = parsed;
+  }
+  // `cost_per_point` is generated from price and points, so any client-supplied
+  // value is ignored rather than written (the database rejects it, SQLSTATE 428C9).
+  if (req.body.sortOrder !== undefined && req.body.sortOrder !== null && req.body.sortOrder !== '') {
+    const parsed = Number(req.body.sortOrder);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return res.status(400).json({ error: 'Sort order must be zero or greater' });
+    }
+    updates.sort_order = parsed;
+  }
+  if (req.body.isActive !== undefined) {
+    updates.is_active = !!req.body.isActive;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return res.json({ data: serializePack(existing), message: 'No changes to apply' });
+  }
 
   const { data, error } = await supabase
     .from('gawa_points_packs')
@@ -77,13 +200,24 @@ async function updatePack(req, res) {
     .select()
     .single();
 
-  if (error || !data) return res.status(404).json({ error: 'Pack not found' });
-  res.json({ data: { ...data, isActive: data.is_active, packId: data.pack_id, displayName: data.display_name, pricePhp: data.price_php, costPerPoint: data.cost_per_point, sortOrder: data.sort_order, createdAt: data.created_at, updatedAt: data.updated_at }, message: 'Pack updated' });
+  if (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'That sort order is already in use. Choose a different one.' });
+    }
+    return sendError(res, error, { status: 500, fallback: 'Could not update the pack' });
+  }
+  res.json({ data: serializePack(data), message: 'Pack updated' });
 }
 
 async function deletePack(req, res) {
-  const { error } = await supabase.from('gawa_points_packs').delete().eq('pack_id', req.params.id);
+  const { data, error } = await supabase
+    .from('gawa_points_packs')
+    .delete()
+    .eq('pack_id', req.params.id)
+    .select('pack_id');
+
   if (error) return sendError(res, error, { status: 500 });
+  if (!data || data.length === 0) return res.status(404).json({ error: 'Pack not found' });
   res.json({ message: 'Pack deleted' });
 }
 

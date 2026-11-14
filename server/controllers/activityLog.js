@@ -66,6 +66,16 @@ const ADMIN_ACTIVITY_TYPES = [
   'content_flagged',
 ];
 
+function normalizeDateBound(value, endOfDay = false) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  // Date-only inputs (YYYY-MM-DD) are treated as inclusive day bounds.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return endOfDay ? `${raw}T23:59:59.999Z` : `${raw}T00:00:00.000Z`;
+  }
+  return raw;
+}
+
 async function listActivityLog(req, res) {
   const {
     userId,
@@ -77,6 +87,7 @@ async function listActivityLog(req, res) {
     endDate,
     limit,
     page,
+    order,
   } = req.query;
 
   let query = supabase
@@ -88,12 +99,16 @@ async function listActivityLog(req, res) {
   if (activityType) query = query.eq('activity_type', activityType);
   if (category) query = query.eq('category', category);
   if (scope === 'admin') query = query.in('activity_type', ADMIN_ACTIVITY_TYPES);
-  if (startDate) query = query.gte('created_at', startDate);
-  if (endDate) query = query.lte('created_at', endDate);
+
+  const startBound = normalizeDateBound(startDate, false);
+  const endBound = normalizeDateBound(endDate, true);
+  if (startBound) query = query.gte('created_at', startBound);
+  if (endBound) query = query.lte('created_at', endBound);
 
   const p = Math.max(1, parseInt(page || '1', 10));
   const l = Math.min(100, Math.max(1, parseInt(limit || '50', 10)));
-  query = query.range((p - 1) * l, p * l - 1).order('created_at', { ascending: false });
+  const ascending = order === 'asc';
+  query = query.range((p - 1) * l, p * l - 1).order('created_at', { ascending });
 
   const { data, error, count } = await query;
   if (error) return sendError(res, error, { status: 500 });

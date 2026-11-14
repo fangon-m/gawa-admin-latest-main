@@ -25,7 +25,7 @@ export default function UserDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
-  const { can } = usePermissions(currentUser?.role);
+  const { can, isAdmin } = usePermissions(currentUser?.role);
   const { addNotification } = useNotifications();
 
   // Guard against missing or invalid IDs
@@ -49,6 +49,7 @@ export default function UserDetail() {
   // real account id returned by the API.
   const userId = user?.id || null;
   const [doAddNote] = useMutation(notesApi.add);
+  const [doDeleteNote, { loading: deletingNote }] = useMutation(notesApi.remove);
   const { data: userTransactions, loading: transactionsLoading } = useApiData(() => (userId ? transactionsApi.list({ userId, limit: 50 }) : Promise.resolve({ data: [] })), [userId], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
@@ -92,6 +93,8 @@ export default function UserDetail() {
   const [suspensionReason, setSuspensionReason] = useState('');
   const [archiveReason, setArchiveReason] = useState('');
   const [userActionError, setUserActionError] = useState('');
+  const [noteToDelete, setNoteToDelete] = useState(null);
+  const [noteError, setNoteError] = useState('');
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
     () => (userId ? assessmentAttemptsApi.getUserAttempts(userId) : Promise.resolve({ data: [], stats: {} })),
@@ -162,16 +165,18 @@ export default function UserDetail() {
     );
   }
 
-  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', 'notes', ...(canViewHistory ? ['history'] : [])];
+  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', ...(canViewHistory ? ['history'] : [])];
 
   const handleAction = async (action) => {
     try {
+      let suspensionEmailNotification;
       if (action === 'suspend') {
         const duration =
           suspensionDays === 'custom'
             ? Math.max(1, Math.min(90, Number(suspensionCustom) || 7))
             : suspensionDays;
-        await suspend(user.id, { duration, reason: suspensionReason });
+        const result = await suspend(user.id, { duration, reason: suspensionReason });
+        suspensionEmailNotification = result?.emailNotification;
       } else if (action === 'reinstate') {
         await reinstate(user.id);
       } else if (action === 'archive') {
@@ -181,7 +186,16 @@ export default function UserDetail() {
       } else if (action === 'flag') {
         await flagUser(user.id);
       } else return;
-      addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, userEntityPath(user.id));
+      if (action === 'suspend' && suspensionEmailNotification?.delivered === false) {
+        addNotification(
+          'verification_error',
+          'Suspension Email Not Delivered',
+          `The suspension is active, but its email notification failed (${suspensionEmailNotification.errorCode || 'E_MAIL'}).`,
+          userEntityPath(user.id)
+        );
+      } else {
+        addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, userEntityPath(user.id));
+      }
       setUserActionError('');
       refetch();
       setShowConfirm(null);
@@ -191,6 +205,29 @@ export default function UserDetail() {
       setArchiveReason('');
     } catch (err) {
       setUserActionError(err?.error || err?.message || 'User action failed. Please try again.');
+    }
+  };
+
+  const handleAddNote = async (note) => {
+    setNoteError('');
+    try {
+      await doAddNote(user.id, note.text);
+      addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, userEntityPath(user.id));
+      refetch();
+    } catch (err) {
+      setNoteError(err?.error || err?.message || 'Unable to add note.');
+    }
+  };
+
+  const handleDeleteNote = async () => {
+    if (!noteToDelete?.id || deletingNote) return;
+    setNoteError('');
+    try {
+      await doDeleteNote(noteToDelete.id);
+      setNoteToDelete(null);
+      refetch();
+    } catch (err) {
+      setNoteError(err?.error || err?.message || 'Unable to delete note.');
     }
   };
 
@@ -221,7 +258,7 @@ export default function UserDetail() {
     { key: 'jobTitle', label: 'Job Title', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(jobEntityPath(jobId)); }}>{row.jobPost?.jobTitle || row.jobPost?.job_title || row.jobTitle || row.job_title || row.jobPostId || row.job_post_id || 'Untitled job'}</span> },
     { key: 'agreedPrice', label: 'Agreed Price', render: (row) => formatCurrency(row.agreedPrice || row.agreed_price) },
     { key: 'status', label: 'Match Status', render: (row) => <StatusBadge status={row.status || row.match_status} /> },
-    { key: 'connections', label: 'GP Used', render: (row) => row.connections ?? '-' },
+    { key: 'gpUsed', label: 'GP Used', render: (row) => row.gpUsed ?? row.connections ?? '-' },
     { key: 'matchedAt', label: 'Matched', render: (row) => formatDate(row.matchedAt || row.matched_at) },
   ];
 
@@ -263,68 +300,70 @@ export default function UserDetail() {
         </div>
       </div>
 
-      <Tabs tabs={tabs.map(t => ({ key: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} activeTab={activeTab} onChange={setActiveTab} />
-      <div className="tab-content">
+      <div className="user-detail-panel-layout">
+        <div className="user-detail-main">
+          <Tabs tabs={tabs.map(t => ({ key: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} activeTab={activeTab} onChange={setActiveTab} />
+          <div className="tab-content">
         {activeTab === 'profile' && (
           <div className="card">
             <div className="card-body">
-              <div className="detail-grid">
-                <div className="detail-field"><div className="detail-label">Full Name</div><div className="detail-value">{user.name || user.fullName}</div></div>
-                <div className="detail-field"><div className="detail-label">Email</div><div className="detail-value">{user.email}</div></div>
-                <div className="detail-field"><div className="detail-label">Phone</div><div className="detail-value">{user.phone || 'N/A'}</div></div>
-                <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
-                <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
-                <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
-                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={formatEntityIdNumeric(user.id, 'USR-')}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
-                <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
-                {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
-                {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}
-                {user.municipality && <div className="detail-field"><div className="detail-label">Municipality</div><div className="detail-value">{user.municipality}</div></div>}
-                {user.barangay && <div className="detail-field"><div className="detail-label">Barangay</div><div className="detail-value">{user.barangay}</div></div>}
-                {isSuspended && user.suspendedUntil && (
-                  <div className="detail-field">
-                    <div className="detail-label">Suspended Until</div>
-                    <div className="detail-value" style={{ color: isExpiredSuspension ? 'var(--color-warning)' : 'var(--color-error)' }}>
-                      {formatDateTime(user.suspendedUntil)}
-                      {isExpiredSuspension && <span className="text-xs text-muted ml-2">(Expired)</span>}
+                <div className="detail-grid">
+                  <div className="detail-field"><div className="detail-label">Full Name</div><div className="detail-value">{user.name || user.fullName}</div></div>
+                  <div className="detail-field"><div className="detail-label">Email</div><div className="detail-value">{user.email}</div></div>
+                  <div className="detail-field"><div className="detail-label">Phone</div><div className="detail-value">{user.phone || 'N/A'}</div></div>
+                  <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
+                  <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
+                  <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
+                  <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={formatEntityIdNumeric(user.id, 'USR-')}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
+                  <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
+                  {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
+                  {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}
+                  {user.municipality && <div className="detail-field"><div className="detail-label">Municipality</div><div className="detail-value">{user.municipality}</div></div>}
+                  {user.barangay && <div className="detail-field"><div className="detail-label">Barangay</div><div className="detail-value">{user.barangay}</div></div>}
+                  {isSuspended && user.suspendedUntil && (
+                    <div className="detail-field">
+                      <div className="detail-label">Suspended Until</div>
+                      <div className="detail-value" style={{ color: isExpiredSuspension ? 'var(--color-warning)' : 'var(--color-error)' }}>
+                        {formatDateTime(user.suspendedUntil)}
+                        {isExpiredSuspension && <span className="text-xs text-muted ml-2">(Expired)</span>}
+                      </div>
+                    </div>
+                  )}
+                  {isSuspended && user.suspensionReason && (
+                    <div className="detail-field">
+                      <div className="detail-label">Suspension Reason</div>
+                      <div className="detail-value">{user.suspensionReason}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archived At</div>
+                      <div className="detail-value">{user.archivedAt ? formatDateTime(user.archivedAt) : 'N/A'}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archived By</div>
+                      <div className="detail-value">{user.archivedByName || (user.archivedBy ? formatEntityIdNumeric(user.archivedBy, 'USR-') : 'N/A')}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archive Reason</div>
+                      <div className="detail-value">{user.archiveReason || 'No reason recorded'}</div>
+                    </div>
+                  )}
+                  <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
+                  <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{user.flags}</div></div>
+                </div>
+                {user.skills?.length > 0 && (
+                  <div className="mt-4">
+                    <div className="detail-label mb-2">Skills</div>
+                    <div className="flex gap-1 flex-wrap">
+                      {user.skills.map((s, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{s}</span>)}
                     </div>
                   </div>
                 )}
-                {isSuspended && user.suspensionReason && (
-                  <div className="detail-field">
-                    <div className="detail-label">Suspension Reason</div>
-                    <div className="detail-value">{user.suspensionReason}</div>
-                  </div>
-                )}
-                {isArchived && (
-                  <div className="detail-field">
-                    <div className="detail-label">Archived At</div>
-                    <div className="detail-value">{user.archivedAt ? formatDateTime(user.archivedAt) : 'N/A'}</div>
-                  </div>
-                )}
-                {isArchived && (
-                  <div className="detail-field">
-                    <div className="detail-label">Archived By</div>
-                    <div className="detail-value">{user.archivedByName || (user.archivedBy ? formatEntityIdNumeric(user.archivedBy, 'USR-') : 'N/A')}</div>
-                  </div>
-                )}
-                {isArchived && (
-                  <div className="detail-field">
-                    <div className="detail-label">Archive Reason</div>
-                    <div className="detail-value">{user.archiveReason || 'No reason recorded'}</div>
-                  </div>
-                )}
-                <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
-                <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{user.flags}</div></div>
-              </div>
-              {user.skills?.length > 0 && (
-                <div className="mt-4">
-                  <div className="detail-label mb-2">Skills</div>
-                  <div className="flex gap-1 flex-wrap">
-                    {user.skills.map((s, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{s}</span>)}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -491,24 +530,6 @@ export default function UserDetail() {
           </div>
         )}
 
-        {activeTab === 'notes' && (
-          <div className="card">
-            <div className="card-header"><h3>Internal Notes</h3></div>
-            <div className="card-body">
-              <NotesPanel
-                notes={user.notes || []}
-                onAddNote={async (note) => {
-                  try {
-                    await doAddNote(user.id, note.text);
-                    addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, userEntityPath(user.id));
-                    refetch();
-                  } catch (err) { console.error('Add note failed:', err); }
-                }}
-              />
-            </div>
-          </div>
-        )}
-
         {activeTab === 'history' && (
           <div className="card">
             <div className="card-header">
@@ -533,6 +554,19 @@ export default function UserDetail() {
             </div>
           </div>
         )}
+          </div>
+        </div>
+        <div className="card user-detail-notes">
+          <div className="card-header"><h3>Internal Notes</h3></div>
+          <div className="card-body">
+            <NotesPanel
+              notes={user.notes || []}
+              onAddNote={handleAddNote}
+              onDeleteNote={isAdmin ? setNoteToDelete : undefined}
+              error={noteError}
+            />
+          </div>
+        </div>
       </div>
 
       {showConfirm === 'archive' ? (
@@ -671,6 +705,17 @@ export default function UserDetail() {
           onCancel={() => { setShowConfirm(null); setUserActionError(''); }}
         />
       )}
+
+      <ConfirmModal
+        open={!!noteToDelete}
+        title="Delete note"
+        message={noteError || 'Are you sure you want to permanently delete this internal note?'}
+        confirmLabel={deletingNote ? 'Deleting...' : 'Delete note'}
+        confirmDisabled={deletingNote}
+        variant="danger"
+        onConfirm={handleDeleteNote}
+        onCancel={() => { setNoteToDelete(null); setNoteError(''); }}
+      />
 
     </div>
   );

@@ -8,7 +8,7 @@ const pageNames = {
   '/jobs': 'Jobs',
   '/listings': 'Listings',
   '/transactions': 'Transactions',
-  '/oversight': 'Oversight',
+  '/oversight': 'Incident Reports',
   '/gawa-points': 'Gawa Points',
   '/messages': 'Messages',
   '/settings': 'Settings',

@@ -33,7 +33,8 @@ export default function Listings() {
       const q = search.toLowerCase();
       data = data.filter((l) => l.equipmentName?.toLowerCase().includes(q) || l.ownerName?.toLowerCase().includes(q));
     }
-    if (fil.status) data = data.filter((l) => l.status === fil.status);
+    if (fil.status === 'flagged') data = data.filter((listing) => (listing.openFlagCount || 0) > 0);
+    else if (fil.status) data = data.filter((listing) => listing.status === fil.status);
     return data;
   }, [search, fil, listings]);
 
@@ -45,7 +46,12 @@ export default function Listings() {
     { key: 'weekPricing', label: 'Week Rate', render: (row) => formatCurrency(row.weekPricing) },
     { key: 'equipmentCondition', label: 'Condition' },
     { key: 'stock', label: 'Stock' },
-    { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+    { key: 'status', label: 'Status', render: (row) => (
+      <div style={{ display: 'flex', gap: '0.375rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <StatusBadge status={row.status} />
+        {(row.openFlagCount || 0) > 0 && <StatusBadge status="flagged" label={`Flagged (${row.openFlagCount})`} />}
+      </div>
+    ) },
   ];
 
   return (

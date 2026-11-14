@@ -1,22 +1,19 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { getById as getRentalById, flag as flagRental, remove as removeRental } from '../api/rentals';
-import { formatDateTime, formatCurrency, userEntityPath, rentalEntityPath, formatEntityIdNumeric } from '../utils/helpers';
+import { getById as getRentalById, remove as removeRental } from '../api/rentals';
+import { formatDateTime, formatCurrency, userEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
-import ConfirmModal from '../components/common/ConfirmModal';
-import { Calendar, User, Package, PhilippinePeso, Shield, Flag, Trash2 } from 'lucide-react';
+import { Calendar, User, PhilippinePeso, Shield } from 'lucide-react';
 
 export default function RentalDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const { can } = usePermissions(currentUser?.role);
-  const { addNotification } = useNotifications();
   const [showConfirm, setShowConfirm] = useState(null);
   const [removeConfirmText, setRemoveConfirmText] = useState('');
 
@@ -32,28 +29,20 @@ export default function RentalDetail() {
     );
   }
 
-  const { data: rental, loading, error, refetch } = useApiData(() => getRentalById(id), [id], {
+  const { data: rental, loading, error } = useApiData(() => getRentalById(id), [id], {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
   // The route carries the friendly ID (RNT-123456); data calls need the UUID.
   const rentalId = rental?.rentalId || id;
 
-  const [doFlag] = useMutation(flagRental);
   const [doRemove] = useMutation(removeRental);
 
-  const handleAction = async (action) => {
+  const handleRemove = async () => {
     try {
-      if (action === 'flag') {
-        await doFlag(rentalId);
-      } else if (action === 'remove') {
-        await doRemove(rentalId);
-        setShowConfirm(null);
-        navigate('/rentals');
-        return;
-      }
+      await doRemove(rentalId);
       setShowConfirm(null);
-      refetch();
+      navigate('/rentals');
     } catch (err) { console.error('Rental action failed:', err); }
   };
 
@@ -105,7 +94,6 @@ export default function RentalDetail() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.375rem' }}>
-              {can('flagRental') && <button className="btn btn-outline btn-sm" onClick={() => setShowConfirm('flag')}>Flag</button>}
               {can('removeRental') && <button className="btn btn-danger btn-sm" onClick={() => setShowConfirm('remove')}>Remove</button>}
               <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Message</button>
             </div>
@@ -168,7 +156,7 @@ export default function RentalDetail() {
         </div>
       </div>
 
-      {showConfirm === 'remove' ? (
+      {showConfirm === 'remove' && (
         <div className="modal-overlay" onClick={() => { setShowConfirm(null); setRemoveConfirmText(''); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -209,8 +197,7 @@ export default function RentalDetail() {
                 disabled={removeConfirmText !== rental.listingTitle}
                 onClick={() => {
                   if (removeConfirmText === rental.listingTitle) {
-                    handleAction('remove');
-                    setRemoveConfirmText('');
+                    handleRemove();
                   }
                 }}
               >
@@ -219,16 +206,6 @@ export default function RentalDetail() {
             </div>
           </div>
         </div>
-      ) : (
-        <ConfirmModal
-          open={showConfirm === 'flag'}
-          title="Flag Rental"
-          message="Flag this rental for review?"
-          confirmLabel="Flag"
-          variant="warning"
-          onConfirm={() => handleAction('flag')}
-          onCancel={() => setShowConfirm(null)}
-        />
       )}
     </div>
   );

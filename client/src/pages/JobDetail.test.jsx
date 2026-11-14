@@ -33,7 +33,7 @@ const job = {
     userName: 'Tom Talent',
     status: 'accepted',
     agreedPrice: 4500,
-    connections: 12,
+    gpUsed: 12,
     matchedAt: '2026-01-02T00:00:00Z',
   }],
   completions: [{
@@ -96,6 +96,7 @@ vi.mock('../components/common/ConfirmModal', () => ({
 describe('JobDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    job.flags = [];
     let callCount = 0;
     useApiDataMock.mockImplementation(() => {
       callCount += 1;
@@ -118,6 +119,20 @@ describe('JobDetail', () => {
     expect(screen.getByText(formatCurrency(5000))).toBeTruthy();
     expect(screen.getByText('gcash, bank transfer')).toBeTruthy();
     expect(screen.getAllByText(/GP Used: 12/).length).toBeGreaterThan(0);
+  });
+
+  it('hides dismissed flags from job details but keeps other flags visible', () => {
+    job.flags = [
+      { flagId: 'dismissed-1', status: 'dismissed', reason: 'Dismissed flag reason' },
+      { flagId: 'open-1', status: 'open', reason: 'Open flag reason' },
+      { flagId: 'resolved-1', status: 'resolved', reason: 'Resolved flag reason' },
+    ];
+
+    render(<JobDetail />);
+
+    expect(screen.queryByText('Dismissed flag reason')).toBeNull();
+    expect(screen.getByText('Open flag reason')).toBeTruthy();
+    expect(screen.getByText('Resolved flag reason')).toBeTruthy();
   });
 
   it('renders a job timeline on the completions tab', () => {

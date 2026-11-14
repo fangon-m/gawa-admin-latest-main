@@ -439,11 +439,74 @@
   border-radius: var(--radius-full);
   letter-spacing: 0.02em;
   white-space: nowrap;
+  background: var(--color-surface-offset);
+  color: var(--color-text-muted);
 }
 
-.status-badge.warned {
+.status-badge.active,
+.status-badge.approved,
+.status-badge.completed,
+.status-badge.confirmed,
+.status-badge.finished,
+.status-badge.paid,
+.status-badge.passed,
+.status-badge.positive,
+.status-badge.published,
+.status-badge.released,
+.status-badge.resolved,
+.status-badge.sent,
+.status-badge.success,
+.status-badge.verified,
+.status-badge.available {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.status-badge.pending,
+.status-badge.flagged,
+.status-badge.held,
+.status-badge.needs-review,
+.status-badge.under-review,
+.status-badge.under_review,
+.status-badge.unverified,
+.status-badge.warned,
+.status-badge.escalated {
   background: var(--color-warning-subtle);
   color: var(--color-warning);
+}
+
+.status-badge.open,
+.status-badge.ongoing,
+.status-badge.in-progress,
+.status-badge.in_progress,
+.status-badge.matched,
+.status-badge.processing {
+  background: var(--color-blue-subtle);
+  color: var(--color-blue);
+}
+
+.status-badge.blocked,
+.status-badge.cancelled,
+.status-badge.canceled,
+.status-badge.declined,
+.status-badge.failed,
+.status-badge.negative,
+.status-badge.rejected,
+.status-badge.suspended,
+.status-badge.unavailable {
+  background: var(--color-error-subtle);
+  color: var(--color-error);
+}
+
+.status-badge.archived,
+.status-badge.closed,
+.status-badge.dismissed,
+.status-badge.draft,
+.status-badge.inactive,
+.status-badge.new,
+.status-badge.revoked {
+  background: var(--color-surface-offset);
+  color: var(--color-text-muted);
 }
 
 /* Pending team invitations (Settings → Team Members) */
@@ -580,6 +643,8 @@
 }
 
 .data-table-empty-icon {
+  display: flex;
+  justify-content: center;
   margin-bottom: var(--space-4);
   color: var(--color-text-faint);
 }
@@ -1445,7 +1510,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: var(--space-4);
+  margin: 0 auto var(--space-4);
   color: var(--color-text-faint);
 }
 

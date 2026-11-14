@@ -69,6 +69,18 @@
   margin-bottom: var(--space-6);
 }
 
+.user-detail-panel-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.user-detail-main,
+.user-detail-notes {
+  min-width: 0;
+}
+
 .user-avatar-lg {
   width: 80px;
   height: 80px;
@@ -500,6 +512,10 @@
   .user-detail-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .user-detail-panel-layout {
+    grid-template-columns: 1fr;
   }
 }
 

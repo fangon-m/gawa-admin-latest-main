@@ -60,7 +60,7 @@ vi.mock('../components/common/Tabs', () => ({
 }));
 
 vi.mock('../components/common/NotesPanel', () => ({
-  default: () => <div>Notes</div>,
+  default: () => <div>Notes panel</div>,
 }));
 
 vi.mock('../components/common/ConfirmModal', () => ({
@@ -100,6 +100,27 @@ describe('UserDetail', () => {
     useApiDataMock.mockReset();
     mockNavigate.mockReset();
     mockAddNotification.mockReset();
+  });
+
+  it('keeps notes beside every user detail panel without a Notes tab', () => {
+    const userData = {
+      id: 'user-123',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      role: 'client',
+      status: 'active',
+      flags: 0,
+      notes: [],
+      skills: [],
+    };
+    useApiDataMock.mockImplementation(() => ({ data: userData, loading: false, refetch: vi.fn() }));
+
+    render(<UserDetail />);
+
+    expect(screen.getByText('Notes panel')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Notes' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Jobs' }));
+    expect(screen.getByText('Notes panel')).toBeInTheDocument();
   });
 
   it('renders job rows in the Jobs tab when the payload uses snake_case fields', async () => {
