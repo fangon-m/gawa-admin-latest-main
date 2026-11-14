@@ -1,48 +1,103 @@
 const supabase = require('../db/supabase');
-
-// Entity types that support inline notes (notes stored as JSON in the entity's text field)
-const INLINE_ENTITIES = ['disputes', 'appeals'];
+const { getFullName, sendError } = require('../utilities/helpers');
+const { resolveEntityId } = require('../utilities/entityIds');
 
 /**
- * Parse notes from an entity's text field — handles JSON arrays, plain text, or null.
+ * Notes attached to any entity — a job post, a listing, a rental, a user.
+ *
+ * The admin client sends the table name as the entity type ('job_posts').
+ * The friendly name ('job') is accepted too, so both spellings work.
+ *
+ * The type is resolved through a fixed map rather than being used as a table
+ * name directly, and the entity id is resolved through the same helper the
+ * path parameters use, so the short ids the UI shows ('JOB-350252') work here
+ * as well.
  */
-function parseNotes(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [{ text: raw, createdAt: null }];
-    } catch {
-      // Plain text — wrap as a single note
-      return [{ text: raw, createdAt: null }];
-    }
-  }
-  return [];
+const ENTITY_TYPES = {
+  user: { table: 'users_table', entity: 'user' },
+  users: { table: 'users_table', entity: 'user' },
+  users_table: { table: 'users_table', entity: 'user' },
+  job: { table: 'job_posts', entity: 'job' },
+  jobs: { table: 'job_posts', entity: 'job' },
+  job_post: { table: 'job_posts', entity: 'job' },
+  job_posts: { table: 'job_posts', entity: 'job' },
+  listing: { table: 'equipment_listings', entity: 'listing' },
+  listings: { table: 'equipment_listings', entity: 'listing' },
+  equipment_listing: { table: 'equipment_listings', entity: 'listing' },
+  equipment_listings: { table: 'equipment_listings', entity: 'listing' },
+  rental: { table: 'equipment_rentals', entity: 'rental' },
+  rentals: { table: 'equipment_rentals', entity: 'rental' },
+  equipment_rental: { table: 'equipment_rentals', entity: 'rental' },
+  equipment_rentals: { table: 'equipment_rentals', entity: 'rental' },
+  transaction: { table: 'transactions', entity: 'transaction' },
+  transactions: { table: 'transactions', entity: 'transaction' },
+};
+
+const ENTITY_TYPE_PATTERN = /^[a-z_]{1,32}$/;
+
+function resolveEntityType(rawType) {
+  if (typeof rawType !== 'string' || !ENTITY_TYPE_PATTERN.test(rawType)) return null;
+  return ENTITY_TYPES[rawType] || null;
 }
 
 /**
- * List notes for a given entity.
+ * Turns the request's entity type and id into the pair stored on a note.
+ * Returns null when either cannot be resolved.
+ */
+async function resolveTarget(rawType, rawId) {
+  const type = resolveEntityType(rawType);
+  if (!type) return null;
+
+  const entityId = await resolveEntityId(type.entity, String(rawId || ''));
+  if (!entityId) return null;
+
+  return { type: rawType, entity: type.entity, entityId };
+}
+
+/**
+ * List notes for an entity.
  */
 async function listNotes(req, res) {
   const { entityType, entityId } = req.params;
 
-  if (INLINE_ENTITIES.includes(entityType)) {
-    // Fetch from the entity's notes text field
-    const { data: entity, error } = await supabase
-      .from(entityType)
-      .select('id, notes')
-      .eq('id', entityId)
-      .single();
-
-    if (error || !entity) return res.status(404).json({ error: `${entityType} not found` });
-
-    const notes = parseNotes(entity.notes);
-    return res.json({ data: notes });
+  const target = await resolveTarget(entityType, entityId);
+  if (!target) {
+    return res.status(400).json({ error: 'Unsupported entity type or unknown entity' });
   }
 
-  // Future: query entity_notes table
-  return res.status(400).json({ error: `Unsupported entity type: ${entityType}` });
+  const { data, error } = await supabase
+    .from('entity_notes')
+    .select('*')
+    .eq('entity_type', target.type)
+    .eq('entity_id', target.entityId)
+    .order('created_at', { ascending: false });
+
+  if (error) return sendError(res, error, { status: 500 });
+
+  const notes = data || [];
+  const authorIds = [...new Set(notes.map((n) => n.author_id).filter(Boolean))];
+
+  let authorMap = {};
+  if (authorIds.length > 0) {
+    const { data: authors } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name, email')
+      .in('id', authorIds);
+    (authors || []).forEach((a) => { authorMap[a.id] = getFullName(a) || a.email || a.id; });
+  }
+
+  res.json({
+    data: notes.map((note) => ({
+      id: note.id,
+      entityType: note.entity_type,
+      entityId: note.entity_id,
+      // The shared NotesPanel reads `text`; the column is called `content`.
+      text: note.content,
+      author: authorMap[note.author_id] || note.author_id || null,
+      authorId: note.author_id || null,
+      createdAt: note.created_at,
+    })),
+  });
 }
 
 /**
@@ -57,72 +112,57 @@ async function addNote(req, res) {
     return res.status(400).json({ error: 'Note content is required' });
   }
 
-  if (INLINE_ENTITIES.includes(entityType)) {
-    // Fetch current notes, append, store back as JSON
-    const { data: entity, error: fetchErr } = await supabase
-      .from(entityType)
-      .select('id, notes')
-      .eq('id', entityId)
-      .single();
-
-    if (fetchErr || !entity) return res.status(404).json({ error: `${entityType} not found` });
-
-    const notes = parseNotes(entity.notes);
-    const newNote = {
-      id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: content.trim(),
-      author,
-      authorId: req.user?.id || null,
-      createdAt: new Date().toISOString(),
-    };
-    notes.push(newNote);
-
-    const { error: updateErr } = await supabase
-      .from(entityType)
-      .update({ notes: JSON.stringify(notes), updated_at: new Date().toISOString() })
-      .eq('id', entityId);
-
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-
-    return res.status(201).json({ data: newNote });
+  const target = await resolveTarget(entityType, entityId);
+  if (!target) {
+    return res.status(400).json({ error: 'Unsupported entity type or unknown entity' });
   }
 
-  return res.status(400).json({ error: `Unsupported entity type: ${entityType}` });
+  const { data, error } = await supabase
+    .from('entity_notes')
+    .insert({
+      entity_type: target.type,
+      entity_id: target.entityId,
+      content: content.trim(),
+      author_id: req.user?.id || null,
+    })
+    .select()
+    .single();
+
+  if (error) return sendError(res, error, { status: 500 });
+
+  res.status(201).json({
+    data: {
+      id: data.id,
+      entityType: data.entity_type,
+      entityId: data.entity_id,
+      text: data.content,
+      author,
+      authorId: data.author_id || null,
+      createdAt: data.created_at,
+    },
+  });
 }
 
 /**
- * Delete a note from an entity by note ID.
+ * Delete a note by id.
  */
 async function deleteNote(req, res) {
   const { entityType, entityId, noteId } = req.params;
 
-  if (INLINE_ENTITIES.includes(entityType)) {
-    const { data: entity, error: fetchErr } = await supabase
-      .from(entityType)
-      .select('id, notes')
-      .eq('id', entityId)
-      .single();
-
-    if (fetchErr || !entity) return res.status(404).json({ error: `${entityType} not found` });
-
-    const notes = parseNotes(entity.notes);
-    const filtered = notes.filter(n => n.id !== noteId);
-
-    if (filtered.length === notes.length) {
-      return res.status(404).json({ error: 'Note not found' });
-    }
-
-    const { error: updateErr } = await supabase
-      .from(entityType)
-      .update({ notes: JSON.stringify(filtered), updated_at: new Date().toISOString() })
-      .eq('id', entityId);
-
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-
-    return res.json({ message: 'Note deleted' });
+  const target = await resolveTarget(entityType, entityId);
+  if (!target) {
+    return res.status(400).json({ error: 'Unsupported entity type or unknown entity' });
   }
 
-  return res.status(400).json({ error: `Unsupported entity type: ${entityType}` });
+  const { error } = await supabase
+    .from('entity_notes')
+    .delete()
+    .eq('id', noteId)
+    .eq('entity_type', target.type)
+    .eq('entity_id', target.entityId);
+
+  if (error) return sendError(res, error, { status: 500 });
+  res.json({ message: 'Note deleted' });
 }
 
-module.exports = { listNotes, addNote, deleteNote };
+module.exports = { listNotes, addNote, deleteNote, resolveEntityType };

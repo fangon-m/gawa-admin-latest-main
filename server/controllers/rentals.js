@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 
 async function enrichRentals(rentals) {
   if (!rentals || rentals.length === 0) return [];
@@ -31,21 +31,20 @@ async function enrichRentals(rentals) {
 }
 
 async function listRentals(req, res) {
-  const { page = 1, limit = 20, status, renterId, ownerId, listingId, depositStatus } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { status, renterId, ownerId, listingId } = req.query;
 
-  let query = supabase.from('rentals').select('*', { count: 'exact' });
-  if (status) query = query.eq('status', status);
+  let query = supabase.from('equipment_rentals').select('*', { count: 'exact' });
+  if (status) query = query.eq('rental_status', status);
   if (renterId) query = query.eq('renter_id', renterId);
   if (ownerId) query = query.eq('owner_id', ownerId);
   if (listingId) query = query.eq('listing_id', listingId);
-  if (depositStatus) query = query.eq('deposit_status', depositStatus);
 
   const { data, error, count } = await query
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichRentals(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -54,154 +53,58 @@ async function listRentals(req, res) {
 
 async function getRentalById(req, res) {
   const { data: rental, error } = await supabase
-    .from('rentals')
-    .select('*, return_records(*)')
-    .eq('id', req.params.id)
+    .from('equipment_rentals')
+    .select('*')
+    .eq('rental_id', req.params.id)
     .single();
 
   if (error || !rental) return res.status(404).json({ error: 'Rental not found' });
 
-  const { return_records, ...rest } = rental;
-  const enriched = await enrichRentals([rest]);
-  const result = { ...enriched[0] };
-  if (return_records?.length) {
-    const rr = toCamelCase(return_records[0]);
-    result.returnRecord = rr;
-  }
-  res.json({ data: result });
+  const enriched = await enrichRentals([rental]);
+  res.json({ data: enriched[0] });
 }
 
-async function releaseDeposit(req, res) {
-  const { data, error } = await supabase
-    .from('rentals')
-    .update({ deposit_status: 'returned' })
-    .eq('id', req.params.id)
-    .select()
-    .single();
+async function flagRental(req, res) {
+  const { reason } = req.body;
+  const rentalId = req.params.id;
 
-  if (error || !data) return res.status(404).json({ error: 'Rental not found' });
-  const enriched = await enrichRentals([data]);
-  res.json({ data: enriched[0], message: 'Deposit released' });
-}
+  const { error: flagError } = await supabase
+    .from('entity_flags')
+    .insert({
+      entity_type: 'equipment_rental',
+      entity_id: rentalId,
+      flagged_by: req.user?.id,
+      reason: reason || 'Flagged by admin',
+    });
 
-async function receiveEquipment(req, res) {
+  if (flagError) return sendError(res, flagError, { status: 500 });
+
   const { data: rental, error: fetchErr } = await supabase
-    .from('rentals')
+    .from('equipment_rentals')
     .select('*')
-    .eq('id', req.params.id)
+    .eq('rental_id', rentalId)
     .single();
 
   if (fetchErr || !rental) return res.status(404).json({ error: 'Rental not found' });
-  if (rental.status !== 'pending') return res.status(400).json({ error: 'Rental must be pending to receive equipment' });
 
-  const { data: checkIn, error: ciErr } = await supabase
-    .from('rental_check_ins')
-    .insert({
-      rental_id: req.params.id,
-      user_id: rental.renter_id,
-      type: 'receive',
-      ip_address: req.ip,
-    })
-    .select()
-    .single();
-
-  if (ciErr) return res.status(500).json({ error: ciErr.message });
-
-  const { data, error } = await supabase
-    .from('rentals')
-    .update({ status: 'active' })
-    .eq('id', req.params.id)
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
-  const enriched = await enrichRentals([data]);
-  res.json({ data: { ...enriched[0], receiveCheckIn: toCamelCase(checkIn) }, message: 'Equipment received' });
+  const enriched = await enrichRentals([rental]);
+  res.json({ 
+    data: enriched[0], 
+    message: 'Rental flagged' 
+  });
 }
 
-async function returnEquipment(req, res) {
-  const { itemCondition, supportingImages } = req.body;
+async function removeRental(req, res) {
+  const rentalId = req.params.id;
 
-  const { data: rental, error: fetchErr } = await supabase
-    .from('rentals')
-    .select('*')
-    .eq('id', req.params.id)
-    .single();
+  const { error } = await supabase
+    .from('equipment_rentals')
+    .delete()
+    .eq('rental_id', rentalId);
 
-  if (fetchErr || !rental) return res.status(404).json({ error: 'Rental not found' });
-  if (rental.status !== 'active') return res.status(400).json({ error: 'Rental must be active to return equipment' });
+  if (error) return sendError(res, error, { status: 500 });
 
-  const { data: checkIn, error: ciErr } = await supabase
-    .from('rental_check_ins')
-    .insert({
-      rental_id: req.params.id,
-      user_id: rental.renter_id,
-      type: 'return',
-      ip_address: req.ip,
-      notes: itemCondition || null,
-    })
-    .select()
-    .single();
-
-  if (ciErr) return res.status(500).json({ error: ciErr.message });
-
-  const { data: existingReturn } = await supabase
-    .from('return_records')
-    .select('return_id')
-    .eq('rental_id', req.params.id)
-    .maybeSingle();
-
-  if (existingReturn) {
-    await supabase
-      .from('return_records')
-      .update({
-        item_condition: itemCondition || null,
-        supporting_images_url: supportingImages || null,
-        returned_at: new Date().toISOString(),
-      })
-      .eq('rental_id', req.params.id);
-  } else {
-    await supabase
-      .from('return_records')
-      .insert({
-        rental_id: req.params.id,
-        renter_id: rental.renter_id,
-        item_condition: itemCondition || null,
-        supporting_images_url: supportingImages || null,
-        returned_at: new Date().toISOString(),
-      });
-  }
-
-  const { data, error } = await supabase
-    .from('rentals')
-    .update({ status: 'completed' })
-    .eq('id', req.params.id)
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
-  const enriched = await enrichRentals([data]);
-  res.json({ data: { ...enriched[0], returnCheckIn: toCamelCase(checkIn) }, message: 'Equipment returned' });
+  res.json({ message: 'Rental removed' });
 }
 
-async function deductDeposit(req, res) {
-  const { amount, reason } = req.body;
-
-  const damageParts = [];
-  if (reason) damageParts.push(reason);
-  if (amount) damageParts.push(`Amount deducted: ${amount}`);
-  const damageReport = damageParts.length > 0 ? damageParts.join(' | ') : 'Deposit deducted';
-
-  const { data, error } = await supabase
-    .from('rentals')
-    .update({ deposit_status: 'deducted', damage_report: damageReport })
-    .eq('id', req.params.id)
-    .select()
-    .single();
-
-  if (error || !data) return res.status(404).json({ error: 'Rental not found' });
-  const enriched = await enrichRentals([data]);
-  res.json({ data: enriched[0], message: 'Deposit deducted' });
-}
-
-module.exports = { listRentals, getRentalById, releaseDeposit, deductDeposit, receiveEquipment, returnEquipment };
+module.exports = { listRentals, getRentalById, flagRental, removeRental };

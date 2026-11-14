@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { toCamelCase } = require('../utilities/helpers');
+const { toCamelCase, sendError } = require('../utilities/helpers');
 
 async function listConfigs(req, res) {
   const { data, error } = await supabase
@@ -7,7 +7,7 @@ async function listConfigs(req, res) {
     .select('*')
     .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: (data || []).map(toCamelCase) });
 }
 
@@ -44,7 +44,7 @@ async function createConfig(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.status(201).json({ data: toCamelCase(data), message: 'Fee configuration created' });
 }
 
@@ -83,7 +83,7 @@ async function deleteConfig(req, res) {
   }
 
   const { error } = await supabase.from('fee_configs').delete().eq('id', req.params.id);
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Fee configuration deleted' });
 }
 
@@ -104,7 +104,7 @@ async function setActiveConfig(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ data: toCamelCase(data), message: 'Active fee configuration updated' });
 }
 

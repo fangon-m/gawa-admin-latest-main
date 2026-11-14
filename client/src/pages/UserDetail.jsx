@@ -4,29 +4,28 @@ import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { getById as getUserById, suspend, reinstate, flagUser, resetPassword } from '../api/users';
+import { getById as getUserById, suspend, reinstate, archiveUser, unarchiveUser, flagUser } from '../api/users';
 import * as notesApi from '../api/notes';
 import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
 import * as listingsApi from '../api/listings';
-import * as disputesApi from '../api/disputes';
 import * as proposalsApi from '../api/proposals';
-import * as assessmentsApi from '../api/assessments';
+import * as activityLogApi from '../api/activityLog';
 import * as assessmentAttemptsApi from '../api/assessmentAttempts';
-import { formatDate, formatDateTime, formatCurrency, getInitials, capitalizeWords, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, formatEntityIdNumeric, getInitials, capitalizeWords, timeAgo, userEntityPath, jobEntityPath, listingEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import StatusBadge from '../components/common/StatusBadge';
 import Tabs from '../components/common/Tabs';
 import NotesPanel from '../components/common/NotesPanel';
 import ConfirmModal from '../components/common/ConfirmModal';
 import DataTable from '../components/common/DataTable';
-import { Mail, Phone, Ban, RotateCcw, Flag, MapPin, ClipboardCheck, RefreshCw, Award, XCircle, Gavel } from 'lucide-react';
+import { Mail, Phone, Ban, RotateCcw, Flag, MapPin, ClipboardCheck, RefreshCw, XCircle, Gavel } from 'lucide-react';
 
 export default function UserDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
-  const { can } = usePermissions(currentUser?.role);
+  const { can, isAdmin } = usePermissions(currentUser?.role);
   const { addNotification } = useNotifications();
 
   // Guard against missing or invalid IDs
@@ -46,16 +45,20 @@ export default function UserDetail() {
     defaultValue: null,
     transform: (r) => r?.data ?? r,
   });
+  // The route carries the friendly ID (USR-123456); every data call needs the
+  // real account id returned by the API.
+  const userId = user?.id || null;
   const [doAddNote] = useMutation(notesApi.add);
-  const { data: userTransactions, loading: transactionsLoading } = useApiData(() => transactionsApi.list({ userId: id, limit: 50 }), [id], {
+  const [doDeleteNote, { loading: deletingNote }] = useMutation(notesApi.remove);
+  const { data: userTransactions, loading: transactionsLoading } = useApiData(() => (userId ? transactionsApi.list({ userId, limit: 50 }) : Promise.resolve({ data: [] })), [userId], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
   });
   const { data: userJobs, loading: jobsLoading } = useApiData(() => {
-    if (!user) return Promise.resolve([]);
-    if (user.role === 'client') return jobsApi.list({ userId: id, limit: 50 });
-    return proposalsApi.listByUser(id);
-  }, [id, user?.role], {
+    if (!userId) return Promise.resolve({ data: [] });
+    if (user.role === 'client') return jobsApi.list({ userId, limit: 50 });
+    return proposalsApi.listByUser(userId);
+  }, [userId, user?.role], {
     defaultValue: [],
     transform: (r) => {
       const rows = r?.data ?? r ?? [];
@@ -76,49 +79,56 @@ export default function UserDetail() {
     },
   });
   const { data: userListings, loading: listingsLoading } = useApiData(
-    () => listingsApi.list({ ownerId: id, limit: 50 }),
-    [id],
+    () => (userId ? listingsApi.list({ ownerId: userId, limit: 50 }) : Promise.resolve({ data: [] })),
+    [userId],
     {
       defaultValue: [],
       transform: (r) => r?.data ?? r ?? [],
     }
   );
-  const { data: userDisputes, loading: disputesLoading } = useApiData(() => disputesApi.list({ limit: 50 }).then(r => (r?.data || r || []).filter(d => d.reporterId === id || d.respondentId === id)), [id]);
-
   const [activeTab, setActiveTab] = useState('profile');
   const [showConfirm, setShowConfirm] = useState(null);
   const [suspensionDays, setSuspensionDays] = useState(7);
+  const [suspensionCustom, setSuspensionCustom] = useState('');
   const [suspensionReason, setSuspensionReason] = useState('');
-  const [showPwReset, setShowPwReset] = useState(false);
-  const [pwNew, setPwNew] = useState('');
-  const [pwConfirm, setPwConfirm] = useState('');
-  const [pwError, setPwError] = useState('');
-  const [pwProcessing, setPwProcessing] = useState(false);
-
-  const [showOverrideModal, setShowOverrideModal] = useState({ open: false, assessmentId: '' });
-  const [overrideReason, setOverrideReason] = useState('');
-  const [processingOverride, setProcessingOverride] = useState(false);
+  const [archiveReason, setArchiveReason] = useState('');
+  const [userActionError, setUserActionError] = useState('');
+  const [noteToDelete, setNoteToDelete] = useState(null);
+  const [noteError, setNoteError] = useState('');
 
   const { data: attemptHistory, loading: attemptsLoading, refetch: refetchAttempts } = useApiData(
-    () => assessmentAttemptsApi.getUserAttempts(id),
-    [id],
+    () => (userId ? assessmentAttemptsApi.getUserAttempts(userId) : Promise.resolve({ data: [], stats: {} })),
+    [userId],
     {
       defaultValue: { data: [], stats: { totalAttempts: 0, passedAttempts: 0, failedAttempts: 0, passRate: 0, lastAttemptDate: null, lastResult: null } },
       immediate: false,
     }
   );
 
-  const { data: activeOverrides, refetch: refetchOverrides } = useApiData(
-    () => assessmentAttemptsApi.getActiveOverrides(id),
-    [id],
-    { defaultValue: [], immediate: false }
-  );
-
-  // Auto-load attempts + overrides when assessments tab becomes active
+  // Auto-load attempts when the assessments tab becomes active
   useEffect(() => {
     if (activeTab === 'assessments') {
       refetchAttempts();
-      refetchOverrides();
+    }
+  }, [activeTab]);
+
+  // Archive/unarchive history: the target account is activity_log.related_user_id,
+  // so the archive entries survive even after the account is restored.
+  const canViewHistory = can('viewAuditLogs');
+  const { data: userHistory, loading: historyLoading, refetch: refetchHistory } = useApiData(
+    () => (canViewHistory && userId ? activityLogApi.list({ relatedUserId: userId, limit: 100 }) : Promise.resolve([])),
+    [userId, canViewHistory],
+    {
+      defaultValue: [],
+      immediate: false,
+      transform: (r) => r?.data ?? r ?? [],
+    }
+  );
+
+  // Auto-load history when the history tab becomes active
+  useEffect(() => {
+    if (activeTab === 'history') {
+      refetchHistory();
     }
   }, [activeTab]);
 
@@ -155,76 +165,100 @@ export default function UserDetail() {
     );
   }
 
-  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'disputes', 'assessments', 'notes'];
-
-  const resetPwForm = () => { setPwNew(''); setPwConfirm(''); setPwError(''); };
+  const tabs = ['profile', 'jobs', 'listings', 'transactions', 'assessments', ...(canViewHistory ? ['history'] : [])];
 
   const handleAction = async (action) => {
     try {
+      let suspensionEmailNotification;
       if (action === 'suspend') {
-        await suspend(id, { duration: suspensionDays, reason: suspensionReason });
+        const duration =
+          suspensionDays === 'custom'
+            ? Math.max(1, Math.min(90, Number(suspensionCustom) || 7))
+            : suspensionDays;
+        const result = await suspend(user.id, { duration, reason: suspensionReason });
+        suspensionEmailNotification = result?.emailNotification;
       } else if (action === 'reinstate') {
-        await reinstate(id);
+        await reinstate(user.id);
+      } else if (action === 'archive') {
+        await archiveUser(user.id, archiveReason.trim());
+      } else if (action === 'unarchive') {
+        await unarchiveUser(user.id);
       } else if (action === 'flag') {
-        await flagUser(id);
+        await flagUser(user.id);
       } else return;
-      addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, `/users/${user.id}`);
+      if (action === 'suspend' && suspensionEmailNotification?.delivered === false) {
+        addNotification(
+          'verification_error',
+          'Suspension Email Not Delivered',
+          `The suspension is active, but its email notification failed (${suspensionEmailNotification.errorCode || 'E_MAIL'}).`,
+          userEntityPath(user.id)
+        );
+      } else {
+        addNotification('moderation_decision', 'User Action Applied', `Action: ${action} applied to ${user.name}`, userEntityPath(user.id));
+      }
+      setUserActionError('');
       refetch();
-    } catch (err) { console.error('User action failed:', err); }
-    setShowConfirm(null);
-    setSuspensionDays(7);
-    setSuspensionReason('');
+      setShowConfirm(null);
+      setSuspensionDays(7);
+      setSuspensionCustom('');
+      setSuspensionReason('');
+      setArchiveReason('');
+    } catch (err) {
+      setUserActionError(err?.error || err?.message || 'User action failed. Please try again.');
+    }
   };
 
-  const handlePasswordReset = async () => {
-    if (pwNew !== pwConfirm) {
-      setPwError('Passwords do not match');
-      return;
-    }
-    if (pwNew.length < 6) {
-      setPwError('Password must be at least 6 characters');
-      return;
-    }
-    setPwProcessing(true);
-    setPwError('');
+  const handleAddNote = async (note) => {
+    setNoteError('');
     try {
-      await resetPassword(id, pwNew);
-      addNotification('moderation_decision', 'Password Reset', `Password reset for ${user.name}`, `/users/${user.id}`);
-      setShowPwReset(false);
-      resetPwForm();
+      await doAddNote(user.id, note.text);
+      addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, userEntityPath(user.id));
+      refetch();
     } catch (err) {
-      setPwError(err?.error || 'Failed to reset password');
-    } finally {
-      setPwProcessing(false);
+      setNoteError(err?.error || err?.message || 'Unable to add note.');
+    }
+  };
+
+  const handleDeleteNote = async () => {
+    if (!noteToDelete?.id || deletingNote) return;
+    setNoteError('');
+    try {
+      await doDeleteNote(noteToDelete.id);
+      setNoteToDelete(null);
+      refetch();
+    } catch (err) {
+      setNoteError(err?.error || err?.message || 'Unable to delete note.');
     }
   };
 
   const isSuspended = user.status === 'suspended';
+  const isArchived = user.isArchived || user.status === 'archived';
   const isExpiredSuspension = isSuspended && user.suspendedUntil && new Date(user.suspendedUntil) < new Date();
 
   const actionButtons = [
-    { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended },
-    { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended },
-    { label: 'Reset Password', action: 'reset-password', permission: 'resetPassword', show: true },
-    { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: true },
+    { label: 'Suspend Account', action: 'suspend', permission: 'suspendUser', show: !isSuspended && !isArchived },
+    { label: 'Reinstate Account', action: 'reinstate', permission: 'reinstateUser', show: isSuspended && !isArchived },
+    { label: 'Archive & Ban Account', action: 'archive', permission: 'archiveUser', show: !isArchived },
+    { label: 'Unarchive & Restore Access', action: 'unarchive', permission: 'unarchiveUser', show: isArchived },
+    { label: 'Flag Account', action: 'flag', permission: 'flagUser', show: !isArchived },
   ];
 
   const getJobId = (row) => row.jobPostId || row.job_post_id || row.id || row.jobPost?.jobPostId || row.jobPost?.job_post_id;
   
   const clientJobColumns = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{getJobId(row)?.slice(0, 8)}</span> },
-    { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(`/jobs/${jobId}`); }}>{row.jobTitle || row.job_title || row.title || 'Untitled job'}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(getJobId(row), 'JOB-')}</span> },
+    { key: 'jobTitle', label: 'Job', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(jobEntityPath(jobId)); }}>{row.jobTitle || row.job_title || row.title || 'Untitled job'}</span> },
     { key: 'hiringOption', label: 'Type', render: (row) => <StatusBadge status={row.hiringOption || row.hiring_option} /> },
     { key: 'jobStatus', label: 'Status', render: (row) => <StatusBadge status={row.jobStatus || row.job_status || row.status} /> },
     { key: 'createdAt', label: 'Created', render: (row) => formatDate(row.createdAt || row.created_at) },
   ];
 
   const matchColumns = [
-    { key: 'id', label: 'Job ID', render: (row) => <span className="text-xs text-muted font-mono">{getJobId(row)?.slice(0, 8)}</span> },
-    { key: 'jobTitle', label: 'Job Title', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(`/jobs/${jobId}`); }}>{row.jobPost?.jobTitle || row.jobPost?.job_title || row.jobTitle || row.job_title || row.jobPostId || row.job_post_id || 'Untitled job'}</span> },
+    { key: 'id', label: 'Job ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(getJobId(row), 'JOB-')}</span> },
+    { key: 'jobTitle', label: 'Job Title', render: (row) => <span className="cell-link" onClick={() => { const jobId = getJobId(row); if (jobId) navigate(jobEntityPath(jobId)); }}>{row.jobPost?.jobTitle || row.jobPost?.job_title || row.jobTitle || row.job_title || row.jobPostId || row.job_post_id || 'Untitled job'}</span> },
     { key: 'agreedPrice', label: 'Agreed Price', render: (row) => formatCurrency(row.agreedPrice || row.agreed_price) },
     { key: 'status', label: 'Match Status', render: (row) => <StatusBadge status={row.status || row.match_status} /> },
-    { key: 'connections', label: 'GP Used', render: (row) => row.connections ?? '-' },
+    { key: 'gpUsed', label: 'GP Used', render: (row) => row.gpUsed ?? row.connections ?? '-' },
     { key: 'matchedAt', label: 'Matched', render: (row) => formatDate(row.matchedAt || row.matched_at) },
   ];
 
@@ -244,6 +278,7 @@ export default function UserDetail() {
             <StatusBadge status={user.status} />
             <span className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{capitalizeWords(user.role)}</span>
             {user.flags > 0 && <StatusBadge status="flagged" label={`${user.flags} flag(s)`} />}
+            {isArchived && user.archivedAt && <span className="status-badge">{`Archived ${formatDate(user.archivedAt)}`}</span>}
             {isSuspended && user.suspendedUntil && (
               <span className="status-badge" style={{
                 background: isExpiredSuspension ? 'var(--color-warning-subtle, #fef3c7)' : 'var(--color-error-subtle, #fee2e2)',
@@ -257,59 +292,78 @@ export default function UserDetail() {
         </div>
         <div className="flex flex-col gap-2">
           {actionButtons.filter(b => b.show && can(b.permission)).map((btn) => (
-            <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => {
-              if (btn.action === 'reset-password') setShowPwReset(true);
-              else setShowConfirm(btn.action);
-            }}>{btn.label}</button>
+            <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => setShowConfirm(btn.action)}>{btn.label}</button>
           ))}
-          <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
+          {!isArchived && (
+            <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
+          )}
         </div>
       </div>
 
-      <Tabs tabs={tabs.map(t => ({ key: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} activeTab={activeTab} onChange={setActiveTab} />
-      <div className="tab-content">
+      <div className="user-detail-panel-layout">
+        <div className="user-detail-main">
+          <Tabs tabs={tabs.map(t => ({ key: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} activeTab={activeTab} onChange={setActiveTab} />
+          <div className="tab-content">
         {activeTab === 'profile' && (
           <div className="card">
             <div className="card-body">
-              <div className="detail-grid">
-                <div className="detail-field"><div className="detail-label">Full Name</div><div className="detail-value">{user.name || user.fullName}</div></div>
-                <div className="detail-field"><div className="detail-label">Email</div><div className="detail-value">{user.email}</div></div>
-                <div className="detail-field"><div className="detail-label">Phone</div><div className="detail-value">{user.phone || 'N/A'}</div></div>
-                <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
-                <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
-                <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
-                <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono">{user.id?.slice(0, 8) || 'N/A'}</span></div></div>
-                <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
-                {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
-                {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}
-                {user.municipality && <div className="detail-field"><div className="detail-label">Municipality</div><div className="detail-value">{user.municipality}</div></div>}
-                {user.barangay && <div className="detail-field"><div className="detail-label">Barangay</div><div className="detail-value">{user.barangay}</div></div>}
-                {isSuspended && user.suspendedUntil && (
-                  <div className="detail-field">
-                    <div className="detail-label">Suspended Until</div>
-                    <div className="detail-value" style={{ color: isExpiredSuspension ? 'var(--color-warning)' : 'var(--color-error)' }}>
-                      {formatDateTime(user.suspendedUntil)}
-                      {isExpiredSuspension && <span className="text-xs text-muted ml-2">(Expired)</span>}
+                <div className="detail-grid">
+                  <div className="detail-field"><div className="detail-label">Full Name</div><div className="detail-value">{user.name || user.fullName}</div></div>
+                  <div className="detail-field"><div className="detail-label">Email</div><div className="detail-value">{user.email}</div></div>
+                  <div className="detail-field"><div className="detail-label">Phone</div><div className="detail-value">{user.phone || 'N/A'}</div></div>
+                  <div className="detail-field"><div className="detail-label">Birth Date</div><div className="detail-value">{user.birthDate ? formatDate(user.birthDate) : 'N/A'}</div></div>
+                  <div className="detail-field"><div className="detail-label">Role</div><div className="detail-value">{capitalizeWords(user.role)}</div></div>
+                  <div className="detail-field"><div className="detail-label">Status</div><div className="detail-value"><StatusBadge status={user.status} /></div></div>
+                  <div className="detail-field"><div className="detail-label">User ID</div><div className="detail-value"><span className="text-xs font-mono" title={formatEntityIdNumeric(user.id, 'USR-')}>{formatEntityIdNumeric(user.id, 'USR-') || 'N/A'}</span></div></div>
+                  <div className="detail-field"><div className="detail-label">Location</div><div className="detail-value">{user.location || user.completeAddress || 'N/A'}</div></div>
+                  {user.region && <div className="detail-field"><div className="detail-label">Region</div><div className="detail-value">{user.region}</div></div>}
+                  {user.province && <div className="detail-field"><div className="detail-label">Province</div><div className="detail-value">{user.province}</div></div>}
+                  {user.municipality && <div className="detail-field"><div className="detail-label">Municipality</div><div className="detail-value">{user.municipality}</div></div>}
+                  {user.barangay && <div className="detail-field"><div className="detail-label">Barangay</div><div className="detail-value">{user.barangay}</div></div>}
+                  {isSuspended && user.suspendedUntil && (
+                    <div className="detail-field">
+                      <div className="detail-label">Suspended Until</div>
+                      <div className="detail-value" style={{ color: isExpiredSuspension ? 'var(--color-warning)' : 'var(--color-error)' }}>
+                        {formatDateTime(user.suspendedUntil)}
+                        {isExpiredSuspension && <span className="text-xs text-muted ml-2">(Expired)</span>}
+                      </div>
+                    </div>
+                  )}
+                  {isSuspended && user.suspensionReason && (
+                    <div className="detail-field">
+                      <div className="detail-label">Suspension Reason</div>
+                      <div className="detail-value">{user.suspensionReason}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archived At</div>
+                      <div className="detail-value">{user.archivedAt ? formatDateTime(user.archivedAt) : 'N/A'}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archived By</div>
+                      <div className="detail-value">{user.archivedByName || (user.archivedBy ? formatEntityIdNumeric(user.archivedBy, 'USR-') : 'N/A')}</div>
+                    </div>
+                  )}
+                  {isArchived && (
+                    <div className="detail-field">
+                      <div className="detail-label">Archive Reason</div>
+                      <div className="detail-value">{user.archiveReason || 'No reason recorded'}</div>
+                    </div>
+                  )}
+                  <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
+                  <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{user.flags}</div></div>
+                </div>
+                {user.skills?.length > 0 && (
+                  <div className="mt-4">
+                    <div className="detail-label mb-2">Skills</div>
+                    <div className="flex gap-1 flex-wrap">
+                      {user.skills.map((s, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{s}</span>)}
                     </div>
                   </div>
                 )}
-                {isSuspended && user.suspensionReason && (
-                  <div className="detail-field">
-                    <div className="detail-label">Suspension Reason</div>
-                    <div className="detail-value">{user.suspensionReason}</div>
-                  </div>
-                )}
-                <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
-                <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{user.flags}</div></div>
-              </div>
-              {user.skills?.length > 0 && (
-                <div className="mt-4">
-                  <div className="detail-label mb-2">Skills</div>
-                  <div className="flex gap-1 flex-wrap">
-                    {user.skills.map((s, idx) => <span key={idx} className="status-badge" style={{ background: 'var(--color-surface)', color: 'var(--color-text)' }}>{s}</span>)}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -331,10 +385,10 @@ export default function UserDetail() {
             <div className="card-body p-0">
               <DataTable
                 columns={[
-                  { key: 'equipmentName', label: 'Listing', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(`/listings/${row.listingId}`); }}>{row.equipmentName}</span> },
-                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.listingId?.slice(0, 8)}</span> },
+                  { key: 'equipmentName', label: 'Listing', render: (row) => <span className="cell-link" onClick={() => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }}>{row.equipmentName}</span> },
+                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.listingId, 'LST-')}</span> },
                   { key: 'dayPricing', label: 'Daily Rate', render: (row) => formatCurrency(row.dayPricing) },
-                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={isArchived && row.status === 'available' ? 'unavailable' : row.status} /> },
                 ]}
                 data={userListings}
                 loading={listingsLoading}
@@ -365,38 +419,11 @@ export default function UserDetail() {
           </div>
         )}
 
-        {activeTab === 'disputes' && (
-          <div className="card">
-            <div className="card-body p-0">
-              <DataTable
-                columns={[
-                  { key: 'id', label: 'ID', render: (row) => <span className="text-xs font-mono">{row.id?.slice(0, 8)}</span> },
-                  { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
-                  { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
-                  { key: 'severity', label: 'Severity', render: (row) => <StatusBadge status={row.severity} /> },
-                  { key: 'reporterName', label: 'Reporter' },
-                  { key: 'respondentName', label: 'Respondent' },
-                  { key: 'createdAt', label: 'Date', render: (row) => formatDate(row.createdAt) },
-                ]}
-                data={userDisputes}
-                loading={disputesLoading}
-                emptyMessage="No disputes found for this user."
-                pageSize={5}
-              />
-            </div>
-          </div>
-        )}
-
         {activeTab === 'assessments' && (
           <div className="card">
             <div className="card-header">
               <h3>Assessment Attempt History</h3>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                {can('grantRetakeException') && (
-                  <button className="btn btn-outline btn-sm" onClick={() => setShowOverrideModal({ open: true, assessmentId: '' })}>
-                    <RefreshCw size={14} /> Grant Retake Exception
-                  </button>
-                )}
                 <button className="btn btn-ghost btn-sm" onClick={() => refetchAttempts()}>
                   <RefreshCw size={13} />
                 </button>
@@ -435,24 +462,6 @@ export default function UserDetail() {
                 </div>
               </div>
 
-              {/* Active Overrides */}
-              {activeOverrides?.length > 0 && (
-                <div style={{ marginBottom: 'var(--space-3)', padding: '0.75rem', background: 'var(--color-warning-subtle, #fef3c7)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-warning)' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--color-warning)', marginBottom: 4 }}>
-                    <Award size={14} style={{ verticalAlign: 'middle', marginRight: 4 }} />
-                    Active Retake Exceptions
-                  </div>
-                  {activeOverrides.map((ov) => (
-                    <div key={ov.id} style={{ fontSize: 12, color: 'var(--color-text)', marginTop: 4 }}>
-                      <span>Granted by {ov.grantedByName}: "{ov.reason}"</span>
-                      <span style={{ color: 'var(--color-text-muted)', marginLeft: 8 }}>
-                        Expires {timeAgo(ov.expiresAt)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {/* Attempt History Table */}
               <div className="p-0">
                 {attemptsLoading ? (
@@ -474,7 +483,7 @@ export default function UserDetail() {
                       {
                         key: 'assessmentInfo',
                         label: 'Category',
-                        render: (row) => row.assessmentInfo?.categoryName || row.assessmentId?.slice(0, 8) || 'N/A',
+                        render: (row) => row.assessmentInfo?.categoryName || formatEntityIdNumeric(row.assessmentId, 'ASM-') || 'N/A',
                       },
                       {
                         key: 'score',
@@ -521,31 +530,80 @@ export default function UserDetail() {
           </div>
         )}
 
-        {activeTab === 'notes' && (
+        {activeTab === 'history' && (
           <div className="card">
-            <div className="card-header"><h3>Internal Notes</h3></div>
-            <div className="card-body">
-              <NotesPanel
-                notes={user.notes || []}
-                onAddNote={async (note) => {
-                  try {
-                    await doAddNote(user.id, note.text);
-                    addNotification('moderation_decision', 'Note Added', `Note added to ${user.name}`, `/users/${user.id}`);
-                    refetch();
-                  } catch (err) { console.error('Add note failed:', err); }
-                }}
+            <div className="card-header">
+              <h3>Account History</h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => refetchHistory()}>
+                <RefreshCw size={13} />
+              </button>
+            </div>
+            <div className="card-body p-0">
+              <DataTable
+                columns={[
+                  { key: 'createdAt', label: 'When', render: (row) => <span title={formatDateTime(row.createdAt)}>{formatDateTime(row.createdAt)}</span> },
+                  { key: 'activityTypeLabel', label: 'Action', render: (row) => <StatusBadge status={row.activityType} label={row.activityTypeLabel || row.activityType} /> },
+                  { key: 'agentName', label: 'By', render: (row) => row.agentName || 'System' },
+                  { key: 'description', label: 'Detail' },
+                ]}
+                data={userHistory}
+                loading={historyLoading}
+                emptyMessage="No account history recorded yet."
+                pageSize={10}
               />
             </div>
           </div>
         )}
+          </div>
+        </div>
+        <div className="card user-detail-notes">
+          <div className="card-header"><h3>Internal Notes</h3></div>
+          <div className="card-body">
+            <NotesPanel
+              notes={user.notes || []}
+              onAddNote={handleAddNote}
+              onDeleteNote={isAdmin ? setNoteToDelete : undefined}
+              error={noteError}
+            />
+          </div>
+        </div>
       </div>
 
-      {showConfirm === 'suspend' ? (
+      {showConfirm === 'archive' ? (
+        <div className="modal-overlay" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Archive & Ban Account</h3>
+              <button className="modal-close" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>×</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '1rem' }}>
+                Archive <strong>{user.name}</strong>? Their records will be retained, new sign-ins will be blocked, and their access to this API will be denied. Their job posts, proposals and equipment listings (marked unavailable) will be hidden from active views until an admin restores access.
+              </p>
+              <label className="detail-label" htmlFor="archive-reason" style={{ display: 'block', marginBottom: '0.375rem' }}>Reason for archiving</label>
+              <textarea
+                id="archive-reason"
+                className="form-input"
+                value={archiveReason}
+                onChange={(e) => setArchiveReason(e.target.value)}
+                maxLength={500}
+                rows={3}
+                placeholder="Record the reason for this action"
+              />
+              {userActionError && <div role="alert" style={{ color: 'var(--color-error)', marginTop: '0.75rem' }}>{userActionError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setArchiveReason(''); setUserActionError(''); }}>Cancel</button>
+              <button className="btn btn-danger" disabled={!archiveReason.trim()} onClick={() => handleAction('archive')}>Archive & Ban</button>
+            </div>
+          </div>
+        </div>
+      ) : showConfirm === 'suspend' ? (
         <div className="modal-overlay" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Suspend Account</h3>
-              <button className="modal-close" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>
+              <button className="modal-close" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionCustom(''); setSuspensionReason(''); }}>
                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
@@ -556,8 +614,16 @@ export default function UserDetail() {
               <div style={{ marginBottom: '1rem' }}>
                 <label className="detail-label" style={{ marginBottom: '0.375rem', display: 'block' }}>Suspension Duration</label>
                 <select
-                  value={suspensionDays}
-                  onChange={(e) => setSuspensionDays(Number(e.target.value))}
+                  value={suspensionDays === 'custom' ? 'custom' : suspensionDays}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'custom') {
+                      setSuspensionDays('custom');
+                    } else {
+                      setSuspensionDays(Number(val));
+                      setSuspensionCustom('');
+                    }
+                  }}
                   style={{
                     width: '100%',
                     padding: '0.5rem 0.75rem',
@@ -574,7 +640,28 @@ export default function UserDetail() {
                   <option value={30}>30 days (1 month)</option>
                   <option value={60}>60 days (2 months)</option>
                   <option value={90}>90 days (3 months)</option>
+                  <option value="custom">Custom — enter days</option>
                 </select>
+                {suspensionDays === 'custom' && (
+                  <input
+                    type="number"
+                    min="1"
+                    max="90"
+                    placeholder="Days"
+                    value={suspensionCustom}
+                    onChange={(e) => setSuspensionCustom(e.target.value)}
+                    style={{
+                      width: '100%',
+                      marginTop: '0.5rem',
+                      padding: '0.5rem 0.75rem',
+                      borderRadius: '0.5rem',
+                      border: '1px solid var(--color-border)',
+                      background: 'var(--color-bg)',
+                      color: 'var(--color-text)',
+                      fontSize: '0.875rem',
+                    }}
+                  />
+                )}
               </div>
               <div style={{ marginBottom: '1rem' }}>
                 <label className="detail-label" style={{ marginBottom: '0.375rem', display: 'block' }}>Reason for Suspension</label>
@@ -598,7 +685,7 @@ export default function UserDetail() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionReason(''); }}>Cancel</button>
+              <button className="btn btn-outline" onClick={() => { setShowConfirm(null); setSuspensionDays(7); setSuspensionCustom(''); setSuspensionReason(''); }}>Cancel</button>
               <button className="btn btn-danger" onClick={() => handleAction('suspend')}>
                 Suspend {suspensionDays} Days
               </button>
@@ -609,168 +696,27 @@ export default function UserDetail() {
         <ConfirmModal
           open={!!showConfirm}
           title={`${capitalizeWords(showConfirm?.replace(/_/g, ' ') || '')}`}
-          message={`Are you sure you want to ${showConfirm?.replace(/_/g, ' ') || ''} for ${user.name}?`}
-          confirmLabel="Confirm"
+          message={showConfirm === 'unarchive'
+            ? `Restore sign-in and API access for ${user.name}? Their retained records will not be deleted.`
+            : `${userActionError || ''} Are you sure you want to ${showConfirm?.replace(/_/g, ' ') || ''} for ${user.name}?`}
+          confirmLabel={showConfirm === 'unarchive' ? 'Unarchive & Restore Access' : 'Confirm'}
           variant={showConfirm?.includes('reinstate') ? 'success' : 'primary'}
           onConfirm={() => handleAction(showConfirm)}
-          onCancel={() => setShowConfirm(null)}
+          onCancel={() => { setShowConfirm(null); setUserActionError(''); }}
         />
       )}
 
-      {showPwReset && (
-        <div className="modal-overlay" onClick={() => { setShowPwReset(false); resetPwForm(); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
-            <div className="modal-header">
-              <h3>Reset Password</h3>
-              <button className="modal-close" onClick={() => { setShowPwReset(false); resetPwForm(); }}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '1rem' }}>
-                Set a new password for <strong>{user.name}</strong>
-              </p>
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">New Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  placeholder="Enter new password"
-                  value={pwNew}
-                  onChange={(e) => setPwNew(e.target.value)}
-                  disabled={pwProcessing}
-                  autoFocus
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">Confirm Password</label>
-                <input
-                  className="form-input"
-                  type="password"
-                  placeholder="Confirm new password"
-                  value={pwConfirm}
-                  onChange={(e) => setPwConfirm(e.target.value)}
-                  disabled={pwProcessing}
-                />
-              </div>
-              {pwError && (
-                <div style={{ fontSize: 13, color: 'var(--color-error)', marginBottom: '0.75rem' }}>
-                  {pwError}
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowPwReset(false); resetPwForm(); }} disabled={pwProcessing}>
-                Cancel
-              </button>
-              <button className="btn btn-primary" onClick={handlePasswordReset} disabled={!pwNew || !pwConfirm || pwProcessing}>
-                {pwProcessing ? 'Resetting...' : 'Reset Password'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmModal
+        open={!!noteToDelete}
+        title="Delete note"
+        message={noteError || 'Are you sure you want to permanently delete this internal note?'}
+        confirmLabel={deletingNote ? 'Deleting...' : 'Delete note'}
+        confirmDisabled={deletingNote}
+        variant="danger"
+        onConfirm={handleDeleteNote}
+        onCancel={() => { setNoteToDelete(null); setNoteError(''); }}
+      />
 
-      {/* Grant Retake Exception Modal */}
-      {showOverrideModal.open && (
-        <div className="modal-overlay" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
-            <div className="modal-header">
-              <h3>Grant Retake Exception</h3>
-              <button className="modal-close" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }}>
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-            </div>
-            <div className="modal-body">
-              <div style={{ padding: '0.75rem', background: 'var(--color-warning-subtle, #fef3c7)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--color-warning)', color: 'var(--color-warning)', fontSize: 13, lineHeight: 1.5 }}>
-                <RefreshCw size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-                <strong>Override daily retake limit?</strong>
-                <br />
-                This will allow <strong>{user.name}</strong> to retake the selected assessment immediately, bypassing the once-per-day restriction. The exception expires at the end of today (Philippine Time).
-              </div>
-
-              <div className="form-group" style={{ marginBottom: '0.75rem' }}>
-                <label className="form-label">Assessment</label>
-                {attemptHistory?.data?.length > 0 ? (
-                  <select
-                    className="form-select"
-                    value={showOverrideModal.assessmentId}
-                    onChange={(e) => setShowOverrideModal((prev) => ({ ...prev, assessmentId: e.target.value }))}
-                    style={{ width: '100%' }}
-                  >
-                    <option value="">Select an assessment category...</option>
-                    {[...new Set(attemptHistory.data.map(a => a.assessmentId))].map((aid) => {
-                      const info = attemptHistory.data.find(a => a.assessmentId === aid)?.assessmentInfo;
-                      return (
-                        <option key={aid} value={aid}>
-                          {info?.categoryName || aid?.slice(0, 8)}
-                        </option>
-                      );
-                    })}
-                  </select>
-                ) : (
-                  <input
-                    className="form-input"
-                    placeholder="Assessment ID or Category name..."
-                    value={showOverrideModal.assessmentId}
-                    onChange={(e) => setShowOverrideModal((prev) => ({ ...prev, assessmentId: e.target.value }))}
-                    style={{ width: '100%' }}
-                  />
-                )}
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">
-                  Reason <span style={{ color: 'var(--color-error)' }}>*</span>
-                </label>
-                <textarea
-                  className="form-textarea"
-                  rows={3}
-                  placeholder="Explain why this retake exception is needed..."
-                  value={overrideReason}
-                  onChange={(e) => setOverrideReason(e.target.value)}
-                  style={{ width: '100%' }}
-                  disabled={processingOverride}
-                  autoFocus
-                />
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-outline" onClick={() => { setShowOverrideModal({ open: false, assessmentId: '' }); setOverrideReason(''); }} disabled={processingOverride}>
-                Cancel
-              </button>
-              <button
-                className="btn btn-accent"
-                disabled={!showOverrideModal.assessmentId || !overrideReason.trim() || processingOverride}
-                onClick={async () => {
-                  setProcessingOverride(true);
-                  try {
-                    await assessmentAttemptsApi.grantOverride(id, {
-                      assessmentId: showOverrideModal.assessmentId,
-                      reason: overrideReason.trim(),
-                    });
-                    addNotification('moderation_decision', 'Retake Exception Granted', `Retake exception granted for ${user.name}`);
-                    setShowOverrideModal({ open: false, assessmentId: '' });
-                    setOverrideReason('');
-                    refetchAttempts();
-                    refetchOverrides();
-                  } catch (err) { console.error('Grant override failed:', err); }
-                  setProcessingOverride(false);
-                }}
-              >
-                {processingOverride ? (
-                  <>
-                    <div className="page-loading__spinner" style={{ width: 14, height: 14, borderWidth: 2, display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }} />
-                    Processing...
-                  </>
-                ) : (
-                  <><Award size={15} /> Grant Exception</>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

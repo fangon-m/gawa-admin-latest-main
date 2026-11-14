@@ -16,6 +16,12 @@ export default defineConfig({
   },
   build: {
     outDir: '../dist',
+    // The output directory sits outside the Vite root, so Vite refuses to
+    // empty it by default. Without this, every build leaves the previous
+    // bundles behind — stale assets accumulate, and a bundle from before a
+    // security fix (for example one that still shipped default credentials)
+    // stays on disk and keeps being served.
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks(id) {

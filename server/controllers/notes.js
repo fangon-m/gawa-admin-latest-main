@@ -1,5 +1,5 @@
 const supabase = require('../db/supabase');
-const { getFullName } = require('../utilities/helpers');
+const { getFullName, sendError } = require('../utilities/helpers');
 
 async function listNotes(req, res) {
   const { userId } = req.params;
@@ -10,7 +10,7 @@ async function listNotes(req, res) {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   // Enrich with author names
   if (data && data.length > 0) {
@@ -51,7 +51,7 @@ async function addNote(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   res.status(201).json({
     data: {
@@ -73,7 +73,7 @@ async function deleteNote(req, res) {
     .delete()
     .eq('id', id);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Note deleted' });
 }
 

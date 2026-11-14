@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { listConversations, getConversation, sendMessage, createConversation } from '../api/messages';
+import { listConversations, getConversation, sendMessage } from '../api/messages';
 import * as usersApi from '../api/users';
 import { timeAgo, getInitials, capitalizeWords } from '../utils/helpers';
 import Header from '../components/layout/Header';
@@ -11,31 +11,52 @@ import MessageComposer from '../components/common/MessageComposer';
 import { Mail, SquarePen, X } from 'lucide-react';
 import styles from './Messages.module.css';
 
+function getRequestError(error, fallback) {
+  const details = error?.details?.map(({ field, message }) => `${field}: ${message}`).join('; ');
+  return details || error?.error || error?.message || fallback;
+}
+
 export default function Messages() {
   const { user: currentUser } = useAuth();
   const [search, setSearch] = useState('');
   const [activeConv, setActiveConv] = useState(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [newSearch, setNewSearch] = useState('');
+  const [messageError, setMessageError] = useState('');
+  const [sending, setSending] = useState(false);
 
   const currentUserId = currentUser?.id;
 
-  const { data: conversations, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
+  const { data: inbox, error: conversationsError, refetch: refetchConvs } = useApiData(() => listConversations(), [], {
+    defaultValue: { conversations: [], unreadCount: 0 },
+    transform: (response) => {
+      const conversations = response?.data ?? response ?? [];
+      return {
+        conversations,
+        unreadCount: response?.unreadCount ?? conversations.reduce((count, conv) => count + (conv.unreadCount || 0), 0),
+      };
+    },
   });
+  const conversations = inbox.conversations;
 
   const { data: allUsers } = useApiData(() => usersApi.list({ limit: 100 }), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
   });
 
-  const { data: activeData, refetch: refetchConv } = useApiData(
+  const { data: activeData, error: activeError, refetch: refetchConv } = useApiData(
     () => activeConv ? getConversation(activeConv) : Promise.resolve({ data: null }),
     [activeConv],
     { defaultValue: null, transform: (r) => r?.data ?? r, immediate: !!activeConv }
   );
 
   const [doSendMessage] = useMutation(sendMessage);
-  const [doCreateConversation] = useMutation(createConversation);
+  const totalUnread = inbox.unreadCount;
+
+  useEffect(() => {
+    if (activeConv && activeData?.id === activeConv) {
+      refetchConvs();
+    }
+  }, [activeConv, activeData, refetchConvs]);
 
   const filteredConvs = useMemo(() => {
     let data = [...conversations];
@@ -60,7 +81,7 @@ export default function Messages() {
 
   const availableUsers = useMemo(() => {
     if (!showNewMessage) return [];
-    let list = allUsers.filter((u) => u.id !== currentUserId && !['admin', 'customer_support'].includes(u.role));
+    let list = allUsers.filter((u) => u.id !== currentUserId && !['admin', 'customer_support'].includes(u.role) && !u.isArchived && u.status !== 'archived');
     if (newSearch) {
       const q = newSearch.toLowerCase();
       list = list.filter((u) =>
@@ -76,45 +97,46 @@ export default function Messages() {
     ? (activeData.participants || []).find((p) => p.userId !== currentUserId)
     : null;
 
-  const handleStartConversation = useCallback(async (selectedUser) => {
-    const existing = conversations.find((c) =>
-      (c.participants || []).some((p) => p.userId === selectedUser.id)
-    );
-    if (existing) {
-      setActiveConv(existing.id);
-    } else if (currentUserId) {
-      try {
-        const res = await doCreateConversation({
-          participantIds: [currentUserId, selectedUser.id],
-        });
-        const conv = res?.data ?? res;
-        if (conv?.id) {
-          setActiveConv(conv.id);
-          refetchConvs();
-        }
-      } catch {
-        // unable to create conversation
-      }
-    }
+  const handleStartConversation = useCallback((selectedUser) => {
+    setMessageError('');
+    setActiveConv(selectedUser.id);
     setShowNewMessage(false);
     setNewSearch('');
-  }, [conversations, currentUserId, doCreateConversation, refetchConvs]);
+  }, []);
 
   const handleSend = async (text) => {
-    if (!activeConv) return;
+    if (!activeConv || sending) return false;
+    setMessageError('');
+    setSending(true);
     try {
       await doSendMessage({ conversationId: activeConv, text });
-      refetchConv();
-      refetchConvs();
-    } catch (err) { console.error('Send message failed:', err); }
+      await Promise.all([refetchConv(), refetchConvs()]);
+      return true;
+    } catch (err) {
+      setMessageError(getRequestError(err, 'Unable to send message.'));
+      return false;
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
     <div>
       <Header title="Messages" />
+      {(messageError || conversationsError || activeError) && (
+        <div className="alert alert-error" role="alert">
+          {messageError || conversationsError || activeError}
+        </div>
+      )}
       <div className="messages-layout">
         <div className="messages-list">
           <div className="messages-list-header">
+            <div className={styles.listTitleRow}>
+              <span className={styles.listTitle}>Inbox</span>
+              {totalUnread > 0 && (
+                <span className={styles.unreadTotal}>{totalUnread} unread</span>
+              )}
+            </div>
             <div className={styles.listHeaderRow}>
               <SearchBar value={search} onChange={setSearch} placeholder="Search users..." />
               <button
@@ -172,10 +194,11 @@ export default function Messages() {
               ) : (
                 filteredConvs.map((conv) => {
                   const other = (conv.participants || []).find((p) => p.userId !== currentUserId);
+                  const unreadCount = conv.unreadCount || 0;
                   return (
                     <div
                       key={conv.id}
-                      className={`conversation-item${activeConv === conv.id ? ' active' : ''}${conv.unread ? ' unread' : ''}`}
+                      className={`conversation-item${activeConv === conv.id ? ' active' : ''}${unreadCount > 0 ? ' unread' : ''}`}
                       onClick={() => setActiveConv(conv.id)}
                     >
                       <div className="conversation-avatar">{getInitials(other?.name || '?')}</div>
@@ -185,7 +208,11 @@ export default function Messages() {
                       </div>
                       <div className="conversation-meta">
                         <div className="conversation-time">{timeAgo(conv.lastMessageAt)}</div>
-                        {conv.unread && <div className="conversation-unread-badge" />}
+                        {unreadCount > 0 && (
+                          <div className="conversation-unread-badge" aria-label={`${unreadCount} unread messages`}>
+                            {unreadCount}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -215,7 +242,13 @@ export default function Messages() {
               <div className="messages-thread-body">
                 <MessageThread messages={activeData.messages || []} currentUserId={currentUserId} />
               </div>
-              <MessageComposer onSend={handleSend} />
+              {otherParticipant?.isArchived ? (
+                <div style={{ padding: '1rem', textAlign: 'center', fontSize: 13, color: 'var(--color-text-muted)', borderTop: '1px solid var(--color-border)' }}>
+                  This account is archived. Unarchive it to send messages.
+                </div>
+              ) : (
+                <MessageComposer onSend={handleSend} disabled={sending} />
+              )}
             </>
           )}
         </div>

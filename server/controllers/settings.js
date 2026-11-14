@@ -1,4 +1,5 @@
 const supabase = require('../db/supabase');
+const { sendError } = require('../utilities/helpers');
 
 /**
  * GET /api/settings
@@ -10,7 +11,7 @@ async function listSettings(req, res) {
     .select('*')
     .order('key');
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const settings = {};
   for (const row of data || []) {
@@ -59,7 +60,7 @@ async function upsertSetting(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   res.json({
     data: { key: data.key, value: data.value, updatedAt: data.updated_at },

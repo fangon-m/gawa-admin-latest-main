@@ -8,6 +8,7 @@ export default function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'primary',
+  confirmDisabled = false,
   onConfirm,
   onCancel,
 }) {
@@ -28,6 +29,7 @@ export default function ConfirmModal({
           <button
             className={`btn ${variant === 'danger' ? 'btn-danger' : variant === 'success' ? 'btn-success' : 'btn-accent'}`}
             onClick={onConfirm}
+            disabled={confirmDisabled}
           >
             {confirmLabel}
           </button>

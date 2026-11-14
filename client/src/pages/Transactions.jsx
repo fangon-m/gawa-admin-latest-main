@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApiData } from '../utils/useApiData';
 import { list as listTransactions } from '../api/transactions';
-import { formatDate, formatCurrency, formatEntityId } from '../utils/helpers';
+import { formatDate, formatCurrency, formatEntityIdNumeric, transactionEntityPath } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
@@ -15,19 +15,18 @@ const filters = [
     { value: 'deposit', label: 'Deposit' },
     { value: 'refund', label: 'Refund' },
     { value: 'payout', label: 'Payout' },
-    { value: 'galaw_purchase', label: 'Galaw Purchase' },
   ]},
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-    { value: 'completed', label: 'Completed' },
     { value: 'pending', label: 'Pending' },
     { value: 'escrow', label: 'Escrow' },
     { value: 'held', label: 'Held' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'cancelled', label: 'Cancelled' },
+    { value: 'refunded', label: 'Refunded' },
   ]},
   { key: 'paymentMethod', label: 'Payment', placeholder: 'All Methods', options: [
+    { value: 'cash', label: 'Cash' },
     { value: 'gcash', label: 'GCash' },
-    { value: 'bank_transfer', label: 'Bank Transfer' },
-    { value: 'card', label: 'Card' },
-    { value: 'wallet', label: 'Wallet' },
   ]},
 ];
 
@@ -53,10 +52,16 @@ export default function Transactions() {
   }, [fil, dateFrom, dateTo, transactions]);
 
   const columns = [
-    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityId(row.id, 'TXN-')}</span> },
+    { key: 'id', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => <StatusBadge status={row.type} /> },
-    { key: 'userName', label: 'User' },
-    { key: 'amount', label: 'Amount', render: (row) => formatCurrency(row.amount) },
+    { key: 'userName', label: 'User', render: (row) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        {row.userName}
+        {row.userArchived && <StatusBadge status="archived" label="Archived" />}
+      </span>
+    )},
+    { key: 'relatedTitle', label: 'Related', render: (row) => <span className="text-xs text-muted">{row.relatedTitle || '—'}</span> },
+    { key: 'amount', label: 'Amount', render: (row) => <span className={row.direction === 'out' ? 'text-danger' : 'text-success'}>{(row.direction === 'out' ? '-' : '+')} {formatCurrency(row.amount)}</span> },
     { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
     { key: 'paymentMethod', label: 'Payment' },
     { key: 'reference', label: 'Reference', render: (row) => <span className="text-xs text-muted font-mono">{row.reference}</span> },
@@ -77,7 +82,7 @@ export default function Transactions() {
           </div>
         </div>
         <div className="card-body p-0">
-          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.id) navigate(`/transactions/${row.id}`); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
+          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.id) navigate(transactionEntityPath(row.id)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
         </div>
       </div>
     </div>

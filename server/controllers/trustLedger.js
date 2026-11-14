@@ -1,289 +1,237 @@
 const supabase = require('../db/supabase');
+const { calculatePagination, sendError } = require('../utilities/helpers');
 const { getFullName } = require('../utilities/helpers');
+const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
+
+const CLIENT_FUND_TYPES = ['job_payment', 'rental_payment', 'deposit'];
+const UNRELEASED_STATUSES = ['pending', 'escrow', 'held'];
+const EQUIPMENT_DEPOSIT_ESCROW_TABLE = 'equipment_security_deposit_escrow';
+
+function roundAmount(amount) {
+  return Math.round(amount * 100) / 100;
+}
+
+async function getUnreleasedTransactions() {
+  return supabase
+    .from('transactions')
+    .select('id, user_id, type, amount, status, payment_method, created_at, related_id, related_type')
+    .in('type', CLIENT_FUND_TYPES)
+    .in('status', UNRELEASED_STATUSES)
+    .order('created_at', { ascending: true });
+}
+
+async function getEquipmentDepositEscrows() {
+  return supabase
+    .from(EQUIPMENT_DEPOSIT_ESCROW_TABLE)
+    .select('escrow_id, request_id, renter_id, owner_id, amount, payment_method, status, held_at, released_at, created_at')
+    .order('held_at', { ascending: false });
+}
+
+function combineLedgerEntries(transactions, escrows) {
+  const equipmentTransactionsByRequest = new Map(
+    transactions
+      .filter((transaction) => transaction.type === 'deposit' &&
+        transaction.related_type === 'equipment_rental' && transaction.related_id)
+      .map((transaction) => [transaction.related_id, transaction]),
+  );
+  const escrowRequestIds = new Set(escrows.map((escrow) => escrow.request_id));
+  const transactionEntries = transactions
+    .filter((transaction) => !(
+      transaction.type === 'deposit' &&
+      transaction.related_type === 'equipment_rental' &&
+      escrowRequestIds.has(transaction.related_id)
+    ))
+    .map((transaction) => ({
+      id: transaction.id,
+      displayId: `TXN-${transaction.id.slice(0, 8)}`,
+      transactionId: transaction.id,
+      releaseTransactionId: transaction.id,
+      userId: transaction.user_id,
+      ownerId: null,
+      userName: transaction.user_id,
+      ownerName: null,
+      type: transaction.type,
+      amount: Math.abs(Number(transaction.amount) || 0),
+      balance: null,
+      status: transaction.status === 'escrow' ? 'held' : transaction.status,
+      paymentMethod: transaction.payment_method,
+      releaseDate: null,
+      createdAt: transaction.created_at,
+      isEquipmentEscrow: false,
+    }));
+  const escrowEntries = escrows.map((escrow) => {
+    const transaction = equipmentTransactionsByRequest.get(escrow.request_id);
+    return {
+      id: transaction?.id || escrow.escrow_id,
+      displayId: `ESC-${escrow.escrow_id.slice(0, 8)}`,
+      transactionId: transaction?.id || null,
+      releaseTransactionId: transaction?.id && escrow.status === 'held' ? transaction.id : null,
+      escrowId: escrow.escrow_id,
+      requestId: escrow.request_id,
+      userId: escrow.renter_id,
+      ownerId: escrow.owner_id,
+      userName: escrow.renter_id,
+      ownerName: escrow.owner_id,
+      type: 'deposit',
+      amount: Math.abs(Number(escrow.amount) || 0),
+      balance: null,
+      status: escrow.status,
+      paymentMethod: escrow.payment_method,
+      releaseDate: escrow.released_at,
+      createdAt: escrow.held_at || escrow.created_at,
+      isEquipmentEscrow: true,
+    };
+  });
+  return [...transactionEntries, ...escrowEntries];
+}
 
 async function getSummary(req, res) {
-  const [depositsRes, payoutsRes, refundsRes, feesRes, heldRes, pendingRes, countRes] = await Promise.all([
-    supabase.from('trust_ledger').select('amount.sum()').in('type', ['deposit', 'payment_in']).single(),
-    supabase.from('trust_ledger').select('amount.sum()').in('type', ['payout', 'payment_out']).single(),
-    supabase.from('trust_ledger').select('amount.sum()').eq('type', 'refund').single(),
-    supabase.from('trust_ledger').select('amount.sum()').eq('type', 'fee').single(),
-    supabase.from('trust_ledger').select('amount.sum()').eq('status', 'held').single(),
-    supabase.from('trust_ledger').select('amount.sum()').eq('status', 'pending').single(),
-    supabase.from('trust_ledger').select('*', { count: 'exact', head: true }),
+  const [transactionsResult, escrowsResult] = await Promise.all([
+    getUnreleasedTransactions(),
+    getEquipmentDepositEscrows(),
   ]);
-
-  if (depositsRes.error || payoutsRes.error || refundsRes.error || feesRes.error || heldRes.error || pendingRes.error) {
-    return res.status(500).json({ error: 'Failed to compute trust ledger summary' });
-  }
-
-  const totalDeposits = Number(depositsRes.data?.sum?.amount) || 0;
-  const payoutSum = Number(payoutsRes.data?.sum?.amount) || 0;
-  const refundSum = Number(refundsRes.data?.sum?.amount) || 0;
-  const feeSum = Number(feesRes.data?.sum?.amount) || 0;
-
-  const totalPayouts = payoutSum;
-  const totalRefunds = refundSum;
-  const currentBalance = totalDeposits - payoutSum - refundSum - feeSum;
-
-  const totalHeld = Math.abs(Number(heldRes.data?.sum?.amount) || 0);
-  const totalPending = Math.abs(Number(pendingRes.data?.sum?.amount) || 0);
+  if (transactionsResult.error) return res.status(500).json({ error: transactionsResult.error.message });
+  if (escrowsResult.error) return res.status(500).json({ error: escrowsResult.error.message });
+  const entries = combineLedgerEntries(transactionsResult.data || [], escrowsResult.data || []);
+  const escrows = escrowsResult.data || [];
+  const totalDeposits = entries
+    .filter((transaction) => transaction.type === 'deposit')
+    .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0);
+  const totalHeld = entries
+    .filter((transaction) => transaction.status === 'held' || transaction.status === 'escrow')
+    .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0);
+  const totalPending = entries
+    .filter((transaction) => transaction.status === 'pending')
+    .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0);
+  const currentBalance = entries.reduce(
+    (sum, transaction) => sum + (
+      transaction.status === 'pending' || transaction.status === 'held' || transaction.status === 'escrow'
+        ? Math.abs(Number(transaction.amount) || 0)
+        : 0
+    ),
+    0,
+  );
 
   res.json({
     data: {
-      totalDeposits: Math.round(totalDeposits * 100) / 100,
-      totalPayouts: Math.round(totalPayouts * 100) / 100,
-      totalRefunds: Math.round(totalRefunds * 100) / 100,
-      totalHeld: Math.round(totalHeld * 100) / 100,
-      totalPending: Math.round(totalPending * 100) / 100,
-      currentBalance: Math.round(currentBalance * 100) / 100,
-      totalEntries: countRes.count || 0,
+      totalDeposits: roundAmount(totalDeposits),
+      totalPayouts: roundAmount(escrows
+        .filter((escrow) => escrow.status === 'released')
+        .reduce((sum, escrow) => sum + (Number(escrow.amount) || 0), 0)),
+      totalRefunds: roundAmount(escrows
+        .filter((escrow) => escrow.status === 'refunded')
+        .reduce((sum, escrow) => sum + (Number(escrow.amount) || 0), 0)),
+      totalHeld: roundAmount(totalHeld),
+      totalPending: roundAmount(totalPending),
+      currentBalance: roundAmount(currentBalance),
+      totalEntries: entries.length,
     },
   });
 }
 
 async function listEntries(req, res) {
-  const { page = 1, limit = 20, type, status, userId, startDate, endDate } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { type, status, userId, startDate, endDate } = req.query;
+  const { page: pageNumber, limit: pageSize, offset } = calculatePagination(req.query.page, req.query.limit);
+  const [transactionsResult, escrowsResult] = await Promise.all([
+    getUnreleasedTransactions(),
+    getEquipmentDepositEscrows(),
+  ]);
+  if (transactionsResult.error) return res.status(500).json({ error: transactionsResult.error.message });
+  if (escrowsResult.error) return res.status(500).json({ error: escrowsResult.error.message });
 
-  let query = supabase.from('trust_ledger').select('*', { count: 'exact' });
-  if (type) query = query.eq('type', type);
-  if (status) query = query.eq('status', status);
-  if (userId) query = query.eq('user_id', userId);
-  if (startDate) query = query.gte('created_at', startDate);
-  if (endDate) query = query.lte('created_at', endDate);
+  let entries = combineLedgerEntries(transactionsResult.data || [], escrowsResult.data || []);
+  if (type) entries = entries.filter((transaction) => transaction.type === type);
+  if (status) {
+    entries = entries.filter((transaction) => (
+      status === 'held'
+        ? transaction.status === 'held' || transaction.status === 'escrow'
+        : transaction.status === status
+    ));
+  }
+  if (userId) entries = entries.filter((transaction) => transaction.userId === userId || transaction.ownerId === userId);
+  if (startDate) entries = entries.filter((transaction) => transaction.createdAt >= startDate);
+  if (endDate) entries = entries.filter((transaction) => transaction.createdAt <= endDate);
 
-  const { data, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(offset, offset + +limit - 1);
+  entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const total = entries.length;
+  const pageEntries = entries.slice(offset, offset + pageSize);
 
-  if (error) return res.status(500).json({ error: error.message });
-
-  // Enrich with user names
-  const userIds = new Set();
-  (data || []).forEach(e => { if (e.user_id) userIds.add(e.user_id); });
-
+  const userIds = [...new Set(pageEntries.flatMap((entry) => [entry.userId, entry.ownerId]).filter(Boolean))];
   let userMap = {};
-  if (userIds.size > 0) {
-    const { data: users } = await supabase.from('users_table').select('id, first_name, last_name').in('id', [...userIds]);
-    if (users) users.forEach(u => { userMap[u.id] = getFullName(u); });
+  if (userIds.length > 0) {
+    const { data: users, error: usersError } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name')
+      .in('id', userIds);
+    if (usersError) return sendError(res, usersError, { status: 500 });
+    if (users) users.forEach((user) => { userMap[user.id] = getFullName(user); });
   }
 
-  const enriched = (data || []).map(e => ({
-    id: e.id,
-    displayId: e.display_id,
-    transactionId: e.transaction_id,
-    userId: e.user_id,
-    userName: userMap[e.user_id] || e.user_id,
-    type: e.type,
-    amount: Number(e.amount) || 0,
-    balance: Number(e.balance) || 0,
-    status: e.status || 'pending',
-    releaseDate: e.release_date,
-    releaseCondition: e.release_condition,
-    notes: e.notes,
-    createdAt: e.created_at,
+  const data = pageEntries.map((entry) => ({
+    ...entry,
+    userName: userMap[entry.userId] || entry.userId,
+    ownerName: entry.ownerId ? userMap[entry.ownerId] || entry.ownerId : null,
   }));
 
   res.json({
-    data: enriched,
-    pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
-  });
-}
-
-async function createEntry(req, res) {
-  const { transactionId, userId, type, amount, notes } = req.body;
-
-  if (!userId || !type || amount === undefined) {
-    return res.status(400).json({ error: 'userId, type, and amount are required' });
-  }
-
-  // Get the latest balance for running total
-  const [latest, countRes] = await Promise.all([
-    supabase.from('trust_ledger').select('balance').order('created_at', { ascending: false }).limit(1),
-    supabase.from('trust_ledger').select('*', { count: 'exact', head: true }),
-  ]);
-
-  const prevBalance = (latest.data && latest.data[0]?.balance) ? Number(latest.data[0].balance) : 0;
-  const newBalance = prevBalance + Number(amount);
-  const nextNum = (countRes.count || 0) + 1;
-
-  const { data, error } = await supabase
-    .from('trust_ledger')
-    .insert({
-      display_id: `TL-${String(nextNum).padStart(3, '0')}`,
-      transaction_id: transactionId || null,
-      user_id: userId,
-      type,
-      amount: Number(amount),
-      balance: newBalance,
-      status: 'completed',
-      notes: notes || null,
-    })
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  res.status(201).json({
-    data: {
-      id: data.id,
-      displayId: data.display_id,
-      transactionId: data.transaction_id,
-      userId: data.user_id,
-      type: data.type,
-      amount: Number(data.amount),
-      balance: Number(data.balance),
-      status: data.status,
-      releaseDate: data.release_date,
-      releaseCondition: data.release_condition,
-      notes: data.notes,
-      createdAt: data.created_at,
+    data,
+    pagination: {
+      total,
+      page: pageNumber,
+      limit: pageSize,
+      totalPages: Math.ceil(total / pageSize),
     },
-    message: 'Trust ledger entry created',
   });
 }
 
 async function releaseHeldFunds(req, res) {
-  const { id } = req.params;
-
-  const { data: entry, error: fetchErr } = await supabase
-    .from('trust_ledger')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (fetchErr || !entry) return res.status(404).json({ error: 'Entry not found' });
-  if (entry.status !== 'pending' && entry.status !== 'held') {
-    return res.status(400).json({ error: 'Entry must be pending or held to release' });
-  }
-
-  const { data, error } = await supabase
-    .from('trust_ledger')
-    .update({ status: 'completed', release_date: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
-
-  if (error) return res.status(500).json({ error: error.message });
-
-  res.json({
-    data: {
-      id: data.id,
-      displayId: data.display_id,
-      transactionId: data.transaction_id,
-      userId: data.user_id,
-      type: data.type,
-      amount: Number(data.amount),
-      balance: Number(data.balance),
-      status: data.status,
-      releaseDate: data.release_date,
-      notes: data.notes,
-      createdAt: data.created_at,
-    },
-    message: 'Funds released',
-  });
-}
-
-async function backfillTrustLedger(req, res) {
-  // Replicates the 001_backfill_trust_ledger.sql migration logic in JS
-  const MAPPED_TYPES = ['job_payment', 'rental_payment', 'deposit', 'galaw_purchase', 'payout', 'refund', 'fee'];
-  const SKIP_STATUSES = ['cancelled', 'failed'];
-
-  // Fetch all eligible transactions (status not cancelled/failed, type in mapped set)
-  const { data: transactions, error: txnErr } = await supabase
+  const { data: transaction, error: fetchError } = await supabase
     .from('transactions')
-    .select('*')
-    .not('status', 'in', `(${SKIP_STATUSES.join(',')})`)
-    .in('type', MAPPED_TYPES)
-    .order('created_at', { ascending: true })
-    .order('id', { ascending: true });
+    .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
+    .eq('id', req.params.id)
+    .single();
 
-  if (txnErr) return res.status(500).json({ error: txnErr.message });
-
-  // Get existing trust_ledger entries to skip and initialize balance
-  const { data: existingEntries } = await supabase
-    .from('trust_ledger')
-    .select('transaction_id, amount');
-
-  const existingTxnIds = new Set((existingEntries || []).map(e => e.transaction_id));
-  let runningBalance = (existingEntries || []).reduce((sum, e) => sum + Number(e.amount || 0), 0);
-
-  const toInsert = [];
-  let skipped = 0;
-
-  for (const txn of transactions || []) {
-    if (existingTxnIds.has(txn.id)) {
-      skipped++;
-      continue;
-    }
-
-    let trustType, trustAmount;
-
-    if (['job_payment', 'rental_payment'].includes(txn.type)) {
-      trustType = 'payment_in';
-      trustAmount = Math.abs(Number(txn.amount));
-    } else if (['deposit', 'galaw_purchase'].includes(txn.type)) {
-      trustType = 'deposit';
-      trustAmount = Math.abs(Number(txn.amount));
-    } else if (txn.type === 'payout') {
-      trustType = 'payout';
-      trustAmount = -Math.abs(Number(txn.amount));
-    } else if (txn.type === 'refund') {
-      trustType = 'refund';
-      trustAmount = -Math.abs(Number(txn.amount));
-    } else if (txn.type === 'fee') {
-      trustType = 'fee';
-      trustAmount = -Math.abs(Number(txn.amount));
-    } else {
-      skipped++;
-      continue;
-    }
-
-    const trustStatus = ['escrow', 'held'].includes(txn.status) ? 'held' : txn.status;
-
-    let releaseCondition = null;
-    if (txn.type === 'job_payment' && ['escrow', 'held'].includes(txn.status)) {
-      releaseCondition = 'job_completion';
-    } else if (txn.type === 'rental_payment' && ['escrow', 'held'].includes(txn.status)) {
-      releaseCondition = 'rental_completion';
-    }
-
-    runningBalance += trustAmount;
-
-    toInsert.push({
-      transaction_id: txn.id,
-      user_id: txn.user_id,
-      type: trustType,
-      amount: trustAmount,
-      balance: Math.round(runningBalance * 100) / 100,
-      status: trustStatus,
-      release_date: txn.status === 'completed' ? txn.created_at : null,
-      release_condition: releaseCondition,
-      notes: 'Backfilled from API endpoint',
-      created_at: txn.created_at,
-      updated_at: new Date().toISOString(),
-    });
+  if (fetchError || !transaction) return res.status(404).json({ error: 'Transaction not found' });
+  if (!CLIENT_FUND_TYPES.includes(transaction.type)) {
+    return res.status(400).json({ error: 'Only client payments and deposits can be released here' });
+  }
+  const escrowResult = await findEquipmentDepositEscrow(transaction);
+  if (escrowResult.error) return res.status(409).json({ error: escrowResult.error });
+  const escrow = escrowResult.escrow;
+  if (escrow && escrow.status !== 'held' && escrow.status !== 'released') {
+    return res.status(409).json({ error: 'This equipment deposit has already been refunded and cannot be released' });
+  }
+  if (!UNRELEASED_STATUSES.includes(transaction.status) &&
+      !(transaction.status === 'completed' && escrow?.status === 'held')) {
+    return res.status(400).json({ error: 'Transaction must be pending or held to release' });
   }
 
-  if (toInsert.length === 0) {
-    return res.json({ message: 'No transactions to backfill', created: 0, skipped });
+  let data = transaction;
+  if (transaction.status !== 'completed') {
+    const { data: updatedTransaction, error } = await supabase
+      .from('transactions')
+      .update({ status: 'completed' })
+      .eq('id', req.params.id)
+      .in('status', UNRELEASED_STATUSES)
+      .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
+      .single();
+
+    if (error || !updatedTransaction) {
+      return res.status(500).json({ error: error?.message || 'Transaction release failed' });
+    }
+    data = updatedTransaction;
   }
 
-  // Insert in batches of 100 to avoid payload limits
-  let created = 0;
-  const batchSize = 100;
-  for (let i = 0; i < toInsert.length; i += batchSize) {
-    const batch = toInsert.slice(i, i + batchSize);
-    const { error: insertErr } = await supabase.from('trust_ledger').insert(batch);
-    if (insertErr) return res.status(500).json({ error: insertErr.message, progress: created });
-    created += batch.length;
+  if (escrow?.status === 'held') {
+    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'released');
+    if (escrowUpdate.error) {
+      return res.status(500).json({
+        error: `Transaction was released, but its equipment deposit escrow record could not be updated. Retry release to reconcile it. ${escrowUpdate.error}`,
+      });
+    }
   }
 
-  res.json({
-    message: `Backfill complete: ${created} entries created`,
-    created,
-    skipped,
-  });
+  res.json({ data, message: 'Funds released' });
 }
 
-module.exports = { getSummary, listEntries, createEntry, releaseHeldFunds, backfillTrustLedger };
+module.exports = { getSummary, listEntries, releaseHeldFunds };

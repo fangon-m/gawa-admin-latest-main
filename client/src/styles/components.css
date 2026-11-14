@@ -439,6 +439,90 @@
   border-radius: var(--radius-full);
   letter-spacing: 0.02em;
   white-space: nowrap;
+  background: var(--color-surface-offset);
+  color: var(--color-text-muted);
+}
+
+.status-badge.active,
+.status-badge.approved,
+.status-badge.completed,
+.status-badge.confirmed,
+.status-badge.finished,
+.status-badge.paid,
+.status-badge.passed,
+.status-badge.positive,
+.status-badge.published,
+.status-badge.released,
+.status-badge.resolved,
+.status-badge.sent,
+.status-badge.success,
+.status-badge.verified,
+.status-badge.available {
+  background: var(--color-success-subtle);
+  color: var(--color-success);
+}
+
+.status-badge.pending,
+.status-badge.flagged,
+.status-badge.held,
+.status-badge.needs-review,
+.status-badge.under-review,
+.status-badge.under_review,
+.status-badge.unverified,
+.status-badge.warned,
+.status-badge.escalated {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.status-badge.open,
+.status-badge.ongoing,
+.status-badge.in-progress,
+.status-badge.in_progress,
+.status-badge.matched,
+.status-badge.processing {
+  background: var(--color-blue-subtle);
+  color: var(--color-blue);
+}
+
+.status-badge.blocked,
+.status-badge.cancelled,
+.status-badge.canceled,
+.status-badge.declined,
+.status-badge.failed,
+.status-badge.negative,
+.status-badge.rejected,
+.status-badge.suspended,
+.status-badge.unavailable {
+  background: var(--color-error-subtle);
+  color: var(--color-error);
+}
+
+.status-badge.archived,
+.status-badge.closed,
+.status-badge.dismissed,
+.status-badge.draft,
+.status-badge.inactive,
+.status-badge.new,
+.status-badge.revoked {
+  background: var(--color-surface-offset);
+  color: var(--color-text-muted);
+}
+
+/* Pending team invitations (Settings → Team Members) */
+.status-badge.invite_pending {
+  background: var(--color-warning-subtle);
+  color: var(--color-warning);
+}
+
+.status-badge.invite_failed {
+  background: var(--color-error-subtle);
+  color: var(--color-error);
+}
+
+.status-badge.invite_expired {
+  background: var(--color-bg-subtle, #f4f5f7);
+  color: var(--color-text-muted);
 }
 
 .data-table-wrapper {
@@ -559,6 +643,8 @@
 }
 
 .data-table-empty-icon {
+  display: flex;
+  justify-content: center;
   margin-bottom: var(--space-4);
   color: var(--color-text-faint);
 }
@@ -1127,6 +1213,91 @@
   text-align: center;
 }
 
+.evidence-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(0, 0, 0, 0.85);
+  animation: fadeIn 0.15s ease;
+}
+
+.evidence-lightbox__figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 92vw;
+  max-height: 90vh;
+}
+
+.evidence-lightbox__image {
+  max-width: 92vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+}
+
+.evidence-lightbox__caption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: #fff;
+  font-size: var(--text-sm);
+}
+
+.evidence-lightbox__counter {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.evidence-lightbox__close,
+.evidence-lightbox__nav {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  cursor: pointer;
+  border-radius: var(--radius-full);
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.evidence-lightbox__close:hover,
+.evidence-lightbox__nav:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.evidence-lightbox__close {
+  top: var(--space-4);
+  right: var(--space-4);
+  width: 40px;
+  height: 40px;
+}
+
+.evidence-lightbox__nav {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+}
+
+.evidence-lightbox__nav--prev {
+  left: var(--space-4);
+}
+
+.evidence-lightbox__nav--next {
+  right: var(--space-4);
+}
+
 .case-timeline {
   position: relative;
   padding-left: 2rem;
@@ -1229,6 +1400,11 @@
 
 .message.received .message-time {
   color: var(--color-text-faint);
+}
+
+.message-read-status {
+  margin-left: var(--space-2);
+  font-weight: 600;
 }
 
 .message-composer {
@@ -1334,7 +1510,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: var(--space-4);
+  margin: 0 auto var(--space-4);
   color: var(--color-text-faint);
 }
 
@@ -1386,6 +1562,50 @@
   outline: none;
   transition: all var(--transition);
 }
+
+/* Password fields with a show/hide toggle (login, accept-invite) */
+.password-field {
+  position: relative;
+  display: flex;
+}
+
+.password-field .form-input {
+  padding-right: calc(var(--space-10) + var(--space-1));
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+}
+
+.password-toggle:hover {
+  color: var(--color-text);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.password-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 
 .form-input::placeholder {
   color: var(--color-text-faint);
@@ -1889,10 +2109,17 @@
 }
 
 .conversation-unread-badge {
-  width: 8px;
-  height: 8px;
   background: var(--color-accent);
+  color: var(--color-surface);
   border-radius: var(--radius-full);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 var(--space-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6875rem;
+  font-weight: 700;
 }
 
 .recent-item {

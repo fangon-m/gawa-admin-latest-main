@@ -22,6 +22,10 @@
   width: var(--sidebar-collapsed-width);
 }
 
+.sidebar.notifications-open {
+  overflow: visible;
+}
+
 .sidebar-logo {
   padding: var(--space-3) var(--space-3);
   display: flex;

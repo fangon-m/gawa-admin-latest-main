@@ -98,14 +98,23 @@ async function request(path, options = {}) {
 
   const res = await fetch(url, { ...options, headers });
 
-  if (res.status === 401 || res.status === 403) {
+  // 403 means the caller is authenticated but not allowed to perform this
+  // action. Refreshing the session or signing the user out would be wrong:
+  // the session is still valid, the request simply is not permitted. Only a
+  // 401 (expired session) may trigger a refresh or a sign-out.
+  if (res.status === 403) {
+    const data = await res.json().catch(() => ({}));
+    throw { status: 403, ...data };
+  }
+
+  if (res.status === 401) {
     const retried = await tryRefreshToken().catch(() => null);
     if (retried) {
       headers.Authorization = `Bearer ${retried}`;
       const retryRes = await fetch(url, { ...options, headers });
       const retryData = await retryRes.json().catch(() => ({}));
       if (retryRes.ok) return retryData;
-      if (retryRes.status === 401 || retryRes.status === 403) {
+      if (retryRes.status === 401) {
         clearAuthSession();
       }
       throw { status: retryRes.status, ...retryData };
@@ -125,8 +134,47 @@ export function get(path) {
   return request(path);
 }
 
-export function post(path, body) {
-  return request(path, { method: 'POST', body: JSON.stringify(body) });
+export function post(path, body, headers = {}) {
+  return request(path, { method: 'POST', body: JSON.stringify(body), headers });
+}
+
+function sendFile(path, formData, authToken, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE_URL}${path}`);
+    if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onerror = () => reject(new Error('Network error while uploading the file'));
+    xhr.onload = () => {
+      let data = {};
+      try {
+        data = JSON.parse(xhr.responseText || '{}');
+      } catch {
+        data = {};
+      }
+      resolve({ status: xhr.status, data });
+    };
+    xhr.send(formData);
+  });
+}
+
+export async function postFile(path, formData, onProgress) {
+  let response = await sendFile(path, formData, token, onProgress);
+  if (response.status === 401) {
+    const refreshed = await tryRefreshToken().catch(() => null);
+    if (!refreshed) {
+      clearAuthSession();
+      throw { status: response.status, ...response.data };
+    }
+    response = await sendFile(path, formData, refreshed, onProgress);
+    if (response.status === 401) clearAuthSession();
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw { status: response.status, ...response.data };
+  }
+  return response.data;
 }
 
 export function patch(path, body) {
@@ -137,6 +185,6 @@ export function put(path, body) {
   return request(path, { method: 'PUT', body: JSON.stringify(body) });
 }
 
-export function del(path) {
-  return request(path, { method: 'DELETE' });
+export function del(path, body) {
+  return request(path, { method: 'DELETE', ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }

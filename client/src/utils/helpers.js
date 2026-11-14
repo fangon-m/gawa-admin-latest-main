@@ -8,6 +8,20 @@ export function formatDate(dateStr) {
   });
 }
 
+/**
+ * Preferred start times are free text in the database ("Within 3 days",
+ * "ASAP") rather than timestamps. Format real dates, but show free-text
+ * values verbatim instead of "Invalid Date".
+ */
+export function formatPreferredStart(value) {
+  if (!value) return 'Not set';
+  const text = String(value).trim();
+  if (!text) return 'Not set';
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return text;
+  return formatDate(text);
+}
+
 export function formatDateTime(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -110,6 +124,54 @@ export function debounce(fn, ms = 300) {
 export function formatEntityId(id, prefix = '') {
   if (!id) return '';
   return `${prefix}${id.slice(0, 8)}`.toUpperCase();
+}
+
+/**
+ * Generate a consistent short numeric ID from a UUID string.
+ * Uses FNV-1a hash for consistent, unique-ish numbers.
+ */
+export function formatEntityIdNumeric(id, prefix = '') {
+  if (!id) return '';
+  // FNV-1a 32-bit hash
+  let hash = 0x811c9dc5;
+  const str = id.replace(/-/g, '');
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash * 0x01000193) >>> 0;
+  }
+  // Format as 6-digit number with prefix
+  const num = (hash % 1000000).toString().padStart(6, '0');
+  return `${prefix}${num}`;
+}
+
+/**
+ * Build a user detail link that carries the friendly entity ID (USR-123456)
+ * instead of the raw account UUID.
+ */
+export function userEntityPath(id) {
+  const token = formatEntityIdNumeric(id, 'USR-');
+  return token ? `/users/${token}` : '/users';
+}
+
+function entityPath(base, id, prefix) {
+  const token = formatEntityIdNumeric(id, prefix);
+  return token ? `${base}/${token}` : base;
+}
+
+export function jobEntityPath(id) {
+  return entityPath('/jobs', id, 'JOB-');
+}
+
+export function listingEntityPath(id) {
+  return entityPath('/listings', id, 'LST-');
+}
+
+export function rentalEntityPath(id) {
+  return entityPath('/rentals', id, 'RNT-');
+}
+
+export function transactionEntityPath(id) {
+  return entityPath('/transactions', id, 'TXN-');
 }
 
 export function toQueryString(params) {

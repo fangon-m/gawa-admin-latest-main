@@ -4,9 +4,9 @@ const ctrl = require('../controllers/completions');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
 
-router.post('/matches/:matchId/mark-done', authenticate, ctrl.markDone);
-router.post('/matches/:matchId/confirm', authenticate, ctrl.confirmCompletion);
-router.post('/matches/:matchId/dispute', authenticate, ctrl.disputeCompletion);
+router.post('/matches/:matchId/mark-done', authenticate, authorize(ROLES.ADMIN), ctrl.markDone);
+router.post('/matches/:matchId/confirm', authenticate, authorize(ROLES.ADMIN), ctrl.confirmCompletion);
+router.post('/matches/:matchId/dispute', authenticate, authorize(ROLES.ADMIN), ctrl.disputeCompletion);
 
 router.get('/disputed', authenticate, authorize(ROLES.ADMIN), ctrl.listDisputed);
 router.post('/matches/:matchId/resolve', authenticate, authorize(ROLES.ADMIN), ctrl.resolveDispute);

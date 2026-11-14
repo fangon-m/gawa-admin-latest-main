@@ -18,10 +18,10 @@ const navItems = [
   { label: 'Rentals', path: '/rentals', icon: Building2, permission: 'viewRentals' },
   { section: 'Finance' },
   { label: 'Transactions', path: '/transactions', icon: ArrowLeftRightIcon, permission: 'viewTransactions' },
-  { label: 'Galaw Points', path: '/galaw-points', icon: CoinsIcon, permission: 'viewGalawPoints' },
+  { label: 'Gawa Points', path: '/gawa-points', icon: CoinsIcon, permission: 'viewGawaPoints' },
   { label: 'Trust Ledger', path: '/trust-ledger', icon: Landmark, permission: 'viewTransactions' },
   { section: 'Oversight' },
-  { label: 'Oversight', path: '/oversight', icon: ShieldAlertIcon, permission: 'viewDisputes' },
+  { label: 'Incident Reports', path: '/oversight', icon: ShieldAlertIcon, permission: 'viewOversight' },
   { section: 'Communication' },
   { label: 'Messages', path: '/messages', icon: Mail, permission: 'viewMessages' },
   { section: 'System' },
@@ -75,6 +75,7 @@ export default function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose
     'sidebar',
     collapsed ? 'collapsed' : '',
     mobileOpen ? 'open' : '',
+    showNotifications ? 'notifications-open' : '',
   ].filter(Boolean).join(' ');
 
   return (

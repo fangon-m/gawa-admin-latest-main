@@ -1,40 +1,53 @@
 const supabase = require('../db/supabase');
-const crypto = require('crypto');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const config = require('../config');
+const { toCamelCase, getFullName, calculatePagination, sanitizeSearchTerm, sendError } = require('../utilities/helpers');
+const { logAdminActivity } = require('../utilities/activityLogger');
+const { revokeUserSessions } = require('../utilities/sessionRevocation');
+const { stampArchivedContent, clearArchivedContentMarkers } = require('../utilities/archiveContent');
+const invites = require('../services/invites');
+const passwordResets = require('../services/passwordResets');
+const tempPasswords = require('../services/tempPasswords');
+const { sendEmail } = require('../services/mailer');
+const { renderInviteEmail, ROLE_LABELS } = require('../services/emailTemplates/invite');
+const { renderPasswordResetEmail } = require('../services/emailTemplates/passwordReset');
+const { renderTempPasswordEmail } = require('../services/emailTemplates/tempPassword');
+const { renderSuspensionEmail } = require('../services/emailTemplates/suspension');
 
-const USER_SELECT = 'id, email, phone, role, is_verified, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
+const USER_SELECT = 'id, email, phone, role, is_verified, is_archived, archived_at, archived_by, archive_reason, suspension_status, suspended_until, suspension_reason, suspension_updated_at, escalated_to_deletion, first_name, middle_name, last_name, birth_date, region, province, municipality, barangay, complete_address, profile_image_url, created_at';
+
+// Admin activity descriptions should name the account, never expose its UUID.
+function userDisplayName(user, fallbackId) {
+  if (!user) return fallbackId;
+  return getFullName(user) || user.email || fallbackId;
+}
 
 function mapUser(u) {
+  const suspensionActive = u.suspension_status === 'active' || u.suspension_status === 'escalated';
   return {
     ...toCamelCase(u),
     name: getFullName(u),
     fullName: getFullName(u),
-    status: u.status || (u.is_verified ? 'verified' : 'unverified'),
+    status: u.is_archived ? 'archived' : suspensionActive ? 'suspended' : (u.status || (u.is_verified ? 'verified' : 'unverified')),
     location: u.complete_address,
     avatarUrl: u.profile_image_url,
     joinedAt: u.created_at,
   };
 }
 
-async function fetchSuspensionData(userIds) {
-  if (!userIds || userIds.length === 0) return {};
-  const { data } = await supabase
-    .from('user_suspensions')
-    .select('user_id, suspended_until, suspension_reason, escalated_to_deletion, suspension_status')
-    .in('user_id', userIds)
-    .in('suspension_status', ['active', 'escalated']);
-  const map = {};
-  (data || []).forEach(s => { map[s.user_id] = s; });
-  return map;
-}
-
 async function listUsers(req, res) {
-  const { page = 1, limit = 20, role, status, verified, search } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { role, status, verified } = req.query;
+  // The search term is interpolated into a PostgREST filter expression, so it
+  // is normalised to an allow-list first: a raw value could otherwise inject
+  // extra predicates (`%`, `,`, `)`) and turn the row count into a blind
+  // oracle over columns that are not part of the projection.
+  const search = sanitizeSearchTerm(req.query.search);
 
   let query = supabase.from('users_table').select(USER_SELECT, { count: 'exact' })
     .not('role', 'in', '("admin","customer_support")');
   if (role) query = query.eq('role', role);
+  if (status === 'archived') query = query.eq('is_archived', true);
+  if (status && status !== 'archived') query = query.eq('is_archived', false);
   if (status === 'verified') query = query.eq('is_verified', true);
   if (status === 'unverified') query = query.eq('is_verified', false);
   if (search) query = query.or(`first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%`);
@@ -43,7 +56,7 @@ async function listUsers(req, res) {
     .order('created_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const userIds = (data || []).map(u => u.id);
   const rolesByUser = {};
@@ -55,12 +68,10 @@ async function listUsers(req, res) {
     });
   }
 
-  const suspensionMap = await fetchSuspensionData(userIds);
   const skillsMap = await fetchEntitySkills(userIds, 'profile');
 
   res.json({
     data: (data || []).map(u => {
-      const susp = suspensionMap[u.id] || {};
       return {
         ...mapUser(u),
         displayId: u.id?.slice(0, 8),
@@ -68,12 +79,88 @@ async function listUsers(req, res) {
         roles: rolesByUser[u.id] || [],
         roleProfiles: [],
         skills: skillsMap[u.id] || [],
-        suspendedUntil: susp.suspended_until || null,
-        suspensionReason: susp.suspension_reason || null,
       };
     }),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
   });
+}
+
+async function listTeamMembers(req, res) {
+  // Keep the badge honest without a background job: any live invite past its
+  // expiry is flipped to 'expired' before we read the list.
+  await invites.expireStaleInvites();
+
+  const { data, error } = await supabase
+    .from('users_table')
+    .select(USER_SELECT)
+    .in('role', ['admin', 'customer_support'])
+    .order('created_at', { ascending: true });
+
+  if (error) return sendError(res, error, { status: 500 });
+
+  const userIds = (data || []).map(u => u.id);
+  const rolesByUser = {};
+  if (userIds.length > 0) {
+    const { data: rolesRes } = await supabase.from('user_roles').select('user_id, roles(role_name)').in('user_id', userIds);
+    (rolesRes || []).forEach(r => {
+      if (!rolesByUser[r.user_id]) rolesByUser[r.user_id] = [];
+      rolesByUser[r.user_id].push(r.roles?.role_name);
+    });
+  }
+
+  const members = (data || []).map((u) => {
+    const suspensionActive = u.suspension_status === 'active' || u.suspension_status === 'escalated';
+    return {
+      kind: 'member',
+      ...mapUser(u),
+      status: u.is_archived ? 'archived' : suspensionActive ? 'suspended' : 'active',
+      roles: rolesByUser[u.id] || [],
+      isSelf: u.id === req.user?.id,
+      resendable: false,
+    };
+  });
+
+  const { data: inviteRows, error: inviteError } = await supabase
+    .from('team_invites')
+    .select('*')
+    .in('status', invites.ACTIVE_STATUSES)
+    .order('created_at', { ascending: true });
+
+  if (inviteError) {
+    // A missing migration must not take down the whole team page.
+    console.error('[Team] Could not load pending invitations:', inviteError.message);
+  }
+
+  const inviterIds = [...new Set((inviteRows || []).map(i => i.invited_by).filter(Boolean))];
+  const inviterNames = {};
+  if (inviterIds.length > 0) {
+    const { data: inviters } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name')
+      .in('id', inviterIds);
+    (inviters || []).forEach((u) => { inviterNames[u.id] = getFullName(u) || u.email || null; });
+  }
+
+  const pending = (inviteRows || []).map(invite => ({
+    kind: 'invite',
+    id: invite.invite_id,
+    inviteId: invite.invite_id,
+    name: invite.full_name,
+    email: invite.email,
+    role: invite.role,
+    roles: [invite.role],
+    status: invites.inviteStatus(invite),
+    expiresAt: invite.expires_at,
+    invitedBy: inviterNames[invite.invited_by] || null,
+    createdAt: invite.created_at,
+    isSelf: false,
+    resendable: true,
+  }));
+
+  const combined = [...members, ...pending]
+    .sort((a, b) => Date.parse(a.createdAt || 0) - Date.parse(b.createdAt || 0));
+
+  res.json({ data: combined });
 }
 
 async function getUserById(req, res) {
@@ -85,10 +172,15 @@ async function getUserById(req, res) {
 
   if (error || !user) return res.status(404).json({ error: 'User not found' });
 
-  const [notesRes, rolesRes, suspensionRes] = await Promise.all([
+  // Accounts archived before content archiving existed still show listings as
+  // available on the mobile app; re-stamping is idempotent.
+  if (user.is_archived && user.archived_at) {
+    await stampArchivedContent(user.id, user.archived_at);
+  }
+
+  const [notesRes, rolesRes] = await Promise.all([
     supabase.from('user_notes').select('*').eq('user_id', req.params.id),
     supabase.from('user_roles').select('*, roles(role_name)').eq('user_id', req.params.id),
-    supabase.from('user_suspensions').select('*').eq('user_id', req.params.id).in('suspension_status', ['active', 'escalated']).maybeSingle(),
   ]);
 
   const rawNotes = notesRes.data || [];
@@ -102,7 +194,16 @@ async function getUserById(req, res) {
 
   const skillsMap = await fetchEntitySkills([req.params.id], 'profile');
 
-  const susp = suspensionRes.data || {};
+  let archivedByName = null;
+  if (user.archived_by) {
+    const { data: archiver } = await supabase
+      .from('users_table')
+      .select('id, first_name, last_name')
+      .eq('id', user.archived_by)
+      .maybeSingle();
+    if (archiver) archivedByName = getFullName(archiver) || archiver.id;
+  }
+
   res.json({
     data: {
       ...mapUser(user),
@@ -110,10 +211,10 @@ async function getUserById(req, res) {
       roles: (rolesRes.data || []).map(r => ({ ...r, roleName: r.roles?.role_name })),
       roleProfiles: [],
       skills: skillsMap[req.params.id] || [],
-      suspendedUntil: susp.suspended_until || null,
-      suspensionReason: susp.suspension_reason || null,
-      escalatedToDeletion: susp.escalated_to_deletion || false,
-      status: susp.escalated_to_deletion ? 'archived' : susp.suspension_status ? 'suspended' : (user.is_verified ? 'verified' : 'unverified'),
+      suspendedUntil: user.suspended_until || null,
+      suspensionReason: user.suspension_reason || null,
+      escalatedToDeletion: user.escalated_to_deletion || false,
+      archivedByName,
     },
   });
 }
@@ -121,70 +222,127 @@ async function getUserById(req, res) {
 async function suspendUser(req, res) {
   const { duration = 7, reason = '' } = req.body;
   const days = Math.max(1, Math.min(90, Math.round(+duration || 7)));
-  const suspendedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date();
+  const suspendedUntil = new Date(now.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: existingSusp } = await supabase
-    .from('user_suspensions')
-    .select('suspension_id')
-    .eq('user_id', req.params.id)
-    .eq('suspension_status', 'active')
+  const { data: existingUser, error: fetchErr } = await supabase
+    .from('users_table')
+    .select('id, is_archived, suspension_status, suspended_until')
+    .eq('id', req.params.id)
     .maybeSingle();
 
-  const { data: existingUser } = await supabase
-    .from('users_table')
-    .select('id')
-    .eq('id', req.params.id)
-    .single();
-
+  if (fetchErr) return sendError(res, fetchErr, { status: 500 });
   if (!existingUser) return res.status(404).json({ error: 'User not found' });
 
-  if (existingSusp) {
-    const { error: updateErr } = await supabase
-      .from('user_suspensions')
-      .update({ suspended_until: suspendedUntil, suspension_reason: reason || null })
-      .eq('suspension_id', existingSusp.suspension_id);
-    if (updateErr) return res.status(500).json({ error: updateErr.message });
-  } else {
-    const { error: insertErr } = await supabase
-      .from('user_suspensions')
-      .insert({
-        user_id: req.params.id,
-        suspended_until: suspendedUntil,
-        suspension_reason: reason || null,
-        suspension_status: 'active',
-      });
-    if (insertErr) return res.status(500).json({ error: insertErr.message });
+  if (existingUser.is_archived) {
+    return res.status(409).json({ error: 'Archived accounts cannot be suspended. Unarchive the account first.' });
   }
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  const { data: suspension } = await supabase.from('user_suspensions').select('*').eq('user_id', req.params.id).eq('suspension_status', 'active').maybeSingle();
+  const alreadySuspended = existingUser.suspension_status === 'active'
+    && (existingUser.suspended_until === null || new Date(existingUser.suspended_until) > now);
+  if (alreadySuspended) {
+    return res.status(409).json({ error: 'User is already suspended' });
+  }
+
+  const { data: user, error: updateErr } = await supabase
+    .from('users_table')
+    .update({
+      suspension_status: 'active',
+      suspended_until: suspendedUntil,
+      suspension_reason: reason || null,
+      suspension_source: 'manual',
+      suspended_at: now.toISOString(),
+      suspension_updated_at: now.toISOString(),
+      escalated_to_deletion: false,
+      updated_at: now.toISOString(),
+    })
+    .eq('id', req.params.id)
+    .select(USER_SELECT)
+    .single();
+
+  if (updateErr || !user) return res.status(500).json({ error: updateErr?.message || 'Could not suspend user' });
+
+  // A suspended member must lose access immediately, not when their token
+  // happens to expire.
+  await revokeUserSessions(req.params.id);
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_suspended',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin suspended user ${userDisplayName(user, req.params.id)} for ${days} day(s): ${reason || 'no reason'}`,
+  });
+
+  const suspensionEmail = user.email
+    ? renderSuspensionEmail({
+      name: getFullName(user),
+      email: user.email,
+      reason: user.suspension_reason,
+      duration: days,
+      suspendedUntil: user.suspended_until,
+      supportEmail: config.email.supportEmail,
+    })
+    : null;
+  const emailResult = suspensionEmail
+    ? await sendEmail({
+      to: user.email,
+      ...suspensionEmail,
+      template: 'user_suspension',
+    })
+    : { delivered: false, attempts: 0, errorCode: 'NO_RECIPIENT' };
+
+  if (!emailResult.delivered) {
+    console.error(`[Users] Suspension email was not delivered (${emailResult.errorCode || 'E_MAIL'})`);
+  }
 
   res.json({
-    data: { ...mapUser(user), status: 'suspended', suspendedUntil: suspension?.suspended_until, suspensionReason: suspension?.suspension_reason },
+    data: { ...mapUser(user), status: 'suspended', suspendedUntil: user.suspended_until, suspensionReason: user.suspension_reason },
+    emailNotification: { delivered: emailResult.delivered, errorCode: emailResult.errorCode },
     message: `User suspended for ${days} day(s)`,
   });
 }
 
 async function reinstateUser(req, res) {
-  await Promise.all([
-    supabase.from('user_suspensions')
-      .update({ suspension_status: 'resolved', resolved_at: new Date().toISOString() })
-      .eq('user_id', req.params.id)
-      .eq('suspension_status', 'active'),
-  ]);
+  const now = new Date().toISOString();
+  const { data: user, error } = await supabase
+    .from('users_table')
+    .update({
+      suspension_status: 'resolved',
+      suspended_until: null,
+      suspension_reason: null,
+      suspension_updated_at: now,
+      escalated_to_deletion: false,
+      updated_at: now,
+    })
+    .eq('id', req.params.id)
+    .select(USER_SELECT)
+    .single();
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user), status: user?.is_verified ? 'verified' : 'unverified' }, message: 'User reinstated' });
+  if (error || !user) return res.status(404).json({ error: 'User not found' });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_reinstated',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin reinstated user ${userDisplayName(user, req.params.id)}`,
+  });
+
+  res.json({ data: mapUser(user), message: 'User reinstated' });
 }
 
 async function flagUser(req, res) {
   const { data: user, error: fetchErr } = await supabase
     .from('users_table')
-    .select('id')
+    .select('id, is_archived, first_name, last_name, email')
     .eq('id', req.params.id)
     .single();
 
   if (fetchErr || !user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_archived) {
+    return res.status(409).json({ error: 'Archived accounts cannot be flagged. Unarchive the account first.' });
+  }
 
   const { data, error } = await supabase
     .from('entity_flags')
@@ -192,100 +350,179 @@ async function flagUser(req, res) {
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_flagged',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin flagged user ${userDisplayName(user, req.params.id)}`,
+  });
+
   res.json({ data: { ...mapUser(user), status: 'flagged', flag: data }, message: 'User flagged' });
 }
 
 async function deleteUser(req, res) {
+  const { data: user } = await supabase
+    .from('users_table')
+    .select('id, first_name, last_name, email')
+    .eq('id', req.params.id)
+    .maybeSingle();
+
+  // The audit record has to be written BEFORE the account is removed.
+  // `activity_log.related_user_id` is a foreign key with ON DELETE SET NULL, so
+  // a record written after the deletion is rejected outright and the trail of
+  // a deletion is lost. Written first, the row survives with the
+  // relationship cleared and the description still naming the account.
+  await logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_deleted',
+    category: 'user',
+    relatedUserId: req.params.id,
+    description: `Admin deleted user ${userDisplayName(user, req.params.id)}`,
+  });
+
   const { error } = await supabase.auth.admin.deleteUser(req.params.id);
   if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
+
   res.json({ message: 'User deleted' });
 }
 
-async function listEscalatedUsers(req, res) {
-  const now = new Date().toISOString();
+async function archiveUser(req, res) {
+  const userId = req.params.id;
+  if (req.user?.id === userId) {
+    return res.status(400).json({ error: 'You cannot archive your own account' });
+  }
 
-  const { data: expired, error: expiredErr } = await supabase
-    .from('user_suspensions')
-    .select('*, users_table!inner(*)')
-    .eq('suspension_status', 'active')
-    .lt('suspended_until', now)
-    .not('suspended_until', 'is', null)
-    .order('suspended_until', { ascending: false });
+  const { data: user, error: fetchError } = await supabase
+    .from('users_table')
+    .select('id, role, is_archived, first_name, last_name, email')
+    .eq('id', userId)
+    .maybeSingle();
 
-  if (expiredErr) return res.status(500).json({ error: expiredErr.message });
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (['admin', 'customer_support'].includes(user.role)) {
+    return res.status(403).json({ error: 'Staff accounts cannot be archived here' });
+  }
 
-  const { data: escalated, error: escalatedErr } = await supabase
-    .from('user_suspensions')
-    .select('*, users_table!inner(*)')
-    .eq('escalated_to_deletion', true);
+  const archivedAt = new Date().toISOString();
+  const { data: archivedUser, error: updateError } = await supabase
+    .from('users_table')
+    .update({
+      is_archived: true,
+      archived_at: archivedAt,
+      archived_by: req.user?.id || null,
+      archive_reason: req.body.reason,
+      updated_at: archivedAt,
+    })
+    .eq('id', userId)
+    .select(USER_SELECT)
+    .single();
 
-  if (escalatedErr) return res.status(500).json({ error: escalatedErr.message });
+  if (updateError || !archivedUser) {
+    return res.status(500).json({ error: updateError?.message || 'Could not archive user' });
+  }
 
-  const mapUser = (s) => ({
-    ...mapUser(s.users_table),
-    suspendedUntil: s.suspended_until,
-    suspensionReason: s.suspension_reason,
+  const { error: banError } = await supabase.auth.admin.updateUserById(userId, {
+    ban_duration: '876000h',
+  });
+
+  if (banError) {
+    const { error: rollbackError } = await supabase
+      .from('users_table')
+      .update({ is_archived: false, archived_at: null, archived_by: null, archive_reason: null, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (rollbackError) {
+      return res.status(500).json({
+        error: 'Auth ban failed and archive rollback failed; user access remains blocked by the archive flag',
+      });
+    }
+    return sendError(res, banError, { status: 502 });
+  }
+
+  const archivedContent = await stampArchivedContent(userId, archivedAt);
+
+  // The auth ban already stops the account signing in; revoking the
+  // sessions as well means a token issued before the archive stops working
+  // immediately rather than at its own expiry.
+  await revokeUserSessions(userId);
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_archived',
+    category: 'user',
+    relatedUserId: userId,
+    description: `Admin archived and banned user ${userDisplayName(user, userId)}: ${req.body.reason || 'no reason'} (hid ${archivedContent.jobPosts} job post(s), ${archivedContent.proposals} proposal(s) and ${archivedContent.listings} listing(s) from active views)`,
   });
 
   res.json({
-    data: {
-      expiredSuspensions: (expired || []).map(mapUser),
-      escalatedToDeletion: (escalated || []).map(mapUser),
-    },
-    pagination: { total: (expired?.length || 0) + (escalated?.length || 0) },
+    data: mapUser(archivedUser),
+    archivedContent,
+    message: 'User archived and banned from signing in',
   });
 }
 
-async function escalateToDeletion(req, res) {
-  const { data: susp, error: fetchErr } = await supabase
-    .from('user_suspensions')
-    .select('suspension_id, user_id')
-    .eq('user_id', req.params.id)
-    .eq('suspension_status', 'active')
+async function unarchiveUser(req, res) {
+  const userId = req.params.id;
+  const { data: user, error: fetchError } = await supabase
+    .from('users_table')
+    .select('id, is_archived, archived_at, first_name, last_name, email')
+    .eq('id', userId)
     .maybeSingle();
 
-  if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-  if (!susp) return res.status(400).json({ error: 'User is not suspended' });
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user.is_archived) return res.status(409).json({ error: 'User is not archived' });
 
-  await Promise.all([
-    supabase.from('user_suspensions')
-      .update({ escalated_to_deletion: true, suspension_status: 'escalated' })
-      .eq('suspension_id', susp.suspension_id),
-  ]);
+  const { data: restoredUser, error: updateError } = await supabase
+    .from('users_table')
+    .update({ is_archived: false, updated_at: new Date().toISOString() })
+    .eq('id', userId)
+    .select(USER_SELECT)
+    .single();
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user) }, message: 'User escalated to deletion queue' });
-}
-
-async function removeFromEscalation(req, res) {
-  const { action } = req.body;
-
-  if (action === 'delete_permanently') {
-    const { error } = await supabase.auth.admin.deleteUser(req.params.id);
-    if (error) return res.status(404).json({ error: 'User not found or could not be deleted' });
-    return res.json({ message: 'User permanently deleted' });
+  if (updateError || !restoredUser) {
+    return res.status(500).json({ error: updateError?.message || 'Could not unarchive user' });
   }
 
-  if (action === 'reinstate') {
-    await Promise.all([
-      supabase.from('user_suspensions')
-        .update({ escalated_to_deletion: false, suspension_status: 'resolved', resolved_at: new Date().toISOString() })
-        .eq('user_id', req.params.id)
-        .eq('escalated_to_deletion', true),
-    ]);
-  } else {
-    await supabase.from('user_suspensions')
-      .update({ escalated_to_deletion: false, suspension_status: 'expired' })
-      .eq('user_id', req.params.id)
-      .eq('escalated_to_deletion', true);
-    await supabase.from('users_table')
-      .update({ updated_at: new Date().toISOString() })
-      .eq('id', req.params.id);
+  const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, {
+    ban_duration: 'none',
+  });
+
+  if (unbanError) {
+    const { error: rollbackError } = await supabase
+      .from('users_table')
+      .update({ is_archived: true, updated_at: new Date().toISOString() })
+      .eq('id', userId);
+
+    if (rollbackError) {
+      return res.status(500).json({
+        error: 'Auth unban failed and archive rollback failed; verify the account remains blocked before retrying',
+      });
+    }
+    return sendError(res, unbanError, { status: 502 });
   }
 
-  const { data: user } = await supabase.from('users_table').select(USER_SELECT).eq('id', req.params.id).single();
-  res.json({ data: { ...mapUser(user) }, message: action === 'reinstate' ? 'User reinstated from escalation' : 'User removed from escalation queue' });
+  const restoredContent = user.archived_at
+    ? await clearArchivedContentMarkers(userId, user.archived_at)
+    : { jobPosts: 0, proposals: 0, listings: 0 };
+
+  logAdminActivity({
+    actorId: req.user?.id,
+    activityType: 'user_unarchived',
+    category: 'user',
+    relatedUserId: userId,
+    description: `Admin unarchived and restored access for user ${userDisplayName(user, userId)} (restored ${restoredContent.jobPosts} job post(s), ${restoredContent.proposals} proposal(s) and ${restoredContent.listings} listing(s) to active views)`,
+  });
+
+  res.json({
+    data: mapUser(restoredUser),
+    restoredContent,
+    message: 'User unarchived and sign-in restored',
+  });
 }
 
 async function updateUser(req, res) {
@@ -314,46 +551,346 @@ async function updateUser(req, res) {
   res.json({ data: { ...mapUser(data) }, message: 'Profile updated successfully' });
 }
 
+/**
+ * Admin-triggered password reset. The server mints the temporary password,
+ * applies it to the team member's auth account, and emails the login email
+ * plus that password. The credential is never returned to the caller, shown in
+ * the portal, or written to logs.
+ */
 async function adminResetPassword(req, res) {
-  const { newPassword } = req.body;
-  const { error } = await supabase.auth.admin.updateUserById(req.params.id, { password: newPassword });
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({ message: 'Password reset successful' });
+  const { id } = req.params;
+  if (!UUID_RE.test(id || '')) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  try {
+    const { data: member, error } = await supabase
+      .from('users_table')
+      .select('id, email, first_name, last_name, role, is_archived')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[TempPassword] Member lookup failed:', error.code || 'ERROR');
+      return res.status(500).json({ error: 'Could not load that team member' });
+    }
+    if (!member) return res.status(404).json({ error: 'User not found' });
+    if (!['admin', 'customer_support'].includes(member.role)) {
+      return res.status(400).json({
+        error: 'Only team members can receive a temporary password',
+        code: 'NOT_TEAM_MEMBER',
+      });
+    }
+    if (member.is_archived) {
+      return res.status(409).json({ error: 'This account is archived. Unarchive it first.', code: 'USER_ARCHIVED' });
+    }
+    if (!member.email) {
+      return res.status(400).json({
+        error: 'That account has no email address to send the password to',
+        code: 'NO_EMAIL',
+      });
+    }
+
+    const tempPassword = tempPasswords.generateTempPassword();
+    const { error: updateError } = await supabase.auth.admin.updateUserById(member.id, { password: tempPassword });
+    if (updateError) {
+      console.error('[TempPassword] Password update failed:', updateError.code || 'ERROR');
+      return res.status(400).json({ error: 'Could not set the temporary password. Please try again.', code: 'RESET_FAILED' });
+    }
+
+    // A new password invalidates the sessions the member held before it.
+    await revokeUserSessions(member.id);
+
+    const { subject, html, text } = renderTempPasswordEmail({
+      name: getFullName(member),
+      email: member.email,
+      password: tempPassword,
+      supportEmail: config.email.supportEmail,
+    });
+
+    const delivery = await sendEmail({ to: member.email, subject, html, text, template: 'temp_password' });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'password_reset',
+      category: 'user',
+      relatedUserId: member.id,
+      description: `Issued a temporary password to ${member.email} (${delivery.delivered ? 'delivered' : `failed: ${delivery.errorCode}`})`,
+    });
+
+    return res.json({
+      data: {
+        email: member.email,
+        delivery: delivery.delivered ? 'sent' : 'failed',
+      },
+      message: delivery.delivered
+        ? `Temporary password emailed to ${member.email}`
+        : 'Temporary password set, but the email could not be delivered.',
+    });
+  } catch (err) {
+    console.error('[TempPassword] Reset failed:', err?.code || 'ERROR');
+    return res.status(500).json({ error: 'Could not reset the password' });
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+function inviteActorName(req) {
+  return getFullName(req.user) || req.user?.name || req.user?.email || 'A GAWA administrator';
+}
+
+function handleInviteError(res, err, fallback = 'Could not process the invitation') {
+  if (err instanceof invites.InviteError) {
+    return res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
+  }
+  // Never echo raw driver/provider messages: they can contain connection
+  // strings or provider feedback. Log the code only.
+  console.error('[Invites] Unexpected error:', err?.code || 'ERROR', err?.message || 'unknown');
+  return res.status(500).json({ error: fallback });
+}
+
+async function deliverInvite({ invite, rawToken, inviterName }) {
+  const { subject, html, text } = renderInviteEmail({
+    inviteeName: invite.full_name,
+    inviterName,
+    email: invite.email,
+    role: invite.role,
+    acceptUrl: invites.buildAcceptUrl(rawToken),
+    expiresAt: invite.expires_at,
+    supportEmail: config.email.supportEmail,
+  });
+
+  const result = await sendEmail({
+    to: invite.email,
+    subject,
+    html,
+    text,
+    template: 'team_invite',
+    inviteId: invite.invite_id,
+  });
+
+  await invites.setDeliveryResult(invite.invite_id, {
+    delivered: result.delivered,
+    attempts: result.attempts,
+    errorCode: result.errorCode,
+  });
+
+  return result;
+}
+
+function inviteResponse(invite, delivery) {
+  return {
+    inviteId: invite.invite_id,
+    email: invite.email,
+    name: invite.full_name,
+    role: invite.role,
+    status: invites.inviteStatus(invite),
+    expiresAt: invite.expires_at,
+    delivery: delivery.delivered ? 'sent' : 'failed',
+  };
 }
 
 async function inviteUser(req, res) {
+  if (!config.invites.enabled) {
+    return res.status(503).json({ error: 'Team invitations are currently disabled', code: 'INVITES_DISABLED' });
+  }
+
   const { name, email, role } = req.body;
-  if (!name || !email || !role) return res.status(400).json({ error: 'Name, email, and role are required' });
-  if (!['admin', 'customer_support'].includes(role)) return res.status(400).json({ error: 'Role must be admin or customer_support' });
+  if (!['admin', 'customer_support'].includes(role)) {
+    return res.status(400).json({ error: 'Role must be admin or customer_support' });
+  }
+  const normalizedEmail = invites.normalizeEmail(email);
 
-  const { data: existing } = await supabase
-    .from('users_table')
-    .select('id')
-    .eq('email', email.toLowerCase())
-    .maybeSingle();
+  try {
+    await invites.assertActorQuota(req.user?.id);
 
-  if (existing) return res.status(409).json({ error: 'User with this email already exists' });
+    // Invites are pending records only — the auth account and profile are
+    // created when the invitee accepts, so this must not collide with either.
+    const existingUser = await invites.findUserByEmail(normalizedEmail);
+    if (existingUser) {
+      return res.status(409).json({
+        error: existingUser.is_archived
+          ? 'A team member with this email already exists but is archived. Unarchive that account instead.'
+          : 'A team member with this email already exists',
+        code: 'USER_EXISTS',
+      });
+    }
 
-  const generatedPassword = crypto.randomUUID().slice(0, 12);
-  const nameParts = name.trim().split(' ');
-  const firstName = nameParts[0] || name;
-  const lastName = nameParts.slice(1).join(' ') || '';
+    const activeInvite = await invites.findActiveInvite(normalizedEmail);
+    if (activeInvite && !invites.isExpired(activeInvite)) {
+      return res.status(409).json({
+        error: 'An active invitation already exists for this email. Resend it instead.',
+        code: 'INVITE_EXISTS',
+        inviteId: activeInvite.invite_id,
+        expiresAt: activeInvite.expires_at,
+      });
+    }
+    if (activeInvite) await invites.expireStaleInvites();
 
-  const { data: authUser, error: authError } = await supabase.auth.admin.createUser({
-    email,
-    password: generatedPassword,
-    email_confirm: true,
-    user_metadata: { name, first_name: firstName, last_name: lastName, role },
-  });
-  if (authError) return res.status(500).json({ error: authError.message });
+    const { invite, rawToken } = await invites.insertInvite({
+      fullName: name,
+      email: normalizedEmail,
+      role,
+      invitedBy: req.user?.id,
+    });
 
-  const { data: profile } = await supabase
-    .from('users_table')
-    .select('*')
-    .eq('id', authUser.user.id)
-    .single();
+    const delivery = await deliverInvite({ invite, rawToken, inviterName: inviteActorName(req) });
+    const status = inviteResponse(invite, delivery);
 
-  res.status(201).json({ data: { ...profile, generatedPassword, name: getFullName(profile) }, message: 'User invited successfully' });
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'user_invited',
+      category: 'user',
+      description: `Invited ${normalizedEmail} as ${ROLE_LABELS[role] || role} (email ${delivery.delivered ? 'sent' : 'failed'})`,
+    });
+    if (!delivery.delivered) {
+      logAdminActivity({
+        actorId: req.user?.id,
+        activityType: 'invite_delivery_failed',
+        category: 'user',
+        description: `Invitation email to ${normalizedEmail} failed after ${delivery.attempts} attempt(s)`,
+      });
+    }
+
+    return res.status(201).json({
+      data: status,
+      message: delivery.delivered
+        ? 'Invitation email sent'
+        : 'Invitation created, but the email could not be delivered. Use resend.',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not create the invitation');
+  }
+}
+
+async function resendInvite(req, res) {
+  const { inviteId } = req.params;
+  if (!UUID_RE.test(inviteId || '')) {
+    return res.status(404).json({ error: 'Invitation not found' });
+  }
+
+  try {
+    const existing = await invites.getInviteById(inviteId);
+    if (!existing) return res.status(404).json({ error: 'Invitation not found' });
+    if (!invites.ACTIVE_STATUSES.includes(existing.status)) {
+      return res.status(409).json({ error: 'This invitation can no longer be resent', code: 'INVITE_INACTIVE' });
+    }
+
+    // Rotating the hash invalidates the previously emailed link immediately.
+    const { invite, rawToken } = await invites.rotateInviteToken(inviteId);
+    const delivery = await deliverInvite({ invite, rawToken, inviterName: inviteActorName(req) });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'invite_resent',
+      category: 'user',
+      description: `Resent invitation to ${invite.email} (email ${delivery.delivered ? 'sent' : 'failed'})`,
+    });
+
+    return res.json({
+      data: inviteResponse(invite, delivery),
+      message: delivery.delivered ? 'Invitation email resent' : 'Resend failed. Check the mail provider configuration.',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not resend the invitation');
+  }
+}
+
+async function revokeInvite(req, res) {
+  const { inviteId } = req.params;
+  if (!UUID_RE.test(inviteId || '')) {
+    return res.status(404).json({ error: 'Invitation not found' });
+  }
+
+  try {
+    const revoked = await invites.revokeInvite(inviteId);
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'invite_revoked',
+      category: 'user',
+      description: `Revoked pending invitation for ${revoked.email}`,
+    });
+
+    return res.json({
+      data: { inviteId: revoked.invite_id, email: revoked.email, status: 'revoked' },
+      message: 'Invitation revoked',
+    });
+  } catch (err) {
+    return handleInviteError(res, err, 'Could not revoke the invitation');
+  }
+}
+
+/**
+ * Admin-triggered reset link for an existing team member. Same token model as
+ * the self-service flow; the password is never set or shown here.
+ */
+async function sendPasswordResetEmail(req, res) {
+  const { id } = req.params;
+  if (!UUID_RE.test(id || '')) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  try {
+    const { data: member, error } = await supabase
+      .from('users_table')
+      .select('id, email, first_name, last_name, role, is_archived')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[PasswordReset] Member lookup failed:', error.code || 'ERROR');
+      return res.status(500).json({ error: 'Could not load that team member' });
+    }
+    if (!member) return res.status(404).json({ error: 'User not found' });
+    if (!['admin', 'customer_support'].includes(member.role)) {
+      return res.status(400).json({ error: 'Only team members can receive a reset link', code: 'NOT_TEAM_MEMBER' });
+    }
+    if (member.is_archived) {
+      return res.status(409).json({ error: 'This account is archived. Unarchive it first.', code: 'USER_ARCHIVED' });
+    }
+    if ((await passwordResets.countRecent(member.id)) >= config.passwordReset.maxPerHour) {
+      return res.status(429).json({
+        error: 'Too many reset emails for this account. Try again in an hour.',
+        code: 'RESET_QUOTA',
+      });
+    }
+
+    const created = await passwordResets.createReset({ userId: member.id, email: member.email, ip: req.ip });
+    if (!created) return res.status(500).json({ error: 'Could not create the reset link' });
+
+    const { subject, html, text } = renderPasswordResetEmail({
+      name: getFullName(member),
+      email: member.email,
+      resetUrl: passwordResets.buildResetUrl(created.rawToken),
+      expiresAt: created.reset.expires_at,
+      supportEmail: config.email.supportEmail,
+    });
+
+    const delivery = await sendEmail({ to: member.email, subject, html, text, template: 'password_reset' });
+
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: 'password_reset',
+      category: 'user',
+      relatedUserId: member.id,
+      description: `Sent a password reset link to ${member.email} (${delivery.delivered ? 'delivered' : `failed: ${delivery.errorCode}`})`,
+    });
+
+    return res.json({
+      data: {
+        email: member.email,
+        delivery: delivery.delivered ? 'sent' : 'failed',
+        expiresAt: created.reset.expires_at,
+      },
+      message: delivery.delivered
+        ? `Reset link emailed to ${member.email}`
+        : 'Reset link created, but the email could not be delivered.',
+    });
+  } catch (err) {
+    console.error('[PasswordReset] Send failed:', err?.code || 'ERROR');
+    return res.status(500).json({ error: 'Could not send the reset link' });
+  }
 }
 
 async function fetchEntitySkills(entityIds, entityType = 'profile') {
@@ -370,7 +907,7 @@ async function fetchEntitySkills(entityIds, entityType = 'profile') {
       fkColumn = 'job_post_id';
       break;
     case 'listing':
-      table = 'equipment_listing_skill';
+      table = 'equipment_listing_skills';
       fkColumn = 'listing_id';
       break;
     default:
@@ -403,7 +940,7 @@ async function listUserProposals(req, res) {
     .eq('user_id', id)
     .order('matched_at', { ascending: false });
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
 
   const clientIds = [...new Set((matches || []).map(m => m.job_post?.client_id).filter(Boolean))];
   const clientNameMap = {};
@@ -417,17 +954,37 @@ async function listUserProposals(req, res) {
     }
   }
 
+  // GP spent to submit a proposal is recorded in the points ledger as a
+  // negative `proposal_charge` row keyed by proposal_id. The legacy
+  // job_matches.connections column is null for newer matches, so derive the
+  // figure from the ledger and keep the column as a fallback.
+  const proposalIds = [...new Set((matches || []).map(m => m.proposal_id).filter(Boolean))];
+  const { data: charges } = proposalIds.length
+    ? await supabase
+      .from('gawa_points_transactions')
+      .select('proposal_id, amount')
+      .eq('transaction_type', 'proposal_charge')
+      .in('proposal_id', proposalIds)
+    : { data: [] };
+  const gpByProposal = {};
+  (charges || []).forEach(charge => {
+    if (!charge.proposal_id) return;
+    gpByProposal[charge.proposal_id] = (gpByProposal[charge.proposal_id] || 0) + Math.abs(charge.amount);
+  });
+
   const enriched = (matches || []).map(m => ({
     ...toCamelCase(m),
     jobPost: m.job_post ? {
       ...toCamelCase(m.job_post),
       clientName: clientNameMap[m.job_post.client_id] || m.job_post.client_id,
     } : null,
+    gpUsed: gpByProposal[m.proposal_id] ?? m.connections ?? null,
   }));
 
   res.json({ data: enriched });
 }
 
 module.exports = { listUsers, getUserById, updateUser, suspendUser, reinstateUser, deleteUser, inviteUser, flagUser,
-  listEscalatedUsers, escalateToDeletion, removeFromEscalation, adminResetPassword, listUserProposals,
+  archiveUser, unarchiveUser, adminResetPassword, listUserProposals, listTeamMembers,
+  resendInvite, revokeInvite, sendPasswordResetEmail,
 };

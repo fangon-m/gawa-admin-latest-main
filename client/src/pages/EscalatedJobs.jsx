@@ -5,7 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { list as listEscalated, resolve as resolveEscalated } from '../api/escalatedJobs';
-import { formatDate, formatDateTime, formatCurrency, timeAgo } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, timeAgo, userEntityPath, jobEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
@@ -64,7 +64,7 @@ export default function EscalatedJobs() {
     {
       key: 'clientName',
       label: 'Client',
-      render: (row) => row.clientInfo?.name || row.clientId?.slice(0, 8) || 'Unknown',
+      render: (row) => row.clientInfo?.name || formatEntityIdNumeric(row.clientId, 'USR-') || 'Unknown',
     },
     {
       key: 'talentName',
@@ -121,7 +121,7 @@ export default function EscalatedJobs() {
         'moderation_decision',
         `Escalated Job ${actionModal.action === 'approve' ? 'Approved' : 'Rejected'}`,
         `${actionModal.job.jobTitle} — ${adminNote.trim()}`,
-        `/jobs/${actionModal.job.id}`
+        jobEntityPath(actionModal.job.id)
       );
 
       // Close everything and refresh
@@ -426,7 +426,7 @@ export default function EscalatedJobs() {
                     </h3>
                     <button
                       className="btn btn-ghost btn-sm"
-                      onClick={() => navigate(`/users/${selectedJob.clientId}`)}
+                      onClick={() => navigate(userEntityPath(selectedJob.clientId))}
                     >
                       <ExternalLink size={13} /> Profile
                     </button>
@@ -479,7 +479,7 @@ export default function EscalatedJobs() {
                       <button
                         className="btn btn-ghost btn-sm"
                         onClick={() =>
-                          navigate(`/users/${selectedJob.talent.talentId}`)
+                          navigate(userEntityPath(selectedJob.talent.talentId))
                         }
                       >
                         <ExternalLink size={13} /> Profile

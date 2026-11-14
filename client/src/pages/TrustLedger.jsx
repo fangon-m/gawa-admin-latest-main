@@ -4,25 +4,25 @@ import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { get, post } from '../api/client';
-import { formatDate, formatDateTime, formatCurrency, formatNumber } from '../utils/helpers';
+import { formatDate, formatDateTime, formatCurrency, formatNumber, userEntityPath, formatEntityIdNumeric } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import StatCard from '../components/common/StatCard';
-import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, TrendingUp, PiggyBank, Lock, Clock } from 'lucide-react';
+import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, PiggyBank, Lock, Clock } from 'lucide-react';
 
 const typeFilters = [
   { key: 'type', label: 'Type', placeholder: 'All Types', options: [
+    { value: 'job_payment', label: 'Job Payment' },
+    { value: 'rental_payment', label: 'Rental Payment' },
     { value: 'deposit', label: 'Deposit' },
-    { value: 'payout', label: 'Payout' },
-    { value: 'refund', label: 'Refund' },
-    { value: 'fee', label: 'Fee' },
   ]},
   { key: 'status', label: 'Status', placeholder: 'All Statuses', options: [
-    { value: 'completed', label: 'Completed' },
     { value: 'pending', label: 'Pending' },
     { value: 'held', label: 'Held' },
+    { value: 'released', label: 'Released' },
+    { value: 'refunded', label: 'Refunded' },
   ]},
 ];
 
@@ -34,15 +34,20 @@ export default function TrustLedger() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
-  const { data: summary } = useApiData(() => get('/trust-ledger/summary'), [], {
-    defaultValue: {},
-    transform: (r) => r?.data ?? r ?? {},
+  const { data: ledgerData, loading, error } = useApiData(async () => {
+    const [summaryResponse, entriesResponse] = await Promise.all([
+      get('/trust-ledger/summary'),
+      get('/trust-ledger'),
+    ]);
+    return {
+      summary: summaryResponse?.data ?? summaryResponse ?? {},
+      entries: entriesResponse?.data ?? entriesResponse ?? [],
+    };
+  }, [], {
+    defaultValue: { summary: {}, entries: [] },
   });
-
-  const { data: entries, loading } = useApiData(() => get('/trust-ledger'), [], {
-    defaultValue: [],
-    transform: (r) => r?.data ?? r ?? [],
-  });
+  const summary = ledgerData.summary;
+  const entries = ledgerData.entries;
 
   const filtered = useMemo(() => {
     let data = [...entries];
@@ -109,17 +114,18 @@ export default function TrustLedger() {
   };
 
   const columns = [
-    { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{row.displayId || row.id?.slice(0, 8)}</span> },
+    { key: 'displayId', label: 'ID', render: (row) => <span className="text-xs text-muted font-mono">{formatEntityIdNumeric(row.id, 'TXN-')}</span> },
     { key: 'type', label: 'Type', render: (row) => (
-      <StatusBadge status={row.type} label={row.type === 'deposit' ? 'Deposit' : row.type === 'payout' ? 'Payout' : row.type === 'refund' ? 'Refund' : row.type} />
+      <StatusBadge status={row.type} label={row.isEquipmentEscrow ? 'Equipment Security Deposit' : row.type === 'deposit' ? 'Security Deposit' : row.type === 'job_payment' ? 'Job Payment' : 'Rental Payment'} />
     )},
     { key: 'userName', label: 'User' },
+    { key: 'ownerName', label: 'Owner', render: (row) => row.ownerName || '-' },
+    { key: 'paymentMethod', label: 'Payment Method', render: (row) => row.paymentMethod?.replaceAll('_', ' ') || '-' },
     { key: 'amount', label: 'Amount', render: (row) => (
       <span style={{ color: row.amount >= 0 ? 'var(--color-success)' : 'var(--color-error)', fontWeight: 600 }}>
         {row.amount >= 0 ? '+' : ''}{formatCurrency(row.amount)}
       </span>
     )},
-    { key: 'balance', label: 'Running Balance', render: (row) => formatCurrency(row.balance) },
     {
       key: 'status', label: 'Status', render: (row) => {
         const variant = row.status === 'held' ? 'warning' : row.status === 'pending' ? 'pending' : 'active';
@@ -137,11 +143,11 @@ export default function TrustLedger() {
     {
       key: 'releaseDate', label: 'Release Date', render: (row) => {
         if (row.releaseDate) return formatDate(row.releaseDate);
-        if (row.status === 'pending' || row.status === 'held') {
+        if (row.releaseTransactionId && (row.status === 'pending' || row.status === 'held')) {
           return (
             <button
               className="btn btn-sm btn-accent"
-              onClick={(e) => { e.stopPropagation(); handleRelease(row.id); }}
+              onClick={(e) => { e.stopPropagation(); handleRelease(row.releaseTransactionId); }}
               style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
             >
               Release
@@ -162,6 +168,7 @@ export default function TrustLedger() {
           <StatCard key={idx} {...card} />
         ))}
       </div>
+      {error && <div className="alert alert-error" role="alert">Unable to load trust ledger: {error}</div>}
 
       <div className="card">
         <div className="card-header">
@@ -178,7 +185,7 @@ export default function TrustLedger() {
             columns={columns}
             data={filtered}
             pageSize={10}
-            onRowClick={(row) => row.userId && navigate(`/users/${row.userId}`)}
+            onRowClick={(row) => row.userId && navigate(userEntityPath(row.userId))}
             emptyMessage={loading ? 'Loading...' : 'No trust ledger entries found.'}
           />
         </div>

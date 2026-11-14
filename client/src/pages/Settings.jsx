@@ -1,35 +1,39 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import * as usersApi from '../api/users';
-import * as settingsApi from '../api/settings';
-import * as incidentsApi from '../api/incidents';
+import * as activityLogApi from '../api/activityLog';
 import * as authApi from '../api/auth';
-import { formatDateTime } from '../utils/helpers';
+import { formatDate, formatDateTime, formatLabel } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
-import StatusBadge from '../components/common/StatusBadge';
 import DataTable from '../components/common/DataTable';
+import StatusBadge from '../components/common/StatusBadge';
+import ConfirmModal from '../components/common/ConfirmModal';
 
 export default function Settings() {
   const { user, refetchUser } = useAuth();
   const { can } = usePermissions(user?.role);
-  const { preferences, togglePreference } = useNotifications();
-  const [tab, setTab] = useState('profile');
-  const [twoFA, setTwoFA] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
+
+  useEffect(() => {
+    if (searchParams.get('tab')) {
+      setTab(searchParams.get('tab') || 'profile');
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (nextTab) => {
+    setTab(nextTab);
+    setSearchParams({ tab: nextTab });
+  };
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({ name: '', phone: '', location: '' });
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
-
-  // Service area state
-  const [serviceArea, setServiceArea] = useState('');
-  const [serviceAreaLoading, setServiceAreaLoading] = useState(true);
-  const [serviceAreaSaving, setServiceAreaSaving] = useState(false);
-  const [serviceAreaMsg, setServiceAreaMsg] = useState('');
 
   // Initialize profile form when user loads
   useEffect(() => {
@@ -37,26 +41,6 @@ export default function Settings() {
       setProfileForm({ name: user.name || '', phone: user.phone || '', location: user.location || '' });
     }
   }, [user]);
-
-  // Load service area from database on mount
-  useEffect(() => {
-    let mounted = true;
-    setServiceAreaLoading(true);
-    settingsApi.getByKey('service_area')
-      .then((res) => {
-        if (mounted) {
-          setServiceArea(res?.data?.value || 'Bulacan, Metro Manila, Pampanga, Nueva Ecija, Rizal, Laguna, Cavite');
-          setServiceAreaLoading(false);
-        }
-      })
-      .catch(() => {
-        if (mounted) {
-          setServiceArea('Bulacan, Metro Manila, Pampanga, Nueva Ecija, Rizal, Laguna, Cavite');
-          setServiceAreaLoading(false);
-        }
-      });
-    return () => { mounted = false; };
-  }, []);
 
   // Password reset state
   const [pwForm, setPwForm] = useState({ current: '', newPw: '', confirm: '' });
@@ -66,9 +50,58 @@ export default function Settings() {
   const [inviteForm, setInviteForm] = useState({ name: '', email: '', role: 'admin' });
   const [inviteMsg, setInviteMsg] = useState('');
 
-  const { data: incidents } = useApiData(() => incidentsApi.list({ limit: 50 }), [], {
+  // Admin activity (Settings → Admin Activity): filterable, chronological, paginated.
+  const canViewAdminActivity = can('manageSettings');
+  const [activityLogs, setActivityLogs] = useState([]);
+  const [activityPagination, setActivityPagination] = useState({ total: 0, page: 1, limit: 25, totalPages: 0 });
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState('');
+  const [activityFilters, setActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
+  const [appliedActivityFilters, setAppliedActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
+  const [activityPage, setActivityPage] = useState(1);
+
+  const fetchActivityLogs = React.useCallback(async (filters, page) => {
+    if (!canViewAdminActivity) return;
+    setActivityLoading(true);
+    setActivityError('');
+    try {
+      const params = {
+        scope: 'admin',
+        order: 'asc',
+        page,
+        limit: 25,
+      };
+      if (filters.agentId) params.userId = filters.agentId;
+      if (filters.startDate) params.startDate = filters.startDate;
+      if (filters.endDate) params.endDate = filters.endDate;
+      const res = await activityLogApi.list(params);
+      setActivityLogs(res?.data ?? []);
+      setActivityPagination(res?.pagination ?? { total: 0, page, limit: 25, totalPages: 0 });
+    } catch (err) {
+      setActivityError(err?.error || err?.message || 'Failed to load admin activity');
+      setActivityLogs([]);
+      setActivityPagination({ total: 0, page, limit: 25, totalPages: 0 });
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [canViewAdminActivity]);
+
+  useEffect(() => {
+    if (tab === 'activity' && canViewAdminActivity) {
+      fetchActivityLogs(appliedActivityFilters, activityPage);
+    }
+  }, [tab, canViewAdminActivity, appliedActivityFilters, activityPage, fetchActivityLogs]);
+
+  // Team members (admin-managed staff accounts) and pending invitations
+  const [inviteResult, setInviteResult] = useState(null);
+  const [busyInviteId, setBusyInviteId] = useState(null);
+  const [resettingMemberId, setResettingMemberId] = useState(null);
+  const [removingMember, setRemovingMember] = useState(null);
+
+  const { data: teamMembers, refetch: refetchTeam } = useApiData(() => usersApi.listTeam(), [], {
     defaultValue: [],
     transform: (r) => r?.data ?? r ?? [],
+    immediate: can('manageSettings'),
   });
 
   const tabs = [
@@ -76,7 +109,7 @@ export default function Settings() {
     { key: 'security', label: 'Password & Security' },
     { key: 'sessions', label: 'Active Sessions' },
     { key: 'activity', label: 'Admin Activity' },
-    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }, { key: 'service-area', label: 'Service Area' }, { key: 'notifications', label: 'Notifications' }] : []),
+    ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }] : []),
   ];
 
   const [activeSessions, setActiveSessions] = useState([
@@ -114,23 +147,99 @@ export default function Settings() {
       return;
     }
     try {
-      await usersApi.invite({
+      const res = await usersApi.invite({
         name: inviteForm.name,
         email: inviteForm.email,
         role: inviteForm.role,
       });
-      setInviteMsg(`Invitation sent to ${inviteForm.email}`);
+      const created = res?.data ?? res ?? {};
+      setInviteResult({
+        email: created.email || inviteForm.email,
+        delivery: created.delivery || 'sent',
+        expiresAt: created.expiresAt || null,
+      });
+      setInviteMsg(
+        created.delivery === 'failed'
+          ? `Invitation saved for ${created.email || inviteForm.email}, but the email could not be sent. Use Resend.`
+          : `Invitation emailed to ${created.email || inviteForm.email}`
+      );
       setInviteForm({ name: '', email: '', role: 'admin' });
-    } catch {
-      setInviteMsg('Failed to send invitation');
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to send invitation');
     }
-    setTimeout(() => setInviteMsg(''), 5000);
+    setTimeout(() => setInviteMsg(''), 6000);
+  };
+
+  const handleResendInvite = async (row) => {
+    setBusyInviteId(row.inviteId);
+    try {
+      const res = await usersApi.resendInvite(row.inviteId);
+      const result = res?.data ?? res ?? {};
+      setInviteMsg(
+        result.delivery === 'failed'
+          ? `Could not resend the invitation to ${row.email}. Check the mail provider.`
+          : `Invitation resent to ${row.email}`
+      );
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to resend invitation');
+    } finally {
+      setBusyInviteId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const handleRevokeInvite = async (row) => {
+    setBusyInviteId(row.inviteId);
+    try {
+      await usersApi.revokeInvite(row.inviteId);
+      setInviteMsg(`Invitation for ${row.email} revoked`);
+      setInviteResult(null);
+      refetchTeam();
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to revoke invitation');
+    } finally {
+      setBusyInviteId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const handleSendReset = async (row) => {
+    setResettingMemberId(row.id);
+    try {
+      const res = await usersApi.sendPasswordReset(row.id);
+      const result = res?.data ?? res ?? {};
+      setInviteMsg(
+        result.delivery === 'failed'
+          ? `Reset link created for ${row.email}, but the email could not be delivered.`
+          : `Password reset link emailed to ${row.email}`
+      );
+    } catch (err) {
+      setInviteMsg(err?.error || 'Failed to send the reset link');
+    } finally {
+      setResettingMemberId(null);
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
+  };
+
+  const handleRemoveMember = async () => {
+    if (!removingMember) return;
+    try {
+      await usersApi.remove(removingMember.id);
+      setRemovingMember(null);
+      refetchTeam();
+    } catch (err) {
+      setRemovingMember(null);
+      setInviteMsg(err?.error || 'Failed to remove team member');
+      setTimeout(() => setInviteMsg(''), 6000);
+    }
   };
 
   return (
     <div>
       <Header title="Settings" />
-      <Tabs tabs={tabs} activeTab={tab} onChange={setTab} />
+      <Tabs tabs={tabs} activeTab={tab} onChange={handleTabChange} />
       <div className="tab-content">
         {tab === 'profile' && (
           <div className="settings-card">
@@ -253,19 +362,6 @@ export default function Settings() {
               )}
               <button type="submit" className="btn btn-primary">Update Password</button>
             </form>
-
-            <hr style={{ border: 'none', borderTop: '1px solid var(--color-border)', margin: '1.5rem 0' }} />
-
-            <div className="settings-row">
-              <div>
-                <div style={{ fontWeight: 500 }}>Two-Factor Authentication</div>
-                <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>Add an extra layer of security to your account</div>
-              </div>
-              <label className="toggle">
-                <input type="checkbox" checked={twoFA} onChange={() => setTwoFA(!twoFA)} />
-                <span className="toggle-slider" />
-              </label>
-            </div>
           </div>
         )}
 
@@ -310,20 +406,150 @@ export default function Settings() {
           <div className="settings-card">
             <div className="settings-card-title">Admin Activity Log</div>
             <div className="card-body" style={{ padding: 0 }}>
-              <DataTable
-                columns={[
-                  { key: 'id', label: 'ID' },
-                  { key: 'agentName', label: 'Agent' },
-                  { key: 'action', label: 'Action', render: (row) => <StatusBadge status={row.action} /> },
-                  { key: 'module', label: 'Module', render: (row) => <StatusBadge status={row.module} /> },
-                  { key: 'description', label: 'Description' },
-                  { key: 'createdAt', label: 'Timestamp', render: (row) => formatDateTime(row.createdAt) },
-                ]}
-                data={incidents}
-                pageSize={15}
-                emptyMessage="No activity logs."
-                sortable={false}
-              />
+              {canViewAdminActivity ? (
+                <>
+                  <div style={{ padding: '1rem', borderBottom: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                      View a chronological history of actions performed by a staff agent. Filter by agent account and date range to review incident and moderation activity.
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      <div className="form-group" style={{ minWidth: 240, flex: '1 1 240px', margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-agent">Agent account</label>
+                        <select
+                          id="activity-agent"
+                          className="form-select"
+                          value={activityFilters.agentId}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, agentId: e.target.value }))}
+                        >
+                          <option value="">All agents</option>
+                          {(teamMembers || [])
+                            .filter((m) => m && m.kind !== 'invite' && m.id)
+                            .sort((a, b) => {
+                              const ra = a.role === 'customer_support' ? 0 : 1;
+                              const rb = b.role === 'customer_support' ? 0 : 1;
+                              if (ra !== rb) return ra - rb;
+                              return String(a.name || a.email || '').localeCompare(String(b.name || b.email || ''));
+                            })
+                            .map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {(m.name || m.email || 'Unknown')} — {formatLabel(m.role)}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-start">From</label>
+                        <input
+                          id="activity-start"
+                          className="form-input"
+                          type="date"
+                          value={activityFilters.startDate}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, startDate: e.target.value }))}
+                        />
+                      </div>
+                      <div className="form-group" style={{ margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-end">To</label>
+                        <input
+                          id="activity-end"
+                          className="form-input"
+                          type="date"
+                          value={activityFilters.endDate}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, endDate: e.target.value }))}
+                        />
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => { setAppliedActivityFilters({ ...activityFilters }); setActivityPage(1); }}
+                        >
+                          Apply
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          onClick={() => {
+                            const cleared = { agentId: '', startDate: '', endDate: '' };
+                            setActivityFilters(cleared);
+                            setAppliedActivityFilters(cleared);
+                            setActivityPage(1);
+                          }}
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    {(appliedActivityFilters.agentId || appliedActivityFilters.startDate || appliedActivityFilters.endDate) && (
+                      <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                        Showing {activityPagination.total || 0} action{(activityPagination.total || 0) === 1 ? '' : 's'}
+                        {appliedActivityFilters.agentId ? (() => {
+                          const agent = (teamMembers || []).find((m) => m.id === appliedActivityFilters.agentId);
+                          return agent ? ` for ${agent.name || agent.email}` : '';
+                        })() : ''}
+                        {appliedActivityFilters.startDate ? ` from ${appliedActivityFilters.startDate}` : ''}
+                        {appliedActivityFilters.endDate ? ` to ${appliedActivityFilters.endDate}` : ''}
+                        {' '}in chronological order.
+                      </div>
+                    )}
+                  </div>
+
+                  {activityError && <div className="alert alert-error" role="alert" style={{ margin: '0.75rem 1rem 0' }}>{activityError}</div>}
+
+                  <DataTable
+                    columns={[
+                      { key: 'agentName', label: 'Agent' },
+                      { key: 'activityTypeLabel', label: 'Activity Type' },
+                      { key: 'category', label: 'Category' },
+                      {
+                        key: 'description',
+                        label: 'Description',
+                        render: (row) => {
+                          const name = row.relatedUserName;
+                          const id = row.relatedUserId;
+                          if (!name || !id || typeof row.description !== 'string') return row.description;
+                          return row.description.split(id).join(name);
+                        },
+                      },
+                      { key: 'createdAt', label: 'Timestamp', render: (row) => formatDateTime(row.createdAt) },
+                    ]}
+                    data={activityLogs}
+                    loading={activityLoading}
+                    pageSize={Math.max(activityLogs.length, 1)}
+                    emptyMessage="No activity logs found for the selected filters."
+                    sortable={false}
+                  />
+
+                  {activityPagination.totalPages > 1 && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', borderTop: '1px solid var(--color-border)', gap: '0.75rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
+                        Page {activityPagination.page} of {activityPagination.totalPages} · {activityPagination.total} total action{activityPagination.total === 1 ? '' : 's'}
+                      </span>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={activityLoading || activityPage <= 1}
+                          onClick={() => setActivityPage((p) => Math.max(1, p - 1))}
+                        >
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={activityLoading || activityPage >= activityPagination.totalPages}
+                          onClick={() => setActivityPage((p) => Math.min(activityPagination.totalPages, p + 1))}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="empty-state" style={{ padding: '1.5rem' }}>
+                  <div className="empty-state-text">Admin activity history is available to administrators.</div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -331,15 +557,84 @@ export default function Settings() {
         {tab === 'team' && can('manageSettings') && (
           <div className="settings-card">
             <div className="settings-card-title">Team Members</div>
-            <div style={{ marginBottom: 24 }}>
-              {/* Team members list will show real data when the API supports it */}
-              <div style={{ fontSize: 14, color: 'var(--color-text-muted)' }}>
-                Team member management coming soon.
-              </div>
-            </div>
+            <DataTable
+              columns={[
+                { key: 'name', label: 'Name', render: (row) => row.name || '—' },
+                { key: 'email', label: 'Email' },
+                { key: 'role', label: 'Role', render: (row) => formatLabel(row.role) },
+                { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
+                { key: 'createdAt', label: 'Added', render: (row) => formatDate(row.createdAt) },
+                {
+                  key: 'actions',
+                  label: '',
+                  render: (row) => {
+                    if (row.isSelf) {
+                      return <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>You</span>;
+                    }
+                    if (row.kind === 'invite') {
+                      return (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="btn btn-outline btn-sm"
+                            disabled={busyInviteId === row.inviteId}
+                            onClick={() => handleResendInvite(row)}
+                          >
+                            {busyInviteId === row.inviteId ? 'Sending…' : 'Resend'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-danger btn-sm"
+                            disabled={busyInviteId === row.inviteId}
+                            onClick={() => handleRevokeInvite(row)}
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm"
+                          disabled={resettingMemberId === row.id}
+                          onClick={() => handleSendReset(row)}
+                          title="Email a one-time password reset link"
+                        >
+                          {resettingMemberId === row.id ? 'Sending…' : 'Reset password'}
+                        </button>
+                        <button type="button" className="btn btn-danger btn-sm" onClick={() => setRemovingMember(row)}>Remove</button>
+                      </div>
+                    );
+                  },
+                },
+              ]}
+              data={teamMembers}
+              pageSize={10}
+              emptyMessage="No team members."
+              sortable={false}
+            />
 
-            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 20 }}>
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 20, marginTop: 20 }}>
               <div style={{ fontWeight: 600, marginBottom: 16, color: 'var(--color-text)' }}>Invite New Team Member</div>
+
+              {inviteResult && (
+                <div style={{ background: 'var(--color-bg-subtle, #f8f9fa)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-md, 8px)', padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, marginBottom: 6 }}>
+                    {inviteResult.delivery === 'failed'
+                      ? <>Invitation saved for <strong>{inviteResult.email}</strong>, but the email could not be delivered.</>
+                      : <>Invitation emailed to <strong>{inviteResult.email}</strong>. No password is sent — they choose one from the link.</>}
+                  </div>
+                  {inviteResult.expiresAt && (
+                    <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 10 }}>
+                      Link expires {formatDateTime(inviteResult.expiresAt)}.
+                    </div>
+                  )}
+                  <button type="button" className="btn btn-outline btn-sm" style={{ marginTop: 6 }} onClick={() => setInviteResult(null)}>Dismiss</button>
+                </div>
+              )}
+
               <form onSubmit={handleInvite}>
                 <div className="form-row">
                   <div className="form-group">
@@ -376,80 +671,26 @@ export default function Settings() {
                   </select>
                 </div>
                 {inviteMsg && (
-                  <div style={{ fontSize: 13, color: inviteMsg.includes('success') ? 'var(--color-success)' : 'var(--color-warning)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, color: /fail|could not|error/i.test(inviteMsg) ? 'var(--color-error)' : 'var(--color-success)', marginBottom: 12 }}>
                     {inviteMsg}
                   </div>
                 )}
-                <button type="submit" className="btn btn-primary">Send Invitation</button>
+                <button type="submit" className="btn btn-primary">Create Account</button>
               </form>
             </div>
           </div>
         )}
-
-        {tab === 'service-area' && can('manageSettings') && (
-          <div className="settings-card">
-            <div className="settings-card-title">Service Area Configuration</div>
-            <p style={{ fontSize: 14, color: 'var(--color-text-muted)', marginBottom: '1rem' }}>Configure the geographic areas where GAWA operates.</p>
-            {serviceAreaMsg && (
-              <div style={{ fontSize: 13, color: serviceAreaMsg.includes('saved') ? 'var(--color-success)' : 'var(--color-error)', marginBottom: 12 }}>
-                {serviceAreaMsg}
-              </div>
-            )}
-            <div className="form-group">
-              <label className="form-label">Covered Provinces</label>
-              <textarea
-                className="form-textarea"
-                rows={4}
-                value={serviceArea}
-                onChange={(e) => setServiceArea(e.target.value)}
-                placeholder="e.g. Bulacan, Metro Manila, Pampanga, ..."
-              />
-            </div>
-            <button
-              className="btn btn-primary"
-              disabled={serviceAreaSaving || serviceAreaLoading}
-              onClick={async () => {
-                setServiceAreaSaving(true);
-                setServiceAreaMsg('');
-                try {
-                  await settingsApi.upsert('service_area', serviceArea);
-                  setServiceAreaMsg('Configuration saved successfully');
-                } catch {
-                  setServiceAreaMsg('Failed to save configuration');
-                } finally {
-                  setServiceAreaSaving(false);
-                  setTimeout(() => setServiceAreaMsg(''), 4000);
-                }
-              }}
-            >
-              {serviceAreaSaving ? 'Saving...' : 'Save Configuration'}
-            </button>
-          </div>
-        )}
-
-        {tab === 'notifications' && can('manageSettings') && (
-          <div className="settings-card">
-            <div className="settings-card-title">Notification Preferences</div>
-            <p style={{ fontSize: 14, color: 'var(--color-text-muted)', marginBottom: '1rem' }}>Choose which types of notifications you'd like to receive.</p>
-            {[
-              { key: 'user_registrations', label: 'New user registrations' },
-              { key: 'verification_requests', label: 'Verification requests' },
-              { key: 'dispute_filings', label: 'Dispute filings' },
-              { key: 'appeal_filings', label: 'Appeal filings' },
-              { key: 'flagged_content', label: 'Flagged content' },
-              { key: 'new_reports', label: 'New reports' },
-            ].map(({ key, label }) => (
-              <div key={key} className="settings-row">
-                <span style={{ fontSize: 14 }}>{label}</span>
-                <label className="toggle">
-                  <input type="checkbox" checked={preferences[key]} onChange={() => togglePreference(key)} />
-                  <span className="toggle-slider" />
-                </label>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
+
+      <ConfirmModal
+        open={!!removingMember}
+        title="Remove Team Member"
+        message={removingMember ? `Permanently delete ${removingMember.name || removingMember.email}? They will lose access immediately and this cannot be undone.` : ''}
+        confirmLabel="Remove"
+        variant="danger"
+        onConfirm={handleRemoveMember}
+        onCancel={() => setRemovingMember(null)}
+      />
     </div>
   );
 }

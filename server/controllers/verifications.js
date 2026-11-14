@@ -1,5 +1,9 @@
 const supabase = require('../db/supabase');
-const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { toCamelCase, getFullName, calculatePagination, sendError } = require('../utilities/helpers');
+const PROFILE_FIELDS = [
+  'email', 'phone', 'first_name', 'middle_name', 'last_name', 'birth_date',
+  'region', 'province', 'municipality', 'barangay', 'complete_address',
+];
 
 async function getSignedImageUrl(value) {
   if (!value) return value;
@@ -45,7 +49,7 @@ async function enrichVerifications(verifications) {
         email: v.email,
       }) || v.user_id,
       userRole: userMap[v.user_id]?.role || null,
-      reviewerName: userMap[v.reviewed_by]?.fullName || null,
+      reviewerName: userMap[v.reviewed_by]?.fullName || (v.status !== 'pending' && !v.reviewed_by ? 'GAWA Admin' : null),
     };
 
     for (const field of ['frontImageUrl', 'backImageUrl', 'selfieImageUrl']) {
@@ -57,8 +61,8 @@ async function enrichVerifications(verifications) {
 }
 
 async function listVerifications(req, res) {
-  const { page = 1, limit = 20, status, type } = req.query;
-  const offset = (Math.max(1, +page) - 1) * +limit;
+  const { page, limit, offset } = calculatePagination(req.query.page, req.query.limit);
+  const { status, type } = req.query;
 
   let query = supabase.from('id_verifications').select('*', { count: 'exact' });
   if (status) query = query.eq('status', status);
@@ -68,7 +72,7 @@ async function listVerifications(req, res) {
     .order('submitted_at', { ascending: false })
     .range(offset, offset + +limit - 1);
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) return sendError(res, error, { status: 500 });
   res.json({
     data: await enrichVerifications(data || []),
     pagination: { total: count, page: +page, limit: +limit, totalPages: Math.ceil(count / +limit) },
@@ -89,41 +93,88 @@ async function getVerificationById(req, res) {
 
 async function approveVerification(req, res) {
   const { remarks } = req.body;
-
-  const { data, error } = await supabase
-    .from('id_verifications')
-    .update({
-      status: 'approved',
-      reviewed_by: req.user?.id || null,
-      rejection_reason: remarks || '',
-    })
-    .eq('verification_id', req.params.id)
-    .select()
-    .single();
-
-  if (error || !data) return res.status(404).json({ error: 'Verification not found' });
-  const enriched = await enrichVerifications([data]);
-  res.json({ data: enriched[0], message: 'Verification approved' });
+  return reviewVerification(req, res, {
+    status: 'approved',
+    isVerified: true,
+    remarks: remarks || null,
+    message: 'Verification approved',
+  });
 }
 
 async function rejectVerification(req, res) {
   const { remarks } = req.body;
-  if (!remarks) return res.status(400).json({ error: 'Remarks are required when rejecting' });
+
+  return reviewVerification(req, res, {
+    status: 'rejected',
+    isVerified: false,
+    remarks,
+    message: 'Verification rejected',
+  });
+}
+
+async function reviewVerification(req, res, { status, isVerified, remarks, message }) {
+  const reviewerId = req.user?.id || null;
+
+  const { data: verification, error: verificationError } = await supabase
+    .from('id_verifications')
+    .select(`verification_id, user_id, ${PROFILE_FIELDS.join(', ')}`)
+    .eq('verification_id', req.params.id)
+    .single();
+
+  if (verificationError || !verification) return res.status(404).json({ error: 'Verification not found' });
+
+  const { data: user, error: userLookupError } = await supabase
+    .from('users_table')
+    .select(`is_verified, ${PROFILE_FIELDS.join(', ')}`)
+    .eq('id', verification.user_id)
+    .single();
+
+  if (userLookupError || !user) return res.status(404).json({ error: 'User not found' });
+
+  const profileUpdates = {};
+  if (isVerified) {
+    PROFILE_FIELDS.forEach(field => {
+      const currentValue = user[field];
+      const verificationValue = verification[field];
+      const isEmpty = currentValue == null || (typeof currentValue === 'string' && !currentValue.trim());
+      const hasVerificationValue = verificationValue != null
+        && (typeof verificationValue !== 'string' || verificationValue.trim());
+
+      if (isEmpty && hasVerificationValue) profileUpdates[field] = verificationValue;
+    });
+  }
+
+  const { error: userUpdateError } = await supabase
+    .from('users_table')
+    .update({ is_verified: isVerified, ...profileUpdates })
+    .eq('id', verification.user_id);
+
+  if (userUpdateError) return sendError(res, userUpdateError, { status: 500 });
 
   const { data, error } = await supabase
     .from('id_verifications')
     .update({
-      status: 'rejected',
-      reviewed_by: req.user?.id || null,
+      status,
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: reviewerId,
       rejection_reason: remarks,
     })
     .eq('verification_id', req.params.id)
     .select()
     .single();
 
-  if (error || !data) return res.status(404).json({ error: 'Verification not found' });
+  if (error || !data) {
+    const rollback = { is_verified: user.is_verified };
+    Object.keys(profileUpdates).forEach(field => { rollback[field] = user[field]; });
+    await supabase
+      .from('users_table')
+      .update(rollback)
+      .eq('id', verification.user_id);
+    return res.status(error ? 500 : 404).json({ error: error?.message || 'Verification not found' });
+  }
+
   const enriched = await enrichVerifications([data]);
-  res.json({ data: enriched[0], message: 'Verification rejected' });
+  res.json({ data: enriched[0], message });
 }
 
 module.exports = { listVerifications, getVerificationById, approveVerification, rejectVerification };

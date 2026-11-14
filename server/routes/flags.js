@@ -7,6 +7,8 @@ const { authorize, ROLES } = require('../middleware/roles');
 router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listFlags);
 router.get('/counts', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.getFlaggedContentCounts);
 router.post('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.createFlag);
+router.post('/:id/resolve', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.resolveFlag);
+router.post('/:id/dismiss', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.dismissFlag);
 router.delete('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.removeFlag);
 
 module.exports = router;

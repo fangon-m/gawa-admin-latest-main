@@ -8,8 +8,8 @@ const pageNames = {
   '/jobs': 'Jobs',
   '/listings': 'Listings',
   '/transactions': 'Transactions',
-  '/oversight': 'Oversight',
-  '/galaw-points': 'Galaw Points',
+  '/oversight': 'Incident Reports',
+  '/gawa-points': 'Gawa Points',
   '/messages': 'Messages',
   '/settings': 'Settings',
   '/support': 'Support Dashboard',
@@ -21,8 +21,6 @@ const detailLabels = {
   '/listings': 'Listing Detail',
   '/transactions': 'Transaction Detail',
   '/rentals': 'Rental Detail',
-  '/disputes': 'Dispute Detail',
-  '/appeals': 'Appeal Detail',
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

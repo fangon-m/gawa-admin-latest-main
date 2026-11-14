@@ -1,24 +1,52 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const ctrl = require('../controllers/users');
+const config = require('../config');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
 const { validate, schemas } = require('../middleware/validate');
+const { resolveEntityParam } = require('../middleware/resolveEntity');
 
-// Escalation workflow — MUST be before /:id routes to avoid param collision
-router.get('/escalation/list', authenticate, authorize(ROLES.ADMIN), ctrl.listEscalatedUsers);
+// Invitation emails are the most expensive and most abusable action on this
+// router (deliverability, provider quota, inbox spam). The per-actor daily
+// quota lives in the controller because it must survive restarts.
+const inviteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: config.invites.rateLimitPerIp,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many invitation requests, please try again later' },
+});
 
-router.get('/', authenticate, ctrl.listUsers);
-router.get('/:id', authenticate, ctrl.getUserById);
-router.get('/:id/proposals', authenticate, ctrl.listUserProposals);
-router.post('/invite', authenticate, authorize(ROLES.ADMIN), validate(schemas.inviteUser), ctrl.inviteUser);
-router.patch('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.updateUser);
-router.post('/:id/suspend', authenticate, authorize(ROLES.ADMIN), ctrl.suspendUser);
-router.post('/:id/reinstate', authenticate, authorize(ROLES.ADMIN), ctrl.reinstateUser);
-router.post('/:id/flag', authenticate, authorize(ROLES.ADMIN), ctrl.flagUser);
-router.post('/:id/reset-password', authenticate, authorize(ROLES.ADMIN), validate(schemas.adminResetPassword), ctrl.adminResetPassword);
-router.post('/:id/escalate', authenticate, authorize(ROLES.ADMIN), ctrl.escalateToDeletion);
-router.post('/:id/remove-from-escalation', authenticate, authorize(ROLES.ADMIN), ctrl.removeFromEscalation);
-router.delete('/:id', authenticate, authorize(ROLES.ADMIN), ctrl.deleteUser);
+// Temporary passwords are keyed per target account so one admin cannot cycle a
+// member's credentials (or spam their inbox) across many IPs.
+const tempPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: config.tempPassword.maxPerHour,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.params.id,
+  message: { error: 'Too many temporary passwords issued for this account. Try again in an hour.' },
+});
+
+// Three-segment paths, so they cannot be shadowed by the /:id routes below.
+router.post('/invites/:inviteId/resend', authenticate, authorize(ROLES.ADMIN), inviteLimiter, ctrl.resendInvite);
+router.post('/invites/:inviteId/revoke', authenticate, authorize(ROLES.ADMIN), ctrl.revokeInvite);
+
+router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listUsers);
+router.get('/team', authenticate, authorize(ROLES.ADMIN), ctrl.listTeamMembers);
+router.get('/:id', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), resolveEntityParam('user'), ctrl.getUserById);
+router.get('/:id/proposals', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), resolveEntityParam('user'), ctrl.listUserProposals);
+router.post('/invite', authenticate, authorize(ROLES.ADMIN), inviteLimiter, validate(schemas.inviteUser), ctrl.inviteUser);
+router.patch('/:id', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.updateUser);
+router.post('/:id/suspend', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.suspendUser);
+router.post('/:id/reinstate', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.reinstateUser);
+router.post('/:id/archive', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), validate(schemas.archiveUser), ctrl.archiveUser);
+router.post('/:id/unarchive', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.unarchiveUser);
+router.post('/:id/flag', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.flagUser);
+router.post('/:id/reset-password', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), tempPasswordLimiter, ctrl.adminResetPassword);
+router.post('/:id/send-password-reset', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.sendPasswordResetEmail);
+router.delete('/:id', authenticate, authorize(ROLES.ADMIN), resolveEntityParam('user'), ctrl.deleteUser);
 
 module.exports = router;
