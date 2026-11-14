@@ -22,23 +22,5 @@ export default defineConfig({
     // security fix (for example one that still shipped default credentials)
     // stays on disk and keeps being served.
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('react-dom') || id.includes('react/') || id.includes('react-router')) {
-              return 'vendor-react';
-            }
-            if (id.includes('recharts') || id.includes('d3-')) {
-              return 'vendor-charts';
-            }
-            if (id.includes('lucide-react')) {
-              return 'vendor-icons';
-            }
-            return 'vendor';
-          }
-        },
-      },
-    },
   },
 });
