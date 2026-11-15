@@ -1,4 +1,5 @@
 const supabase = require('../db/supabase');
+const { isAdmin } = require('../utilities/permissions');
 const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
 
 const ACTIVITY_TYPE_MAP = {
@@ -45,6 +46,8 @@ function activityTypeLabel(type) {
 // Activity types written by the admin portal (server/utilities/activityLogger.js).
 // public.activity_log also stores consumer activity from the mobile app, so the
 // admin portal's Activity Log view is scoped to these types via ?scope=admin.
+// `points_topped_up` is intentionally excluded: it is a wallet event, not a
+// moderation/administrative action, and it cluttered the admin activity view.
 const ADMIN_ACTIVITY_TYPES = [
   'user_suspended',
   'user_reinstated',
@@ -62,7 +65,6 @@ const ADMIN_ACTIVITY_TYPES = [
   'invite_revoked',
   'invite_delivery_failed',
   'points_deducted',
-  'points_topped_up',
   'content_flagged',
 ];
 
@@ -83,6 +85,7 @@ async function listActivityLog(req, res) {
     activityType,
     category,
     scope,
+    actorRole,
     startDate,
     endDate,
     limit,
@@ -90,23 +93,49 @@ async function listActivityLog(req, res) {
     order,
   } = req.query;
 
+  const p = Math.max(1, parseInt(page || '1', 10));
+  const l = Math.min(100, Math.max(1, parseInt(limit || '50', 10)));
+
+  // Admins can audit any staff agent. Support accounts may only read their own
+  // action history, so their user filter is forced to the authenticated caller.
+  const adminViewer = isAdmin(req);
+  const effectiveUserId = adminViewer ? userId : req.user?.id;
+
   let query = supabase
     .from('activity_log')
     .select('*, users_table!activity_log_user_id_fkey(first_name, last_name, email), target:users_table!activity_log_related_user_id_fkey(first_name, last_name, email)', { count: 'exact' });
 
-  if (userId) query = query.eq('user_id', userId);
+  if (effectiveUserId) query = query.eq('user_id', effectiveUserId);
   if (relatedUserId) query = query.eq('related_user_id', relatedUserId);
   if (activityType) query = query.eq('activity_type', activityType);
   if (category) query = query.eq('category', category);
-  if (scope === 'admin') query = query.in('activity_type', ADMIN_ACTIVITY_TYPES);
+  // Non-admins always get the staff action types, never the consumer feed.
+  if (scope === 'admin' || !adminViewer) query = query.in('activity_type', ADMIN_ACTIVITY_TYPES);
+
+  // Narrow to the staff role that performed the action (admin support auditing).
+  // A concrete agent selection already implies the role, so it wins.
+  if (adminViewer && !effectiveUserId && actorRole && actorRole !== 'all') {
+    const { data: actors, error: actorError } = await supabase
+      .from('users_table')
+      .select('id')
+      .eq('role', actorRole);
+    if (actorError) return sendError(res, actorError, { status: 500 });
+
+    const actorIds = (actors || []).map((actor) => actor.id);
+    if (actorIds.length === 0) {
+      return res.json({
+        data: [],
+        pagination: { total: 0, page: p, limit: l, totalPages: 0 },
+      });
+    }
+    query = query.in('user_id', actorIds);
+  }
 
   const startBound = normalizeDateBound(startDate, false);
   const endBound = normalizeDateBound(endDate, true);
   if (startBound) query = query.gte('created_at', startBound);
   if (endBound) query = query.lte('created_at', endBound);
 
-  const p = Math.max(1, parseInt(page || '1', 10));
-  const l = Math.min(100, Math.max(1, parseInt(limit || '50', 10)));
   const ascending = order === 'asc';
   query = query.range((p - 1) * l, p * l - 1).order('created_at', { ascending });
 

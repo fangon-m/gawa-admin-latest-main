@@ -155,6 +155,7 @@ const schemas = {
     activityType: z.string().optional(),
     category: z.string().optional(),
     scope: z.enum(['all', 'admin']).optional().default('all'),
+    actorRole: z.enum(['all', 'admin', 'customer_support']).optional().default('all'),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
     order: z.enum(['asc', 'desc']).optional().default('desc'),

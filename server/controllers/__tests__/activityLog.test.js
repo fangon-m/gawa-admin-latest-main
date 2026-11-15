@@ -123,8 +123,125 @@ describe('activityLog controller', () => {
 
       expect(query.in).toHaveBeenCalledWith(
         'activity_type',
-        expect.arrayContaining(['user_suspended', 'user_archived', 'user_warned', 'points_topped_up']),
+        expect.arrayContaining(['user_suspended', 'user_archived', 'user_warned', 'content_flagged']),
       );
+      // Wallet top-ups are not administrative actions and must stay hidden.
+      expect(query.in.mock.calls[0][1]).not.toContain('points_topped_up');
+    });
+
+    it('filters by staff role through the users table when no agent is selected', async () => {
+      const supportId = '33333333-3333-4333-8333-333333333333';
+      const req = makeReq({
+        query: { scope: 'admin', actorRole: 'customer_support', limit: '10', page: '1' },
+      });
+      const res = makeRes();
+
+      const activityQuery = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        in: jest.fn().mockReturnThis(),
+        gte: jest.fn().mockReturnThis(),
+        lte: jest.fn().mockReturnThis(),
+        range: jest.fn().mockReturnThis(),
+        order: jest.fn().mockResolvedValue({ data: [], error: null, count: 0 }),
+      };
+      const actorQuery = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockResolvedValue({ data: [{ id: supportId }], error: null }),
+      };
+      supabase.from.mockImplementation((table) => (
+        table === 'users_table' ? actorQuery : activityQuery
+      ));
+
+      await listActivityLog(req, res);
+
+      expect(supabase.from).toHaveBeenCalledWith('users_table');
+      expect(actorQuery.eq).toHaveBeenCalledWith('role', 'customer_support');
+      expect(activityQuery.in).toHaveBeenCalledWith('user_id', [supportId]);
+    });
+
+    it('returns an empty page when no user matches the role filter', async () => {
+      const req = makeReq({ query: { scope: 'admin', actorRole: 'customer_support' } });
+      const res = makeRes();
+
+      const activityQuery = {
+        select: jest.fn().mockReturnThis(),
+        in: jest.fn().mockReturnThis(),
+        range: jest.fn().mockReturnThis(),
+        order: jest.fn().mockResolvedValue({ data: [], error: null, count: 0 }),
+      };
+      const actorQuery = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockResolvedValue({ data: [], error: null }),
+      };
+      supabase.from.mockImplementation((table) => (
+        table === 'users_table' ? actorQuery : activityQuery
+      ));
+
+      await listActivityLog(req, res);
+
+      expect(res.json).toHaveBeenCalledWith({
+        data: [],
+        pagination: { total: 0, page: 1, limit: 50, totalPages: 0 },
+      });
+    });
+
+    it('forces support accounts to their own activity only', async () => {
+      const supportId = '22222222-2222-4222-8222-222222222222';
+      const otherId = '44444444-4444-4444-8444-444444444444';
+      const req = makeReq({
+        user: { id: supportId, roles: ['customer_support'], email: 'agent@gawa.ph' },
+        // A support agent tries to widen the query to another account and to
+        // everyone with the admin role; both must be ignored.
+        query: { userId: otherId, actorRole: 'admin', limit: '10', page: '1' },
+      });
+      const res = makeRes();
+
+      const query = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        in: jest.fn().mockReturnThis(),
+        gte: jest.fn().mockReturnThis(),
+        lte: jest.fn().mockReturnThis(),
+        range: jest.fn().mockReturnThis(),
+        order: jest.fn().mockResolvedValue({ data: [], error: null, count: 0 }),
+      };
+      supabase.from.mockReturnValue(query);
+
+      await listActivityLog(req, res);
+
+      expect(query.eq).toHaveBeenCalledWith('user_id', supportId);
+      expect(query.eq).not.toHaveBeenCalledWith('user_id', otherId);
+      // No users_table role lookup is performed for a support caller.
+      expect(supabase.from).toHaveBeenCalledTimes(1);
+      // Staff action types are applied even when the caller omits scope=admin.
+      expect(query.in).toHaveBeenCalledWith(
+        'activity_type',
+        expect.arrayContaining(['content_flagged', 'user_warned']),
+      );
+    });
+
+    it('normalizes date-only bounds and supports ascending order', async () => {
+      const req = makeReq({
+        query: { startDate: '2026-11-01', endDate: '2026-11-15', order: 'asc' },
+      });
+      const res = makeRes();
+
+      const query = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        gte: jest.fn().mockReturnThis(),
+        lte: jest.fn().mockReturnThis(),
+        range: jest.fn().mockReturnThis(),
+        order: jest.fn().mockResolvedValue({ data: [], error: null, count: 0 }),
+      };
+      supabase.from.mockReturnValue(query);
+
+      await listActivityLog(req, res);
+
+      expect(query.gte).toHaveBeenCalledWith('created_at', '2026-11-01T00:00:00.000Z');
+      expect(query.lte).toHaveBeenCalledWith('created_at', '2026-11-15T23:59:59.999Z');
+      expect(query.order).toHaveBeenCalledWith('created_at', { ascending: true });
     });
 
     it('returns 500 on database error', async () => {

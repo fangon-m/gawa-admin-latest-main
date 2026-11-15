@@ -8,7 +8,7 @@ const { validate, validateQuery, schemas } = require('../middleware/validate');
 router.get(
   '/',
   authenticate,
-  authorize(ROLES.ADMIN),
+  authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT),
   validateQuery(schemas.listActivityLog),
   ctrl.listActivityLog
 );

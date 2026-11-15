@@ -15,7 +15,7 @@ import ConfirmModal from '../components/common/ConfirmModal';
 
 export default function Settings() {
   const { user, refetchUser } = useAuth();
-  const { can } = usePermissions(user?.role);
+  const { can, isSupport } = usePermissions(user?.role);
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
 
@@ -52,26 +52,40 @@ export default function Settings() {
 
   // Admin activity (Settings → Admin Activity): filterable, chronological, paginated.
   const canViewAdminActivity = can('manageSettings');
+  // Customer support accounts get a personal "Support Activity" view: they can
+  // only ever see their own actions (enforced server-side as well).
+  const canViewPersonalActivity = isSupport;
+  const canViewActivity = canViewAdminActivity || canViewPersonalActivity;
   const [activityLogs, setActivityLogs] = useState([]);
   const [activityPagination, setActivityPagination] = useState({ total: 0, page: 1, limit: 25, totalPages: 0 });
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityError, setActivityError] = useState('');
-  const [activityFilters, setActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
-  const [appliedActivityFilters, setAppliedActivityFilters] = useState({ agentId: '', startDate: '', endDate: '' });
+  // Admin activity is about staff actions, so the role filter defaults to admins.
+  const defaultActivityFilters = {
+    role: canViewAdminActivity ? 'admin' : 'all',
+    agentId: '',
+    startDate: '',
+    endDate: '',
+  };
+  const [activityFilters, setActivityFilters] = useState(defaultActivityFilters);
+  const [appliedActivityFilters, setAppliedActivityFilters] = useState(defaultActivityFilters);
   const [activityPage, setActivityPage] = useState(1);
 
   const fetchActivityLogs = React.useCallback(async (filters, page) => {
-    if (!canViewAdminActivity) return;
+    if (!canViewActivity) return;
     setActivityLoading(true);
     setActivityError('');
     try {
       const params = {
         scope: 'admin',
-        order: 'asc',
+        order: 'desc',
         page,
         limit: 25,
       };
-      if (filters.agentId) params.userId = filters.agentId;
+      if (canViewAdminActivity) {
+        if (filters.agentId) params.userId = filters.agentId;
+        else if (filters.role && filters.role !== 'all') params.actorRole = filters.role;
+      }
       if (filters.startDate) params.startDate = filters.startDate;
       if (filters.endDate) params.endDate = filters.endDate;
       const res = await activityLogApi.list(params);
@@ -84,13 +98,13 @@ export default function Settings() {
     } finally {
       setActivityLoading(false);
     }
-  }, [canViewAdminActivity]);
+  }, [canViewActivity, canViewAdminActivity]);
 
   useEffect(() => {
-    if (tab === 'activity' && canViewAdminActivity) {
+    if (tab === 'activity' && canViewActivity) {
       fetchActivityLogs(appliedActivityFilters, activityPage);
     }
-  }, [tab, canViewAdminActivity, appliedActivityFilters, activityPage, fetchActivityLogs]);
+  }, [tab, canViewActivity, appliedActivityFilters, activityPage, fetchActivityLogs]);
 
   // Team members (admin-managed staff accounts) and pending invitations
   const [inviteResult, setInviteResult] = useState(null);
@@ -108,7 +122,7 @@ export default function Settings() {
     { key: 'profile', label: 'Profile' },
     { key: 'security', label: 'Password & Security' },
     { key: 'sessions', label: 'Active Sessions' },
-    { key: 'activity', label: 'Admin Activity' },
+    { key: 'activity', label: canViewAdminActivity ? 'Admin Activity' : 'Support Activity' },
     ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }] : []),
   ];
 
@@ -404,15 +418,32 @@ export default function Settings() {
 
         {tab === 'activity' && (
           <div className="settings-card">
-            <div className="settings-card-title">Admin Activity Log</div>
+            <div className="settings-card-title">{canViewAdminActivity ? 'Admin Activity Log' : 'Support Activity'}</div>
             <div className="card-body" style={{ padding: 0 }}>
-              {canViewAdminActivity ? (
+              {canViewActivity ? (
                 <>
                   <div style={{ padding: '1rem', borderBottom: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                     <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>
-                      View a chronological history of actions performed by a staff agent. Filter by agent account and date range to review incident and moderation activity.
+                      {canViewAdminActivity
+                        ? 'View the action history of a staff agent, newest first. Admin actions are shown by default — switch the staff role to review customer support agents, and filter by agent account and date range.'
+                        : 'Your personal support activity, newest first. Only actions you performed are shown.'}
                     </div>
                     <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                      {canViewAdminActivity && (
+                        <>
+                      <div className="form-group" style={{ minWidth: 190, flex: '0 1 190px', margin: 0 }}>
+                        <label className="form-label" htmlFor="activity-role">Staff role</label>
+                        <select
+                          id="activity-role"
+                          className="form-select"
+                          value={activityFilters.role}
+                          onChange={(e) => setActivityFilters((p) => ({ ...p, role: e.target.value, agentId: '' }))}
+                        >
+                          <option value="admin">Admin</option>
+                          <option value="customer_support">Customer Support</option>
+                          <option value="all">All staff</option>
+                        </select>
+                      </div>
                       <div className="form-group" style={{ minWidth: 240, flex: '1 1 240px', margin: 0 }}>
                         <label className="form-label" htmlFor="activity-agent">Agent account</label>
                         <select
@@ -421,9 +452,16 @@ export default function Settings() {
                           value={activityFilters.agentId}
                           onChange={(e) => setActivityFilters((p) => ({ ...p, agentId: e.target.value }))}
                         >
-                          <option value="">All agents</option>
+                          <option value="">
+                            {activityFilters.role === 'customer_support'
+                              ? 'All customer support agents'
+                              : activityFilters.role === 'all'
+                                ? 'All staff'
+                                : 'All admins'}
+                          </option>
                           {(teamMembers || [])
                             .filter((m) => m && m.kind !== 'invite' && m.id)
+                            .filter((m) => activityFilters.role === 'all' || m.role === activityFilters.role)
                             .sort((a, b) => {
                               const ra = a.role === 'customer_support' ? 0 : 1;
                               const rb = b.role === 'customer_support' ? 0 : 1;
@@ -437,6 +475,8 @@ export default function Settings() {
                             ))}
                         </select>
                       </div>
+                        </>
+                      )}
                       <div className="form-group" style={{ margin: 0 }}>
                         <label className="form-label" htmlFor="activity-start">From</label>
                         <input
@@ -469,7 +509,7 @@ export default function Settings() {
                           type="button"
                           className="btn btn-outline btn-sm"
                           onClick={() => {
-                            const cleared = { agentId: '', startDate: '', endDate: '' };
+                            const cleared = { ...defaultActivityFilters };
                             setActivityFilters(cleared);
                             setAppliedActivityFilters(cleared);
                             setActivityPage(1);
@@ -479,16 +519,18 @@ export default function Settings() {
                         </button>
                       </div>
                     </div>
-                    {(appliedActivityFilters.agentId || appliedActivityFilters.startDate || appliedActivityFilters.endDate) && (
+                    {(appliedActivityFilters.role !== 'all' || appliedActivityFilters.agentId || appliedActivityFilters.startDate || appliedActivityFilters.endDate) && (
                       <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                        Showing {activityPagination.total || 0} action{(activityPagination.total || 0) === 1 ? '' : 's'}
+                        Showing {activityPagination.total || 0} {canViewAdminActivity ? 'action' : 'personal action'}{(activityPagination.total || 0) === 1 ? '' : 's'}
                         {appliedActivityFilters.agentId ? (() => {
                           const agent = (teamMembers || []).find((m) => m.id === appliedActivityFilters.agentId);
                           return agent ? ` for ${agent.name || agent.email}` : '';
-                        })() : ''}
+                        })() : appliedActivityFilters.role !== 'all' ? (
+                          appliedActivityFilters.role === 'customer_support' ? ' by customer support agents' : ' by admins'
+                        ) : ''}
                         {appliedActivityFilters.startDate ? ` from ${appliedActivityFilters.startDate}` : ''}
                         {appliedActivityFilters.endDate ? ` to ${appliedActivityFilters.endDate}` : ''}
-                        {' '}in chronological order.
+                        {' '}newest first.
                       </div>
                     )}
                   </div>
@@ -497,7 +539,7 @@ export default function Settings() {
 
                   <DataTable
                     columns={[
-                      { key: 'agentName', label: 'Agent' },
+                      ...(canViewAdminActivity ? [{ key: 'agentName', label: 'Agent' }] : []),
                       { key: 'activityTypeLabel', label: 'Activity Type' },
                       { key: 'category', label: 'Category' },
                       {
@@ -515,7 +557,9 @@ export default function Settings() {
                     data={activityLogs}
                     loading={activityLoading}
                     pageSize={Math.max(activityLogs.length, 1)}
-                    emptyMessage="No activity logs found for the selected filters."
+                    emptyMessage={canViewAdminActivity
+                      ? 'No activity logs found for the selected filters.'
+                      : 'You have no recorded activity in the selected date range.'}
                     sortable={false}
                   />
 
@@ -547,7 +591,7 @@ export default function Settings() {
                 </>
               ) : (
                 <div className="empty-state" style={{ padding: '1.5rem' }}>
-                  <div className="empty-state-text">Admin activity history is available to administrators.</div>
+                  <div className="empty-state-text">Activity history is available to staff accounts.</div>
                 </div>
               )}
             </div>
