@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName } = require('../utilities/helpers');
+const { withFriendlyJobReference } = require('../utilities/entityIds');
 const { activityTypeLabel, ADMIN_ACTIVITY_TYPES } = require('./activityLog');
 
 async function getStats(req, res) {
@@ -125,6 +126,8 @@ async function getStats(req, res) {
       if (targetName && a.related_user_id) {
         target = target.split(a.related_user_id).join(targetName);
       }
+      // Older rows also embed the raw job UUID; show the friendly JOB- id.
+      target = withFriendlyJobReference(target, a.related_job_post_id);
       return {
         action: activityTypeLabel(a.activity_type),
         actionType: a.activity_type,

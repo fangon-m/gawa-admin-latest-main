@@ -38,6 +38,19 @@ function entityIdToken(id, prefix = 'USR-') {
   return numeric ? `${prefix}${numeric}` : '';
 }
 
+/**
+ * Replaces a raw job UUID embedded in a user-facing description with the
+ * friendly JOB- id the rest of the admin UI shows. Used for older activity_log
+ * rows that stored the UUID before the friendly-id fix, so no UUID leaks into
+ * an activity feed.
+ */
+function withFriendlyJobReference(text, jobPostId) {
+  if (typeof text !== 'string' || !jobPostId) return text;
+  if (!text.includes(jobPostId)) return text;
+  const numeric = entityIdNumeric(jobPostId);
+  return numeric ? text.split(jobPostId).join(`JOB-${numeric}`) : text;
+}
+
 const caches = new Map();
 
 async function getEntityIdMap(type, force = false) {
@@ -104,6 +117,7 @@ module.exports = {
   ENTITY_SOURCES,
   entityIdNumeric,
   entityIdToken,
+  withFriendlyJobReference,
   resolveEntityId,
   resolveUserId,
 };

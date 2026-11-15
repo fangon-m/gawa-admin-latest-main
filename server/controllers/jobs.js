@@ -1,6 +1,7 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, getFullName, calculatePagination, sanitizeSearchTerm, sanitizeEntityFilter, sendError } = require('../utilities/helpers');
 const { getArchivedUserIds, applyArchivedOwnerFilter } = require('../utilities/visibility');
+const { entityIdToken } = require('../utilities/entityIds');
 const { logAdminActivity } = require('../utilities/activityLogger');
 
 async function enrichJobPosts(posts) {
@@ -346,7 +347,7 @@ async function flagJobPost(req, res) {
     activityType: 'content_flagged',
     category: 'job',
     relatedJobPostId: jobId,
-    description: `Admin flagged job post "${post.job_title || jobId}": ${reason}`,
+    description: `Admin flagged job post "${post.job_title || entityIdToken(jobId, 'JOB-')}": ${reason}`,
   });
 
   res.json({ data: toCamelCase(flag), message: 'Job post flagged' });

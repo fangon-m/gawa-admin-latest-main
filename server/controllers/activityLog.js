@@ -1,6 +1,7 @@
 const supabase = require('../db/supabase');
 const { isAdmin } = require('../utilities/permissions');
 const { toCamelCase, getFullName, sendError } = require('../utilities/helpers');
+const { withFriendlyJobReference } = require('../utilities/entityIds');
 
 const ACTIVITY_TYPE_MAP = {
   deposit_refunded: 'Deposit Refunded',
@@ -148,6 +149,7 @@ async function listActivityLog(req, res) {
     const target = row.target || {};
     return {
       ...camel,
+      description: withFriendlyJobReference(camel.description, camel.relatedJobPostId),
       agentName: getFullName(user) || user.email || 'Unknown',
       relatedUserName: getFullName(target) || target.email || null,
       activityTypeLabel: activityTypeLabel(camel.activityType),

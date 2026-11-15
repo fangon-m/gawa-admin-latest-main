@@ -1,5 +1,6 @@
 const supabase = require('../db/supabase');
 const { toCamelCase, sendError } = require('../utilities/helpers');
+const { entityIdToken } = require('../utilities/entityIds');
 const { logAdminActivity } = require('../utilities/activityLogger');
 
 function openFlagQuery(query) {
@@ -115,7 +116,7 @@ async function resolveFlagState(req, res, nextStatus) {
       activityType: 'content_flagged',
       category: 'job',
       relatedJobPostId: flag.entity_id,
-      description: `Admin ${nextStatus} flag for job post ${flag.entity_id}${note ? `: ${note}` : ''}`,
+      description: `Admin ${nextStatus} flag for job post ${entityIdToken(flag.entity_id, 'JOB-')}${note ? `: ${note}` : ''}`,
     });
   }
 

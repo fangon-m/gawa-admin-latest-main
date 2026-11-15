@@ -8,6 +8,7 @@ jest.mock('../../db/supabase', () => ({
 }));
 
 const supabase = require('../../db/supabase');
+const { entityIdToken } = require('../../utilities/entityIds');
 const { listActivityLog, createActivityLog } = require('../activityLog');
 
 const adminId = '11111111-1111-4111-8111-111111111111';
@@ -82,6 +83,44 @@ describe('activityLog controller', () => {
           pagination: expect.objectContaining({ page: 1, limit: 10, total: 1 }),
         })
       );
+    });
+
+    it('replaces a legacy raw job UUID in a description with the friendly JOB id', async () => {
+      const jobId = 'bf80ea53-9266-4d02-bfe7-89528a237da9';
+      const req = makeReq({ query: { scope: 'admin', limit: '10', page: '1' } });
+      const res = makeRes();
+
+      const rows = [
+        {
+          activity_id: 'bbb',
+          user_id: adminId,
+          activity_type: 'content_flagged',
+          category: 'job',
+          description: `Admin dismissed flag for job post ${jobId}`,
+          related_job_post_id: jobId,
+          created_at: '2026-11-14T11:46:02Z',
+          users_table: { first_name: 'Admin', email: 'admin@gawa.ph' },
+          target: null,
+        },
+      ];
+      const query = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        in: jest.fn().mockReturnThis(),
+        gte: jest.fn().mockReturnThis(),
+        lte: jest.fn().mockReturnThis(),
+        range: jest.fn().mockReturnThis(),
+        order: jest.fn().mockResolvedValue({ data: rows, error: null, count: 1 }),
+      };
+      supabase.from.mockReturnValue(query);
+
+      await listActivityLog(req, res);
+
+      const [{ data }] = res.json.mock.calls[0];
+      expect(data[0].description).toBe(
+        `Admin dismissed flag for job post ${entityIdToken(jobId, 'JOB-')}`,
+      );
+      expect(data[0].description).not.toContain(jobId);
     });
 
     it('applies userId and category filters', async () => {
