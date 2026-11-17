@@ -1,8 +1,14 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import Settings from './Settings';
+
+// Vitest runs without globals here, so Testing Library cannot auto-unmount the
+// previous test's tree. Without this a later render duplicates every node.
+afterEach(cleanup);
 
 const { mockUser, mockSearchParams, mockRefetch } = vi.hoisted(() => ({
   mockUser: { id: 'admin-uuid', name: 'Admin User', email: 'admin@gawa.ph', phone: '+63 912 345 6789', location: 'Manila', role: 'admin' },
@@ -194,87 +200,5 @@ describe('Settings Page', () => {
 
     expect(screen.queryByTestId('tab-service-area')).not.toBeInTheDocument();
     expect(screen.queryByText('Service Area Configuration')).not.toBeInTheDocument();
-  });
-
-  // ===============================
-  // Active Sessions tab - Revoke
-  // ===============================
-  describe('Active Sessions tab - Revoke', () => {
-    it('renders session list with Revoke buttons', async () => {
-      render(<Settings />);
-
-      // Switch to sessions tab
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-sessions');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByText('Chrome on Windows')).toBeInTheDocument();
-        expect(screen.getByText('Safari on macOS')).toBeInTheDocument();
-        expect(screen.getByText('Firefox on Linux')).toBeInTheDocument();
-        // Should have 2 Revoke buttons (current session excluded)
-        const revokeBtns = screen.getAllByText('Revoke');
-        expect(revokeBtns).toHaveLength(2);
-      });
-    });
-
-    it('removes session from list when Revoke is clicked', async () => {
-      render(<Settings />);
-
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-sessions');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Revoke')).toHaveLength(2);
-      });
-
-      const revokeBtns = screen.getAllByText('Revoke');
-      await userEvent.click(revokeBtns[0]);
-
-      await waitFor(() => {
-        // Now only 1 Revoke button should remain
-        expect(screen.getAllByText('Revoke')).toHaveLength(1);
-      });
-    });
-
-    it('shows success message when a session is revoked', async () => {
-      render(<Settings />);
-
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-sessions');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        expect(screen.getAllByText('Revoke')).toHaveLength(2);
-      });
-
-      const revokeBtns = screen.getAllByText('Revoke');
-      await userEvent.click(revokeBtns[0]);
-
-      await waitFor(() => {
-        expect(screen.getByText('Session "Safari on macOS" revoked')).toBeInTheDocument();
-      });
-    });
-
-    it('does not show Revoke button for the current session', async () => {
-      render(<Settings />);
-
-      await waitFor(() => {
-        const tab = screen.getByTestId('tab-sessions');
-        fireEvent.click(tab);
-      });
-
-      await waitFor(() => {
-        // Current session should have the "(Current)" badge
-        expect(screen.getByText('(Current)')).toBeInTheDocument();
-        // And should NOT have a Revoke button
-        const currentSession = screen.getByText('Chrome on Windows').closest('.settings-row');
-        expect(currentSession?.querySelector('button')).toBeNull();
-      });
-    });
   });
 });

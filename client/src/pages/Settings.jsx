@@ -20,9 +20,11 @@ export default function Settings() {
   const [tab, setTab] = useState(searchParams.get('tab') || 'profile');
 
   useEffect(() => {
-    if (searchParams.get('tab')) {
-      setTab(searchParams.get('tab') || 'profile');
-    }
+    const requested = searchParams.get('tab');
+    if (!requested) return;
+    // A stale bookmark for a tab that no longer exists (e.g. the removed
+    // "sessions" tab) falls back to Profile instead of a blank panel.
+    setTab(requested === 'sessions' ? 'profile' : requested);
   }, [searchParams]);
 
   const handleTabChange = (nextTab) => {
@@ -121,17 +123,9 @@ export default function Settings() {
   const tabs = [
     { key: 'profile', label: 'Profile' },
     { key: 'security', label: 'Password & Security' },
-    { key: 'sessions', label: 'Active Sessions' },
     { key: 'activity', label: canViewAdminActivity ? 'Admin Activity' : 'Support Activity' },
     ...(can('manageSettings') ? [{ key: 'team', label: 'Team Members' }] : []),
   ];
-
-  const [activeSessions, setActiveSessions] = useState([
-    { id: 's1', device: 'Chrome on Windows', ip: '192.168.1.100', lastActive: '2025-05-20T14:30:00Z', current: true },
-    { id: 's2', device: 'Safari on macOS', ip: '192.168.1.101', lastActive: '2025-05-19T09:00:00Z', current: false },
-    { id: 's3', device: 'Firefox on Linux', ip: '203.0.113.45', lastActive: '2025-05-18T16:00:00Z', current: false },
-  ]);
-  const [sessionMsg, setSessionMsg] = useState('');
 
   const handlePasswordReset = async (e) => {
     e.preventDefault();
@@ -376,43 +370,6 @@ export default function Settings() {
               )}
               <button type="submit" className="btn btn-primary">Update Password</button>
             </form>
-          </div>
-        )}
-
-        {tab === 'sessions' && (
-          <div className="settings-card">
-            <div className="settings-card-title">Active Sessions</div>
-            {sessionMsg && (
-              <div style={{ fontSize: 13, color: 'var(--color-success)', marginBottom: 12 }}>
-                {sessionMsg}
-              </div>
-            )}
-            {activeSessions.length === 0 ? (
-              <div className="empty-state" style={{ padding: '1.5rem' }}>
-                <div className="empty-state-text">No other active sessions</div>
-              </div>
-            ) : (
-              activeSessions.map((s) => (
-                <div key={s.id} className="settings-row">
-                  <div>
-                    <div style={{ fontWeight: 500 }}>{s.device} {s.current && <span style={{ fontSize: 12, color: 'var(--color-success)' }}>(Current)</span>}</div>
-                    <div style={{ fontSize: 13, color: 'var(--color-text-muted)' }}>IP: {s.ip} · Last active: {formatDateTime(s.lastActive)}</div>
-                  </div>
-                  {!s.current && (
-                    <button
-                      className="btn btn-sm btn-outline"
-                      onClick={() => {
-                        setActiveSessions((prev) => prev.filter((x) => x.id !== s.id));
-                        setSessionMsg(`Session "${s.device}" revoked`);
-                        setTimeout(() => setSessionMsg(''), 3000);
-                      }}
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </div>
-              ))
-            )}
           </div>
         )}
 
