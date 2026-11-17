@@ -365,7 +365,7 @@ export default function JobDetail() {
                         <StatusBadge status={isOpen ? 'flagged' : flag.status} label={isOpen ? 'Open' : flag.status} />
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{formatDate(flag.createdAt)}</span>
                       </div>
-                      <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Reason:</strong> {flag.reason || 'No reason provided'}</div>
+                      <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Reason:</strong> {flag.reason || 'Flagged by admin'}</div>
                       <div style={{ fontSize: 12, color: 'var(--color-text-muted)', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                         {flag.flaggedByName && <span>Flagged by {flag.flaggedByName}</span>}
                         {!isOpen && flag.resolvedAt && <span>{flag.status === 'dismissed' ? 'Dismissed' : 'Resolved'} {formatDate(flag.resolvedAt)}{flag.resolvedByName ? ` by ${flag.resolvedByName}` : ''}</span>}

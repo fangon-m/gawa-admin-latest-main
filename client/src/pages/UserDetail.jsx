@@ -5,6 +5,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { getById as getUserById, suspend, reinstate, archiveUser, unarchiveUser, flagUser } from '../api/users';
+import * as flagsApi from '../api/flags';
 import * as notesApi from '../api/notes';
 import * as transactionsApi from '../api/transactions';
 import * as jobsApi from '../api/jobs';
@@ -125,6 +126,14 @@ export default function UserDetail() {
     }
   );
 
+  // Moderation flags for this account, so the profile can show why it was flagged.
+  const { data: userFlags, refetch: refetchFlags } = useApiData(
+    () => (userId ? flagsApi.list({ entityType: 'user', entityId: userId }) : Promise.resolve({ data: [] })),
+    [userId],
+    { defaultValue: [], transform: (r) => r?.data ?? r ?? [] }
+  );
+  const userFlagRows = Array.isArray(userFlags) ? userFlags : [];
+
   // Auto-load history when the history tab becomes active
   useEffect(() => {
     if (activeTab === 'history') {
@@ -185,6 +194,7 @@ export default function UserDetail() {
         await unarchiveUser(user.id);
       } else if (action === 'flag') {
         await flagUser(user.id);
+        refetchFlags();
       } else return;
       if (action === 'suspend' && suspensionEmailNotification?.delivered === false) {
         addNotification(
@@ -356,6 +366,18 @@ export default function UserDetail() {
                   <div className="detail-field"><div className="detail-label">Joined</div><div className="detail-value">{formatDate(user.joinedAt)}</div></div>
                   <div className="detail-field"><div className="detail-label">Flags</div><div className="detail-value">{user.flags}</div></div>
                 </div>
+                {userFlagRows.length > 0 && (
+                  <div className="mt-4">
+                    <div className="detail-label mb-2">Flag Reason</div>
+                    {userFlagRows.map((flag) => (
+                      <div key={flag.flagId || flag.id} style={{ fontSize: 13, marginBottom: 4 }}>
+                        <strong>Reason:</strong> {flag.reason || 'Flagged by admin'}
+                        {flag.status && flag.status !== 'open' && ` (${flag.status})`}
+                        {flag.createdAt && ` · ${formatDate(flag.createdAt)}`}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {user.skills?.length > 0 && (
                   <div className="mt-4">
                     <div className="detail-label mb-2">Skills</div>

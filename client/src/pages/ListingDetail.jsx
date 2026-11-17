@@ -196,7 +196,7 @@ export default function ListingDetail() {
                         <StatusBadge status={isOpen ? 'flagged' : flag.status} label={isOpen ? 'Open' : flag.status} />
                         <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{formatDate(flag.createdAt)}</span>
                       </div>
-                      <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Reason:</strong> {flag.reason || 'No reason provided'}</div>
+                      <div style={{ fontSize: 13, marginBottom: 4 }}><strong>Reason:</strong> {flag.reason || 'Flagged by admin'}</div>
                       {flag.resolutionNote && <div style={{ fontSize: 12, color: 'var(--color-text-muted)', marginTop: 4 }}><strong>Note:</strong> {flag.resolutionNote}</div>}
                       {isOpen && (
                         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>

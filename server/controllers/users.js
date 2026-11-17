@@ -346,7 +346,7 @@ async function flagUser(req, res) {
 
   const { data, error } = await supabase
     .from('entity_flags')
-    .insert({ entity_type: 'user', entity_id: req.params.id, flagged_by: req.user.id })
+    .insert({ entity_type: 'user', entity_id: req.params.id, flagged_by: req.user.id, reason: 'Flagged by admin', status: 'open' })
     .select()
     .single();
 

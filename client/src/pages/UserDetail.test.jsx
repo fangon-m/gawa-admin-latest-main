@@ -1,7 +1,11 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import UserDetail from './UserDetail';
+
+afterEach(cleanup);
 
 const mockNavigate = vi.fn();
 const mockAddNotification = vi.fn();
@@ -36,6 +40,10 @@ vi.mock('../api/users', () => ({
   archiveUser: vi.fn(),
   unarchiveUser: vi.fn(),
   flagUser: vi.fn(),
+}));
+
+vi.mock('../api/flags', () => ({
+  list: vi.fn(),
 }));
 
 vi.mock('../components/layout/Header', () => ({
@@ -140,7 +148,7 @@ describe('UserDetail', () => {
     };
 
     useApiDataMock.mockImplementation(() => {
-      const currentCall = callIndex++ % 6;
+      const currentCall = callIndex++ % 7;
       if (currentCall === 0) {
         return { data: userData, loading: false, refetch: vi.fn() };
       }
@@ -192,6 +200,35 @@ describe('UserDetail', () => {
     expect(screen.getByRole('button', { name: 'Archive & Ban', exact: true })).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Reason for archiving'), { target: { value: 'Policy violation' } });
     expect(screen.getByRole('button', { name: 'Archive & Ban', exact: true })).toBeEnabled();
+  });
+
+  it('shows the flag reason on the profile when the account has a flag', () => {
+    const userData = {
+      id: 'user-123',
+      name: 'Ada Lovelace',
+      email: 'ada@example.com',
+      role: 'client',
+      status: 'active',
+      flags: 1,
+      notes: [],
+      skills: [],
+    };
+    let callIndex = 0;
+    useApiDataMock.mockImplementation(() => {
+      const currentCall = callIndex++ % 7;
+      if (currentCall === 0) return { data: userData, refetch: vi.fn() };
+      if (currentCall === 6) {
+        return {
+          data: [{ flagId: 'flag-1', reason: 'Flagged by admin', status: 'open', createdAt: '2026-11-17T00:00:00.000Z' }],
+          refetch: vi.fn(),
+        };
+      }
+      return { data: [], refetch: vi.fn() };
+    });
+
+    render(<UserDetail />);
+
+    expect(screen.getByText(/Flagged by admin/)).toBeInTheDocument();
   });
 
   it('does not render a password reset action for team members', () => {
