@@ -529,7 +529,7 @@ export default function JobDetail() {
                 <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
                   {isCompletedJob ? (
                     <>
-                      Report a problem with the completed work on <strong>{job.jobTitle}</strong>. This is a moderation marker — the job stays Completed. For payment disputes use Disputed Completions; for severe cases use Escalated Jobs. The completed job cannot be removed, so its audit trail is preserved.
+                      Report a problem with the completed work on <strong>{job.jobTitle}</strong>. This only records a moderation flag — it does not change the job status, payments, or history. You can resolve or dismiss the flag with a note from the Flags section below.
                     </>
                   ) : (
                     <>Flag <strong>{job.jobTitle}</strong> for moderation review. The job’s lifecycle status will not change.</>

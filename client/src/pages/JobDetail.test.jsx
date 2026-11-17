@@ -152,7 +152,7 @@ describe('JobDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Report issue' }));
 
     expect(screen.getByText('Report completion issue')).toBeInTheDocument();
-    expect(screen.getByText(/Disputed Completions/)).toBeInTheDocument();
+    expect(screen.getByText(/resolve or dismiss the flag with a note/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove', exact: true })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove content' })).not.toBeInTheDocument();
   });
