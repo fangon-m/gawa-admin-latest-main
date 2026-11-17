@@ -30,9 +30,82 @@ function otherParticipant(user) {
 async function loadUser(userId) {
   return supabase
     .from('users_table')
-    .select('id, first_name, middle_name, last_name, email, role, is_archived')
+    .select('id, first_name, middle_name, last_name, email, role, is_archived, is_verified')
     .eq('id', userId)
     .maybeSingle();
+}
+
+const RECIPIENT_COLUMNS = 'id, first_name, middle_name, last_name, email, role, is_archived, is_verified';
+
+function serializeRecipient(user) {
+  return {
+    id: user.id,
+    name: getFullName(user) || user.email || '',
+    email: user.email || '',
+    role: user.role || null,
+    isStaff: STAFF_ROLES.has(user.role),
+    isVerified: Boolean(user.is_verified),
+  };
+}
+
+/**
+ * Who the "New Message" picker may offer.
+ *
+ * `team` returns staff accounts so support can reach an administrator — that
+ * conversation is internal and never reaches a customer. `customers` returns
+ * only verified consumer accounts, because chat is gated on verification in
+ * the mobile app: offering an unverified account would create a thread its
+ * owner cannot open.
+ *
+ * The caller is always excluded; you cannot start a thread with yourself.
+ */
+async function listRecipients(req, res) {
+  if (!isDatabaseUserId(req.user?.id)) {
+    return res.status(400).json({ error: 'Messaging requires a registered admin account.' });
+  }
+
+  const scope = String(req.query.scope || '').toLowerCase() === 'team' ? 'team' : 'customers';
+
+  let query = supabase
+    .from('users_table')
+    .select(RECIPIENT_COLUMNS)
+    .eq('is_archived', false)
+    .neq('id', req.user.id)
+    .order('first_name', { ascending: true })
+    .limit(500);
+
+  if (scope === 'team') {
+    query = query.in('role', ['admin', 'customer_support']);
+  } else {
+    query = query
+      .not('role', 'in', '("admin","customer_support")')
+      .eq('is_verified', true);
+  }
+
+  const { data, error } = await query;
+  if (error) return sendError(res, error, { status: 500 });
+
+  return res.json({
+    data: (data || []).map(serializeRecipient),
+    scope,
+  });
+}
+
+/**
+ * Returns the reason a recipient cannot receive messages, or null when it can.
+ *
+ * Staff-to-staff threads are allowed. Consumers still have to be verified,
+ * because the mobile app only opens chat for verified accounts — accepting an
+ * unverified recipient here would silently deliver mail nobody can read.
+ */
+function recipientBlockedReason(user) {
+  if (user.is_archived) {
+    return 'Archived accounts cannot receive messages. Unarchive the account first.';
+  }
+  if (!STAFF_ROLES.has(user.role) && !user.is_verified) {
+    return 'This account is not verified yet, so it cannot receive messages.';
+  }
+  return null;
 }
 
 async function loadMessagesForPair(firstUserId, secondUserId) {
@@ -139,8 +212,9 @@ async function getConversation(req, res) {
   const { data: user, error: userError } = await loadUser(userId);
   if (userError) return sendError(res, userError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
-  if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
 
+  // Reading is always allowed: an archived account's history stays visible,
+  // and a staff thread is a normal conversation. Only sending is gated.
   const { data: messages, error: messagesError } = await loadMessagesForPair(adminId, userId);
   if (messagesError) return sendError(res, messagesError, { status: 500 });
 
@@ -181,10 +255,9 @@ async function sendMessage(req, res) {
   const { data: user, error: userError } = await loadUser(userId);
   if (userError) return sendError(res, userError, { status: 500 });
   if (!user) return res.status(404).json({ error: 'User not found' });
-  if (STAFF_ROLES.has(user.role)) return res.status(403).json({ error: 'Messages can only be sent to user accounts.' });
-  if (user.is_archived) {
-    return res.status(409).json({ error: 'Archived accounts cannot receive messages. Unarchive the account first.' });
-  }
+
+  const blocked = recipientBlockedReason(user);
+  if (blocked) return res.status(409).json({ error: blocked });
 
   const createdAt = new Date().toISOString();
   const messageHash = createHash('sha256').update(text).digest('hex');
@@ -207,4 +280,4 @@ async function sendMessage(req, res) {
   });
 }
 
-module.exports = { listConversations, getConversation, sendMessage };
+module.exports = { listConversations, listRecipients, getConversation, sendMessage };

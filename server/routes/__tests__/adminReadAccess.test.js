@@ -75,6 +75,7 @@ jest.mock('../../controllers/rentals', () => ({
 }));
 jest.mock('../../controllers/messages', () => ({
   listConversations: mockRouteResponse,
+  listRecipients: mockRouteResponse,
   getConversation: mockRouteResponse,
   sendMessage: mockRouteResponse,
   createConversation: mockRouteResponse,
@@ -118,6 +119,7 @@ describe('admin data read route authorization', () => {
     '/rentals',
     '/rentals/rental-id',
     '/messages',
+    '/messages/recipients',
     '/messages/conversation-id',
   ];
 

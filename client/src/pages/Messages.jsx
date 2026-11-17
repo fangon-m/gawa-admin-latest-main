@@ -1,15 +1,20 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useApiData, useMutation } from '../utils/useApiData';
-import { listConversations, getConversation, sendMessage } from '../api/messages';
-import * as usersApi from '../api/users';
+import { listConversations, getConversation, sendMessage, listRecipients } from '../api/messages';
 import { timeAgo, getInitials, capitalizeWords } from '../utils/helpers';
 import Header from '../components/layout/Header';
 import SearchBar from '../components/common/SearchBar';
+import Tabs from '../components/common/Tabs';
 import MessageThread from '../components/common/MessageThread';
 import MessageComposer from '../components/common/MessageComposer';
 import { Mail, SquarePen, X } from 'lucide-react';
 import styles from './Messages.module.css';
+
+const recipientTabs = [
+  { key: 'customers', label: 'Customers' },
+  { key: 'team', label: 'Team' },
+];
 
 function getRequestError(error, fallback) {
   const details = error?.details?.map(({ field, message }) => `${field}: ${message}`).join('; ');
@@ -22,6 +27,7 @@ export default function Messages() {
   const [activeConv, setActiveConv] = useState(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [newSearch, setNewSearch] = useState('');
+  const [recipientScope, setRecipientScope] = useState('customers');
   const [messageError, setMessageError] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -39,9 +45,13 @@ export default function Messages() {
   });
   const conversations = inbox.conversations;
 
-  const { data: allUsers } = useApiData(() => usersApi.list({ limit: 100 }), [], {
-    defaultValue: [], transform: (r) => r?.data ?? r ?? [],
-  });
+  // Recipients come from a dedicated endpoint: customers are verified-only,
+  // team is staff-to-staff. /api/users deliberately never returns staff rows.
+  const { data: recipients, loading: recipientsLoading } = useApiData(
+    () => listRecipients({ scope: recipientScope }),
+    [recipientScope],
+    { defaultValue: [] }
+  );
 
   const { data: activeData, error: activeError, refetch: refetchConv } = useApiData(
     () => activeConv ? getConversation(activeConv) : Promise.resolve({ data: null }),
@@ -81,7 +91,7 @@ export default function Messages() {
 
   const availableUsers = useMemo(() => {
     if (!showNewMessage) return [];
-    let list = allUsers.filter((u) => u.id !== currentUserId && !['admin', 'customer_support'].includes(u.role) && !u.isArchived && u.status !== 'archived');
+    let list = (recipients || []).filter((u) => u.id !== currentUserId);
     if (newSearch) {
       const q = newSearch.toLowerCase();
       list = list.filter((u) =>
@@ -91,7 +101,7 @@ export default function Messages() {
       );
     }
     return list;
-  }, [showNewMessage, newSearch, allUsers, currentUserId]);
+  }, [showNewMessage, newSearch, recipients, currentUserId]);
 
   const otherParticipant = activeData
     ? (activeData.participants || []).find((p) => p.userId !== currentUserId)
@@ -156,12 +166,38 @@ export default function Messages() {
                   <X size={16} />
                 </button>
               </div>
+              <div className={styles.recipientTabs}>
+                <Tabs
+                  tabs={recipientTabs}
+                  activeTab={recipientScope}
+                  onChange={(scope) => { setRecipientScope(scope); setNewSearch(''); }}
+                />
+              </div>
               <div className={styles.newMessageSearch}>
-                <SearchBar value={newSearch} onChange={setNewSearch} placeholder="Search users..." />
+                <SearchBar
+                  value={newSearch}
+                  onChange={setNewSearch}
+                  placeholder={recipientScope === 'team' ? 'Search team...' : 'Search customers...'}
+                />
               </div>
               <div className={styles.userList}>
                 {availableUsers.length === 0 ? (
-                  <div className={styles.userListEmpty}>No users found</div>
+                  <div className={styles.userListEmpty}>
+                    <div>
+                      <div>
+                        {recipientsLoading
+                          ? 'Loading...'
+                          : recipientScope === 'team'
+                            ? 'No team members found'
+                            : 'No verified users found'}
+                      </div>
+                      {!recipientsLoading && recipientScope === 'customers' && (
+                        <div className={styles.userListEmptyHint}>
+                          Only verified users can receive messages.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   availableUsers.map((u) => (
                     <div
@@ -174,7 +210,7 @@ export default function Messages() {
                         <div className={styles.userItemName}>{u.name}</div>
                         <div className={styles.userItemMeta}>
                           <span className={styles.userItemRole}>{capitalizeWords(u.role)}</span>
-                          <span className={styles.userItemStatus}>{u.status}</span>
+                          <span className={styles.userItemStatus}>{u.isStaff ? 'Team' : 'Verified'}</span>
                           {!existingConvUserIds.has(u.id) && (
                             <span className={styles.userItemBadge}>New</span>
                           )}
@@ -203,7 +239,14 @@ export default function Messages() {
                     >
                       <div className="conversation-avatar">{getInitials(other?.name || '?')}</div>
                       <div className="conversation-info">
-                        <div className="conversation-name">{other?.name || 'Unknown'}</div>
+                        <div className="conversation-name">
+                          {other?.name || 'Unknown'}
+                          {['admin', 'customer_support'].includes(other?.role) && (
+                            <span className={styles.staffBadge}>
+                              {other.role === 'admin' ? 'Admin' : 'Support'}
+                            </span>
+                          )}
+                        </div>
                         <div className="conversation-preview">{conv.lastMessage}</div>
                       </div>
                       <div className="conversation-meta">

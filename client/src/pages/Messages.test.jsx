@@ -1,12 +1,52 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import Messages from './Messages';
 import { useApiData } from '../utils/useApiData';
+
+// Vitest runs without globals here, so Testing Library cannot auto-unmount the
+// previous test's tree. Without this the second render duplicates every node.
+afterEach(cleanup);
 
 const { refetchConversations } = vi.hoisted(() => ({
   refetchConversations: vi.fn(),
 }));
+
+const inbox = {
+  conversations: [{
+    id: 'user-1',
+    participants: [
+      { userId: 'admin-1', name: 'Admin', role: 'admin' },
+      { userId: 'user-1', name: 'Sam User', role: 'client' },
+    ],
+    lastMessage: 'Hello',
+    lastMessageAt: '2026-11-08T09:00:00.000Z',
+    unread: true,
+    unreadCount: 3,
+  }],
+  unreadCount: 3,
+};
+
+const customerRecipient = {
+  id: 'user-2',
+  name: 'Cara Customer',
+  email: 'cara@example.com',
+  role: 'client',
+  isStaff: false,
+  isVerified: true,
+};
+
+const teamRecipient = {
+  id: 'admin-2',
+  name: 'Ana Admin',
+  email: 'ana@gawa.local',
+  role: 'admin',
+  isStaff: true,
+  isVerified: false,
+};
 
 vi.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: { id: 'admin-1' } }),
@@ -21,10 +61,7 @@ vi.mock('../api/messages', () => ({
   listConversations: vi.fn(),
   getConversation: vi.fn(),
   sendMessage: vi.fn(),
-}));
-
-vi.mock('../api/users', () => ({
-  list: vi.fn(),
+  listRecipients: vi.fn(),
 }));
 
 vi.mock('../components/layout/Header', () => ({
@@ -43,37 +80,31 @@ vi.mock('../components/common/MessageComposer', () => ({
 
 describe('Messages', () => {
   beforeEach(() => {
-    let callIndex = 0;
     refetchConversations.mockReset();
-    useApiData.mockImplementation((_fetch, deps, options) => {
-      const call = callIndex++ % 3;
-      if (call === 0) {
+    // Route each useApiData call by its arguments rather than call order, so
+    // adding a query to the page does not silently reshuffle the mock.
+    useApiData.mockImplementation((_fetch, deps = [], options = {}) => {
+      const defaultValue = options?.defaultValue;
+
+      if (defaultValue && !Array.isArray(defaultValue) && defaultValue.conversations) {
+        return { data: inbox, error: null, refetch: refetchConversations };
+      }
+
+      if (Array.isArray(defaultValue)) {
         return {
-          data: {
-            conversations: [{
-              id: 'user-1',
-              participants: [
-                { userId: 'admin-1', name: 'Admin' },
-                { userId: 'user-1', name: 'Sam User' },
-              ],
-              lastMessage: 'Hello',
-              lastMessageAt: '2026-11-08T09:00:00.000Z',
-              unread: true,
-              unreadCount: 3,
-            }],
-            unreadCount: 3,
-          },
+          data: deps[0] === 'team' ? [teamRecipient] : [customerRecipient],
+          loading: false,
           error: null,
-          refetch: refetchConversations,
+          refetch: vi.fn(),
         };
       }
-      if (call === 1) return { data: [], error: null, refetch: vi.fn() };
+
       return {
-        data: options?.immediate && deps?.[0] ? {
+        data: deps[0] ? {
           id: 'user-1',
           participants: [
-            { userId: 'admin-1', name: 'Admin' },
-            { userId: 'user-1', name: 'Sam User' },
+            { userId: 'admin-1', name: 'Admin', role: 'admin' },
+            { userId: 'user-1', name: 'Sam User', role: 'client' },
           ],
           messages: [{
             id: 'message-1',
@@ -100,5 +131,52 @@ describe('Messages', () => {
 
     expect(await screen.findByText('Seen')).toBeInTheDocument();
     await waitFor(() => expect(refetchConversations).toHaveBeenCalled());
+  });
+
+  it('offers team members so staff can message an administrator', async () => {
+    render(<Messages />);
+
+    fireEvent.click(screen.getByTitle('New message'));
+
+    expect(screen.getByText('Customers')).toBeInTheDocument();
+    expect(screen.getByText('Team')).toBeInTheDocument();
+    expect(screen.getByText('Cara Customer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Team'));
+
+    expect(await screen.findByText('Ana Admin')).toBeInTheDocument();
+  });
+
+  it('marks staff conversations in the inbox', () => {
+    useApiData.mockImplementation((_fetch, deps = [], options = {}) => {
+      const defaultValue = options?.defaultValue;
+      if (defaultValue && !Array.isArray(defaultValue) && defaultValue.conversations) {
+        return {
+          data: {
+            conversations: [{
+              id: 'admin-2',
+              participants: [
+                { userId: 'admin-1', name: 'Admin', role: 'admin' },
+                { userId: 'admin-2', name: 'Ana Admin', role: 'admin' },
+              ],
+              lastMessage: 'Need a ruling',
+              lastMessageAt: '2026-11-08T09:00:00.000Z',
+              unread: false,
+              unreadCount: 0,
+            }],
+            unreadCount: 0,
+          },
+          error: null,
+          refetch: refetchConversations,
+        };
+      }
+      if (Array.isArray(defaultValue)) return { data: [], loading: false, error: null, refetch: vi.fn() };
+      return { data: null, error: null, refetch: vi.fn() };
+    });
+
+    render(<Messages />);
+
+    expect(screen.getByText('Ana Admin')).toBeInTheDocument();
+    expect(screen.getByText('Admin')).toBeInTheDocument();
   });
 });
