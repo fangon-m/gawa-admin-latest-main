@@ -1,11 +1,16 @@
+// @vitest-environment jsdom
+import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { formatCurrency } from '../utils/helpers';
 import JobDetail from './JobDetail';
 
+afterEach(cleanup);
+
 const mockNavigate = vi.fn();
 const useApiDataMock = vi.fn();
+const mockCan = vi.fn();
 
 const job = {
   jobPostId: 'job-uuid',
@@ -62,7 +67,7 @@ vi.mock('../context/NotificationContext', () => ({
 }));
 
 vi.mock('../utils/permissions', () => ({
-  usePermissions: () => ({ can: () => false }),
+  usePermissions: () => ({ can: (permission) => mockCan(permission) }),
 }));
 
 vi.mock('../utils/useApiData', () => ({
@@ -96,7 +101,9 @@ vi.mock('../components/common/ConfirmModal', () => ({
 describe('JobDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCan.mockReturnValue(false);
     job.flags = [];
+    job.jobStatus = 'in_progress';
     let callCount = 0;
     useApiDataMock.mockImplementation(() => {
       callCount += 1;
@@ -133,6 +140,21 @@ describe('JobDetail', () => {
     expect(screen.queryByText('Dismissed flag reason')).toBeNull();
     expect(screen.getByText('Open flag reason')).toBeTruthy();
     expect(screen.getByText('Resolved flag reason')).toBeTruthy();
+  });
+
+  it('offers a contextual report action for completed jobs and hides removal', () => {
+    mockCan.mockImplementation((permission) => ['flagJob', 'removeJob'].includes(permission));
+    job.jobStatus = 'completed';
+    job.flags = [{ flagId: 'open-1', status: 'open', reason: 'Work was not finished' }];
+
+    render(<JobDetail />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Report issue' }));
+
+    expect(screen.getByText('Report completion issue')).toBeInTheDocument();
+    expect(screen.getByText(/Disputed Completions/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove', exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove content' })).not.toBeInTheDocument();
   });
 
   it('renders a job timeline on the completions tab', () => {

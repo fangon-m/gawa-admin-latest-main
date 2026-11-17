@@ -9,6 +9,7 @@ import SearchBar from '../components/common/SearchBar';
 import Tabs from '../components/common/Tabs';
 import MessageThread from '../components/common/MessageThread';
 import MessageComposer from '../components/common/MessageComposer';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 import { Mail, SquarePen, X } from 'lucide-react';
 import styles from './Messages.module.css';
 
@@ -203,7 +204,7 @@ export default function Messages() {
                     <div>
                       <div>
                         {recipientsLoading
-                          ? 'Loading...'
+                          ? <LoadingSpinner size="sm" label="Loading..." />
                           : recipientScope === 'team'
                             ? 'No team members found'
                             : 'No verified users found'}

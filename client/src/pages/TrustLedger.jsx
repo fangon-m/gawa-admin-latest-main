@@ -184,6 +184,7 @@ export default function TrustLedger() {
           <DataTable
             columns={columns}
             data={filtered}
+            loading={loading}
             pageSize={10}
             onRowClick={(row) => row.userId && navigate(userEntityPath(row.userId))}
             emptyMessage={loading ? 'Loading...' : 'No trust ledger entries found.'}

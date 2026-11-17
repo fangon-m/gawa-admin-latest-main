@@ -101,6 +101,7 @@ export default function JobDetail() {
   const acceptedMatch = matches.find((m) => m.status === 'accepted');
   const completions = job.completions || [];
   const visibleFlags = (job.flags || []).filter((flag) => flag.status !== 'dismissed');
+  const isCompletedJob = ['completed', 'closed'].includes(job.jobStatus);
 
   const paymentMethods = (() => {
     const raw = job.paymentMethod;
@@ -287,8 +288,12 @@ export default function JobDetail() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.375rem' }}>
-              {can('flagJob') && <button className="btn btn-outline btn-sm" onClick={() => { setFlagReason(''); setFlagError(''); setShowFlagModal(true); }}>Flag</button>}
-              {can('removeJob') && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setShowRemoveModal(true); }}>Remove</button>}
+              {can('flagJob') && (
+                <button className="btn btn-outline btn-sm" onClick={() => { setFlagReason(''); setFlagError(''); setShowFlagModal(true); }}>
+                  {isCompletedJob ? 'Report issue' : 'Flag'}
+                </button>
+              )}
+              {can('removeJob') && !isCompletedJob && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setShowRemoveModal(true); }}>Remove</button>}
               <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Message</button>
             </div>
           </div>
@@ -375,7 +380,7 @@ export default function JobDetail() {
                         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                           <button className="btn btn-outline btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'dismiss' }); }}>Dismiss</button>
                           <button className="btn btn-accent btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'resolve' }); }}>Resolve</button>
-                          {can('removeJob') && <button className="btn btn-danger btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'remove' }); }}>Remove content</button>}
+                          {can('removeJob') && !isCompletedJob && <button className="btn btn-danger btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'remove' }); }}>Remove content</button>}
                         </div>
                       )}
                     </div>
@@ -517,12 +522,18 @@ export default function JobDetail() {
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <form onSubmit={handleFlagSubmit}>
               <div className="modal-header">
-                <h3>Flag Job Post</h3>
+                <h3>{isCompletedJob ? 'Report completion issue' : 'Flag Job Post'}</h3>
                 <button type="button" className="modal-close" onClick={() => !flagSubmitting && setShowFlagModal(false)}>×</button>
               </div>
               <div className="modal-body">
                 <p style={{ color: 'var(--color-text-muted)', lineHeight: 1.6, marginBottom: '0.75rem' }}>
-                  Flag <strong>{job.jobTitle}</strong> for moderation review. The job’s lifecycle status will not change.
+                  {isCompletedJob ? (
+                    <>
+                      Report a problem with the completed work on <strong>{job.jobTitle}</strong>. This is a moderation marker — the job stays Completed. For payment disputes use Disputed Completions; for severe cases use Escalated Jobs. The completed job cannot be removed, so its audit trail is preserved.
+                    </>
+                  ) : (
+                    <>Flag <strong>{job.jobTitle}</strong> for moderation review. The job’s lifecycle status will not change.</>
+                  )}
                 </p>
                 <label className="detail-label" htmlFor="flag-reason" style={{ display: 'block', marginBottom: '0.375rem' }}>Reason</label>
                 <textarea
@@ -541,7 +552,8 @@ export default function JobDetail() {
               <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowFlagModal(false)} disabled={flagSubmitting}>Cancel</button>
                 <button type="submit" className="btn btn-accent" disabled={flagSubmitting || !flagReason.trim()}>
-                  {flagSubmitting ? 'Flagging...' : 'Flag for review'}
+                  {flagSubmitting && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
+                  {flagSubmitting ? 'Submitting...' : isCompletedJob ? 'Report issue' : 'Flag for review'}
                 </button>
               </div>
             </form>
@@ -589,6 +601,7 @@ export default function JobDetail() {
                 disabled={removeSubmitting || removeConfirmText !== job?.jobTitle}
                 onClick={handleRemoveJob}
               >
+                {removeSubmitting && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
                 {removeSubmitting ? 'Removing...' : 'Remove Job Post'}
               </button>
             </div>

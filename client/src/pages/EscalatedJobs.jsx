@@ -197,6 +197,7 @@ export default function EscalatedJobs() {
           <DataTable
             columns={columns}
             data={filtered}
+            loading={loading}
             onRowClick={(row) => {
               setSelectedJob(row);
               setReviewTab('details');

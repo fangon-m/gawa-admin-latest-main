@@ -69,6 +69,7 @@ export default function Rentals() {
             onRowClick={(row) => { if (row.rentalId) navigate(rentalEntityPath(row.rentalId)); }}
             pageSize={10}
             emptyMessage={loading ? 'Loading...' : 'No rentals found.'}
+            loading={loading}
           />
         </div>
       </div>

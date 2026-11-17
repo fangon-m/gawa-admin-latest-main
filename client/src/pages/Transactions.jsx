@@ -82,7 +82,7 @@ export default function Transactions() {
           </div>
         </div>
         <div className="card-body p-0">
-          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.id) navigate(transactionEntityPath(row.id)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
+          <DataTable columns={columns} data={filtered} loading={loading} onRowClick={(row) => { if (row.id) navigate(transactionEntityPath(row.id)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No transactions found.'} />
         </div>
       </div>
     </div>

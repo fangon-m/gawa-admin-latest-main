@@ -319,6 +319,7 @@ export default function Settings() {
               }}
               disabled={profileSaving}
             >
+              {profileSaving && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
               {profileSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>

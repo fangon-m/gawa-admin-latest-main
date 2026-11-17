@@ -19,6 +19,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import Tabs from '../components/common/Tabs';
 import NotesPanel from '../components/common/NotesPanel';
 import ConfirmModal from '../components/common/ConfirmModal';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 import DataTable from '../components/common/DataTable';
 import { Mail, Phone, Ban, RotateCcw, Flag, MapPin, ClipboardCheck, RefreshCw, XCircle, Gavel } from 'lucide-react';
 
@@ -488,7 +489,7 @@ export default function UserDetail() {
               <div className="p-0">
                 {attemptsLoading ? (
                   <div className="empty-state" style={{ padding: '2rem' }}>
-                    <div className="empty-state-text">Loading attempt history...</div>
+                    <LoadingSpinner label="Loading attempt history..." />
                   </div>
                 ) : attemptHistory?.data?.length > 0 ? (
                   <DataTable

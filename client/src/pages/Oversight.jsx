@@ -11,6 +11,7 @@ import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import DetailPanel from '../components/common/DetailPanel';
+import LoadingSpinner from '../components/common/LoadingSpinner';
 import { X } from 'lucide-react';
 
 const oversightTabs = [
@@ -545,7 +546,7 @@ export default function Oversight() {
                 )}
                 {reportActionsError && <div className="alert alert-error" role="alert">{reportActionsError}</div>}
                 {reportActionsLoading ? (
-                  <p className="text-muted text-sm" role="status">Loading permitted actions...</p>
+                  <LoadingSpinner size="sm" label="Loading permitted actions..." className="loading-indicator--inline" />
                 ) : reportActions.length ? (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
                     {reportActions.map((availableAction) => (

@@ -311,6 +311,7 @@ export default function ListingDetail() {
               <div className="modal-footer">
                 <button type="button" className="btn btn-outline" onClick={() => setShowFlagModal(false)} disabled={flagSubmitting}>Cancel</button>
                 <button type="submit" className="btn btn-accent" disabled={flagSubmitting || !flagReason.trim()}>
+                  {flagSubmitting && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
                   {flagSubmitting ? 'Flagging...' : 'Flag for review'}
                 </button>
               </div>

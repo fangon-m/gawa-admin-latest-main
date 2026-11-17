@@ -427,7 +427,7 @@ export default function Jobs() {
               )}
             </div>
             <div className="card-body p-0">
-              <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.jobPostId) navigate(jobEntityPath(row.jobPostId)); }} pageSize={10} emptyMessage={jobsLoading ? 'Loading...' : 'No jobs found.'} />
+              <DataTable columns={columns} data={filtered} loading={jobsLoading} onRowClick={(row) => { if (row.jobPostId) navigate(jobEntityPath(row.jobPostId)); }} pageSize={10} emptyMessage={jobsLoading ? 'Loading...' : 'No jobs found.'} />
             </div>
           </div>
 

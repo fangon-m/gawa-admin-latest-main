@@ -116,6 +116,7 @@ export default function AcceptInvitePage() {
             )}
 
             <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading}>
+              {loading && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
               {loading ? 'Creating account…' : 'Set Password'}
             </button>
             <div style={{ textAlign: 'center', marginTop: 16 }}>

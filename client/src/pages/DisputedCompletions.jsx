@@ -165,6 +165,7 @@ export default function DisputedCompletions() {
           <DataTable
             columns={columns}
             data={filtered}
+            loading={loading}
             onRowClick={(row) => {
               setSelectedJob(row);
               setReviewTab('details');

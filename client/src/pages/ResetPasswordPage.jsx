@@ -121,6 +121,7 @@ export default function ResetPasswordPage() {
               </div>
             )}
             <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading}>
+              {loading && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
               {loading ? 'Sending...' : 'Send Reset Link'}
             </button>
             <div style={{ textAlign: 'center', marginTop: 16 }}>
@@ -163,6 +164,7 @@ export default function ResetPasswordPage() {
               </div>
             )}
             <button type="submit" className="btn btn-primary btn-lg w-full" disabled={loading}>
+              {loading && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
               {loading ? 'Resetting...' : 'Reset Password'}
             </button>
           </form>

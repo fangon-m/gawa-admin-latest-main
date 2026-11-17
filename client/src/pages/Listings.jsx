@@ -62,7 +62,7 @@ export default function Listings() {
           <FilterBar filters={filters} values={fil} onChange={(key, value) => setFil((p) => ({ ...p, [key]: value }))} />
         </div>
         <div className="card-body" style={{ padding: 0 }}>
-          <DataTable columns={columns} data={filtered} onRowClick={(row) => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No listings found.'} />
+          <DataTable columns={columns} data={filtered} loading={loading} onRowClick={(row) => { if (row.listingId) navigate(listingEntityPath(row.listingId)); }} pageSize={10} emptyMessage={loading ? 'Loading...' : 'No listings found.'} />
         </div>
       </div>
     </div>

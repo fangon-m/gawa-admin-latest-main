@@ -354,7 +354,34 @@ async function flagJobPost(req, res) {
 }
 
 async function removeJobPost(req, res) {
-  const { error } = await supabase.from('job_posts').delete().eq('job_post_id', req.params.id);
+  const jobId = req.params.id;
+
+  // A flagged job can be removed while it is still live, but once work is
+  // completed (or money has moved) the row is part of the audit trail and
+  // deleting it would orphan completion and payment history. Resolve or
+  // dismiss the flag instead.
+  const { data: job, error: jobError } = await supabase
+    .from('job_posts')
+    .select('job_status')
+    .eq('job_post_id', jobId)
+    .maybeSingle();
+  if (jobError) return sendError(res, jobError, { status: 500 });
+  if (!job) return res.status(404).json({ error: 'Job post not found' });
+
+  const { count: paymentCount, error: paymentError } = await supabase
+    .from('transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('related_type', 'job_post')
+    .eq('related_id', jobId);
+  if (paymentError) return sendError(res, paymentError, { status: 500 });
+
+  if (job.job_status === 'completed' || (paymentCount || 0) > 0) {
+    return res.status(409).json({
+      error: 'Completed jobs and jobs with payment history cannot be removed. Resolve the flag instead to preserve the audit trail.',
+    });
+  }
+
+  const { error } = await supabase.from('job_posts').delete().eq('job_post_id', jobId);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Job post removed' });
 }

@@ -87,6 +87,7 @@ export default function Users() {
           <DataTable
             columns={columns}
             data={filtered}
+            loading={loading}
             onRowClick={(row) => { if (row.id) navigate(userEntityPath(row.id)); }}
             pageSize={10}
             emptyMessage={loading ? 'Loading users...' : 'No users found matching your criteria.'}

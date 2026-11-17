@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Clipboard, ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 import Pagination from './Pagination';
+import LoadingSpinner from './LoadingSpinner';
 
 export default function DataTable({
   columns,
@@ -43,7 +44,7 @@ export default function DataTable({
   if (loading) {
     return (
       <div className="empty-state" style={{ padding: '2rem' }}>
-        <div className="empty-state-text">Loading...</div>
+        <LoadingSpinner label="Loading..." />
       </div>
     );
   }
