@@ -436,9 +436,15 @@ if (require.main === module) {
 module.exports = {
   app,
   startServer,
+  // The intervals above assume a process that stays alive. Serverless
+  // deployments (Vercel) have no such process, so the same work is exposed as
+  // one-shot ticks that a cron endpoint can invoke.
+  autoProcessExpiredReviews,
+  autoResolveExpiredSuspensions,
+  runModerationSweepTick,
+  runArchiveReconcile,
   scheduleAutoProcessExpiredReviews,
   scheduleAutoResolveExpiredSuspensions,
   scheduleModerationWarningSweep,
   scheduleArchiveReconcile,
-  runModerationSweepTick,
 };

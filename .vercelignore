@@ -1,0 +1,11 @@
+node_modules
+dist
+client/dist
+.git
+docs
+md files
+.freebuff
+coverage
+*.log
+*.test.js
+*.test.jsx

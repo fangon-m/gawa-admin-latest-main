@@ -10,6 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
+    "deploy:vercel": "vercel deploy --prod",
     "start": "node scripts/run-server.js production",
     "test": "vitest run && jest",
     "test:server": "jest",
