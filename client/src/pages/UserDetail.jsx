@@ -295,7 +295,7 @@ export default function UserDetail() {
             <button key={btn.action} className="btn btn-outline btn-sm" onClick={() => setShowConfirm(btn.action)}>{btn.label}</button>
           ))}
           {!isArchived && (
-            <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Send Message</button>
+            <button className="btn btn-accent btn-sm" onClick={() => navigate(`/messages/${user.id}`)}>Send Message</button>
           )}
         </div>
       </div>

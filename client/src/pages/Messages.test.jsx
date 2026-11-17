@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup } from '@testing-library/react';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import Messages from './Messages';
 import { useApiData } from '../utils/useApiData';
 
@@ -78,6 +78,25 @@ vi.mock('../components/common/MessageComposer', () => ({
   default: () => <div>Composer</div>,
 }));
 
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}</div>;
+}
+
+// Renders the page with the same two routes App.jsx registers, so deep links
+// and in-page navigation exercise real routing instead of a mock.
+function renderMessages(initialPath = '/messages') {
+  return render(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <LocationProbe />
+      <Routes>
+        <Route path="/messages" element={<Messages />} />
+        <Route path="/messages/:conversationId" element={<Messages />} />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
 describe('Messages', () => {
   beforeEach(() => {
     refetchConversations.mockReset();
@@ -122,7 +141,7 @@ describe('Messages', () => {
   });
 
   it('shows unread counts and refreshes the inbox when a conversation is opened', async () => {
-    render(<Messages />);
+    renderMessages();
 
     expect(screen.getByText('3 unread')).toBeInTheDocument();
     expect(screen.getByLabelText('3 unread messages')).toHaveTextContent('3');
@@ -130,11 +149,22 @@ describe('Messages', () => {
     fireEvent.click(screen.getByText('Sam User'));
 
     expect(await screen.findByText('Seen')).toBeInTheDocument();
+    // The open thread is encoded in the URL so it can be linked and refreshed.
+    expect(screen.getByTestId('location')).toHaveTextContent('/messages/user-1');
     await waitFor(() => expect(refetchConversations).toHaveBeenCalled());
   });
 
+  it('opens the exact thread from a /messages/:userId deep link', () => {
+    renderMessages('/messages/user-1');
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/messages/user-1');
+    expect(screen.getByText('Reply')).toBeInTheDocument();
+    expect(screen.getByText('Seen')).toBeInTheDocument();
+    expect(screen.getByText('Composer')).toBeInTheDocument();
+  });
+
   it('offers team members so staff can message an administrator', async () => {
-    render(<Messages />);
+    renderMessages();
 
     fireEvent.click(screen.getByTitle('New message'));
 
@@ -174,7 +204,7 @@ describe('Messages', () => {
       return { data: null, error: null, refetch: vi.fn() };
     });
 
-    render(<Messages />);
+    renderMessages();
 
     expect(screen.getByText('Ana Admin')).toBeInTheDocument();
     expect(screen.getByText('Admin')).toBeInTheDocument();

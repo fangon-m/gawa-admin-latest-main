@@ -95,6 +95,7 @@ export default function App() {
           <Route path="/oversight" element={<ProtectedRoute requiredPermission="viewOversight"><Oversight /></ProtectedRoute>} />
           {can('viewGawaPoints') && <Route path="/gawa-points" element={<GawaPoints />} />}
           <Route path="/messages" element={<ProtectedRoute requiredPermission="viewMessages"><Messages /></ProtectedRoute>} />
+          <Route path="/messages/:conversationId" element={<ProtectedRoute requiredPermission="viewMessages"><Messages /></ProtectedRoute>} />
           <Route path="/assessments" element={<ProtectedRoute requiredPermission="viewAssessments"><Assessments /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute requiredPermission="viewSettings"><Settings /></ProtectedRoute>} />
           <Route path="/support" element={<ProtectedRoute requiredPermission="viewSupportDashboard"><SupportDashboard /></ProtectedRoute>} />

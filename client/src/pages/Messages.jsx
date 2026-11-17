@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApiData, useMutation } from '../utils/useApiData';
 import { listConversations, getConversation, sendMessage, listRecipients } from '../api/messages';
@@ -23,13 +24,19 @@ function getRequestError(error, fallback) {
 
 export default function Messages() {
   const { user: currentUser } = useAuth();
+  const { conversationId } = useParams();
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [activeConv, setActiveConv] = useState(null);
   const [showNewMessage, setShowNewMessage] = useState(false);
   const [newSearch, setNewSearch] = useState('');
   const [recipientScope, setRecipientScope] = useState('customers');
   const [messageError, setMessageError] = useState('');
   const [sending, setSending] = useState(false);
+
+  // The URL is the source of truth for the open thread, so /messages/:userId
+  // can be linked to directly (User Detail's "Send Message") and survives a
+  // refresh or the browser's back/forward buttons.
+  const activeConv = conversationId || null;
 
   const currentUserId = currentUser?.id;
 
@@ -103,16 +110,26 @@ export default function Messages() {
     return list;
   }, [showNewMessage, newSearch, recipients, currentUserId]);
 
-  const otherParticipant = activeData
-    ? (activeData.participants || []).find((p) => p.userId !== currentUserId)
+  // Ignore data for a thread other than the one in the URL: useApiData keeps
+  // the previous result while the next request is in flight.
+  const thread = activeConv && activeData?.id === activeConv ? activeData : null;
+
+  const otherParticipant = thread
+    ? (thread.participants || []).find((p) => p.userId !== currentUserId)
     : null;
+
+  const openConversation = useCallback((id) => {
+    if (!id) return;
+    setMessageError('');
+    navigate(`/messages/${id}`);
+  }, [navigate]);
 
   const handleStartConversation = useCallback((selectedUser) => {
     setMessageError('');
-    setActiveConv(selectedUser.id);
+    openConversation(selectedUser.id);
     setShowNewMessage(false);
     setNewSearch('');
-  }, []);
+  }, [openConversation]);
 
   const handleSend = async (text) => {
     if (!activeConv || sending) return false;
@@ -235,7 +252,7 @@ export default function Messages() {
                     <div
                       key={conv.id}
                       className={`conversation-item${activeConv === conv.id ? ' active' : ''}${unreadCount > 0 ? ' unread' : ''}`}
-                      onClick={() => setActiveConv(conv.id)}
+                      onClick={() => openConversation(conv.id)}
                     >
                       <div className="conversation-avatar">{getInitials(other?.name || '?')}</div>
                       <div className="conversation-info">
@@ -265,7 +282,7 @@ export default function Messages() {
           )}
         </div>
         <div className="messages-thread">
-          {!activeData ? (
+          {!thread ? (
             <div className="empty-state" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div>
                 <div className="empty-state-icon"><Mail size={40} /></div>
@@ -283,7 +300,7 @@ export default function Messages() {
                 </div>
               </div>
               <div className="messages-thread-body">
-                <MessageThread messages={activeData.messages || []} currentUserId={currentUserId} />
+                <MessageThread messages={thread.messages || []} currentUserId={currentUserId} />
               </div>
               {otherParticipant?.isArchived ? (
                 <div style={{ padding: '1rem', textAlign: 'center', fontSize: 13, color: 'var(--color-text-muted)', borderTop: '1px solid var(--color-border)' }}>
