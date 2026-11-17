@@ -20,7 +20,7 @@ import AssessmentQuestionImport from '../components/assessments/AssessmentQuesti
 import AssessmentAttemptsTable from '../components/assessments/AssessmentAttemptsTable';
 import { focusAssessmentEditor, updateAssessmentEditHistory } from '../utils/assessmentEditor';
 import { Plus, Pencil, Trash2, X, Save, ClipboardCheck, BookOpen, ChevronLeft, Briefcase } from 'lucide-react';
-import * as lucideIcons from 'lucide-react';
+import { SkillIcon, resolveLucideIcon, isImageIcon } from '../utils/skillIcon';
 import styles from './Assessments.module.css';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'];
@@ -32,13 +32,13 @@ const QUESTION_TYPES = [
 
 const SKILL_ICON_OPTIONS = [
   'Zap', 'Wrench', 'Hammer', 'HardHat', 'Paintbrush', 'Ruler', 'Saw', 'Drill',
-  'Truck', 'Car', 'Bike', 'Leaf', 'Trees', 'Flower2', 'Shovel', 'Drill',
+  'Truck', 'Car', 'Bike', 'Leaf', 'Trees', 'Flower2', 'Shovel', 'BrushCleaning',
   'Briefcase', 'ChefHat', 'Scissors', 'Camera', 'Monitor', 'Smartphone', 'Wifi',
   'Plug', 'Lightbulb', 'Droplets', 'Flame', 'Snowflake', 'ShieldCheck', 'Star',
   'Heart', 'Home', 'Building2', 'Store', 'Factory', 'Warehouse', 'Package',
 ]
   .filter((v, i, a) => a.indexOf(v) === i)
-  .map((name) => ({ name, Icon: lucideIcons[name] }))
+  .map((name) => ({ name, Icon: resolveLucideIcon(name) }))
   .filter((o) => o.Icon);
 
 export default function Jobs() {
@@ -456,24 +456,16 @@ export default function Jobs() {
                         onClick={() => setShowIconPicker((v) => !v)}
                         style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', textAlign: 'left' }}
                       >
-                        {(() => {
-                          const opt = SKILL_ICON_OPTIONS.find((o) => o.name === catForm.icon);
-                          if (opt) { const Icon = opt.Icon; return <><Icon size={18} style={{ color: 'var(--color-accent)' }} /> <span>{opt.name}</span></>; }
-                          if (catForm.icon) {
-                            const isImg = /^https?:\/\//i.test(catForm.icon) || catForm.icon.startsWith('/') || catForm.icon.startsWith('data:');
-                            return (
-                              <>
-                                {isImg ? (
-                                  <img src={catForm.icon} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />
-                                ) : (
-                                  <span style={{ fontSize: 18 }}>{catForm.icon}</span>
-                                )}
-                                <span style={{ color: 'var(--color-text-muted)' }}>{isImg ? 'Custom icon' : catForm.icon}</span>
-                              </>
-                            );
-                          }
-                          return <span style={{ color: 'var(--color-text-muted)' }}>Choose icon...</span>;
-                        })()}
+                        {catForm.icon ? (
+                          <>
+                            <SkillIcon icon={catForm.icon} size={18} />
+                            <span style={{ color: 'var(--color-text-muted)' }}>
+                              {isImageIcon(catForm.icon) ? 'Custom icon' : catForm.icon}
+                            </span>
+                          </>
+                        ) : (
+                          <span style={{ color: 'var(--color-text-muted)' }}>Choose icon...</span>
+                        )}
                       </button>
                       {showIconPicker && (
                         <>
@@ -587,21 +579,7 @@ export default function Jobs() {
                     {skillAnalytics.map((skill) => (
                       <div key={skill.skillId} className={styles.categoryCard} onClick={() => { setSelectedCategory(skill); setQuestionAssessmentId(''); setSelectedQuestionIds([]); }}>
                         <div className={styles.categoryCardIcon}>
-                          {skill.icon ? (
-                            /^https?:\/\//i.test(skill.icon) || skill.icon.startsWith('/') || skill.icon.startsWith('data:') ? (
-                              <img src={skill.icon} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
-                            ) : (() => {
-                              const normalized = skill.icon.toLowerCase().replace(/[-_\s]/g, '');
-                              const lucideMatch = Object.keys(lucideIcons).find(k => k.toLowerCase() === normalized);
-                              if (lucideMatch) {
-                                const Icon = lucideIcons[lucideMatch];
-                                return <Icon size={24} />;
-                              }
-                              return <span style={{ fontSize: 24 }} role="img" aria-label={skill.icon}>{skill.icon}</span>;
-                            })()
-                          ) : (
-                            <BookOpen size={24} />
-                          )}
+                          <SkillIcon icon={skill.icon} />
                         </div>
                         <div className={styles.categoryCardName}>{skill.skillName}</div>
                         <div className={styles.categoryCardDesc}>{skill.description}</div>

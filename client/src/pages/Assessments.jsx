@@ -14,8 +14,8 @@ import ConfirmModal from '../components/common/ConfirmModal';
 import Tabs from '../components/common/Tabs';
 import DataTable from '../components/common/DataTable';
 import AssessmentQuestionImport from '../components/assessments/AssessmentQuestionImport';
-import { Plus, Pencil, Trash2, X, Save, ChevronLeft, ClipboardCheck, BookOpen, Zap, Wrench, Hammer } from 'lucide-react';
-import * as lucideIcons from 'lucide-react';
+import { ChevronLeft, ClipboardCheck, BookOpen } from 'lucide-react';
+import { SkillIcon } from '../utils/skillIcon';
 import styles from './Assessments.module.css';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'];
@@ -193,21 +193,6 @@ export default function Assessments() {
 
   const questionTypeLabel = (type) => QUESTION_TYPES.find((t) => t.value === type)?.label || type;
 
-  const renderSkillIcon = (icon) => {
-    if (!icon) return <BookOpen size={24} />;
-    const trimmed = icon.trim();
-    if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('/') || trimmed.startsWith('data:')) {
-      return <img src={trimmed} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />;
-    }
-    const normalized = trimmed.toLowerCase().replace(/[-_\s]/g, '');
-    const lucideMatch = Object.keys(lucideIcons).find(k => k.toLowerCase() === normalized);
-    if (lucideMatch && lucideIcons[lucideMatch]) {
-      const Icon = lucideIcons[lucideMatch];
-      return <Icon size={24} />;
-    }
-    return <span role="img" aria-label={icon} style={{ fontSize: 24 }}>{icon}</span>;
-  };
-
   if (!selectedSkill) {
     return (
       <div>
@@ -215,7 +200,7 @@ export default function Assessments() {
         <div className={styles.categoryGrid}>
           {activeSkills.map((skill) => (
             <div key={skill.skillId} className={styles.categoryCard} onClick={() => setSelectedSkill(skill)}>
-              <div className={styles.categoryCardIcon}>{renderSkillIcon(skill.icon)}</div>
+              <div className={styles.categoryCardIcon}><SkillIcon icon={skill.icon} /></div>
               <div className={styles.categoryCardName}>{skill.skillName}</div>
               <div className={styles.categoryCardDesc}>{skill.description}</div>
               <div className={styles.categoryCardMeta}>
