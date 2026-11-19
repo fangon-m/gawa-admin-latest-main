@@ -116,7 +116,7 @@ export default function Oversight() {
   const [reportActionIdempotencyKey, setReportActionIdempotencyKey] = useState('');
   const [exportStartDate, setExportStartDate] = useState('');
   const [exportEndDate, setExportEndDate] = useState('');
-  const [exportReportType, setExportReportType] = useState('all');
+  const [exportStatus, setExportStatus] = useState('all');
   const [exportError, setExportError] = useState('');
   const reportActionButtonRef = useRef(null);
 
@@ -290,25 +290,31 @@ export default function Oversight() {
     const allowed = tab === 'resolved'
       ? RESOLVED_REPORT_STATUSES
       : tab === 'open' ? OPEN_REPORT_STATUSES : null;
-    const reportsByType = exportReportType === 'all'
+    const reportsByStatus = exportStatus === 'all'
       ? allReports
-      : allReports.filter(report => report.issueType === exportReportType);
+      : allReports.filter(report => report.status === exportStatus);
     const reportsInDateRange = exportStartDate && exportEndDate && exportStartDate <= exportEndDate
-      ? filterIncidentReports(reportsByType, {
+      ? filterIncidentReports(reportsByStatus, {
         startDate: exportStartDate,
         endDate: exportEndDate,
         reportType: 'all',
       })
-      : reportsByType;
+      : reportsByStatus;
     return allowed
       ? reportsInDateRange.filter(report => allowed.includes(report.status))
       : reportsInDateRange;
-  }, [allReports, tab, exportStartDate, exportEndDate, exportReportType]);
+  }, [allReports, tab, exportStartDate, exportEndDate, exportStatus]);
 
-  const reportTypes = useMemo(
-    () => [...new Set(allReports.map((report) => report.issueType).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+  const reportStatuses = useMemo(
+    () => [...new Set(allReports.map((report) => report.status).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [allReports]
   );
+
+  // Status is the only optional filter now: the tabs cover the broad open /
+  // resolved grouping, while this select can narrow to a specific status.
+  const statusFilterLabel = exportStatus === 'all'
+    ? (tab === 'all' ? 'all statuses' : `${tab} reports`)
+    : `${exportStatus} reports`;
 
   const handleExport = () => {
     setExportError('');
@@ -320,10 +326,11 @@ export default function Oversight() {
     const reports = filterIncidentReports(allReports, {
       startDate: exportStartDate,
       endDate: exportEndDate,
-      reportType: exportReportType,
+      reportType: 'all',
+      status: exportStatus,
     });
     if (reports.length === 0) {
-      setExportError('No incident reports match the selected date range and report type.');
+      setExportError('No incident reports match the selected date range and status.');
       return;
     }
 
@@ -331,11 +338,11 @@ export default function Oversight() {
     const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const typeLabel = exportReportType === 'all'
-      ? 'all-types'
-      : exportReportType.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const statusLabel = exportStatus === 'all'
+      ? 'all-statuses'
+      : exportStatus.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     link.href = url;
-    link.download = `incident-reports_${exportStartDate}_to_${exportEndDate}_${typeLabel || 'type'}.csv`;
+    link.download = `incident-reports_${exportStartDate}_to_${exportEndDate}_${statusLabel || 'status'}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -400,18 +407,14 @@ export default function Oversight() {
                   />
                 </label>
                 <label className="form-label" style={{ minWidth: 180 }}>
-                  Report Type
+                  Status
                   <select
                     className="form-input"
-                    value={exportReportType}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setExportReportType(value);
-                      if (value === 'all') setTab('all');
-                    }}
+                    value={exportStatus}
+                    onChange={(event) => setExportStatus(event.target.value)}
                   >
-                    <option value="all">All types</option>
-                    {reportTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                    <option value="all">All statuses</option>
+                    {reportStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
                   </select>
                 </label>
                 <button
@@ -428,10 +431,10 @@ export default function Oversight() {
             <div className="card-body p-0">
               <div className="card-body text-muted text-sm">
                 {exportStartDate && exportEndDate && exportStartDate <= exportEndDate
-                  ? `Showing ${tab === 'all' ? 'all statuses' : `${tab} reports`} for ${exportReportType === 'all' ? 'all types' : exportReportType}, filed from ${exportStartDate} through ${exportEndDate} (inclusive).`
+                  ? `Showing ${statusFilterLabel}, filed from ${exportStartDate} through ${exportEndDate} (inclusive).`
                   : exportStartDate || exportEndDate
                     ? 'Choose both dates to filter the table.'
-                    : `Showing ${tab === 'all' ? 'all statuses' : `${tab} reports`} for ${exportReportType === 'all' ? 'all types' : exportReportType}, from all dates.`}
+                    : `Showing ${statusFilterLabel}, from all dates.`}
               </div>
               <DataTable
                 columns={issueReportColumns}

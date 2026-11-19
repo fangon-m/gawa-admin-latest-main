@@ -16,6 +16,25 @@ describe('incident report export', () => {
     })).toEqual([reports[0]]);
   });
 
+  it('filters reports by the selected status when one is supplied', () => {
+    const reports = [
+      { issueType: 'spam', status: 'open', createdAt: '2026-01-01T12:00:00.000Z' },
+      { issueType: 'spam', status: 'resolved', createdAt: '2026-01-02T12:00:00.000Z' },
+      { issueType: 'spam', status: 'under_review', createdAt: '2026-01-03T12:00:00.000Z' },
+    ];
+
+    expect(filterIncidentReports(reports, {
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+      status: 'resolved',
+    })).toEqual([reports[1]]);
+    expect(filterIncidentReports(reports, {
+      startDate: '2026-01-01',
+      endDate: '2026-01-31',
+      status: 'all',
+    })).toEqual(reports);
+  });
+
   it('includes the complete selected calendar days and rejects a reversed range', () => {
     const firstDay = new Date(2026, 0, 1, 0, 0, 0).toISOString();
     const lastDay = new Date(2026, 0, 31, 23, 59, 59, 999).toISOString();

@@ -17,7 +17,7 @@ function csvCell(value) {
   return `"${safeText.replace(/"/g, '""')}"`;
 }
 
-export function filterIncidentReports(reports, { startDate, endDate, reportType }) {
+export function filterIncidentReports(reports, { startDate, endDate, reportType = 'all', status = 'all' }) {
   if (!startDate || !endDate || startDate > endDate) return [];
 
   return reports.filter((report) => {
@@ -31,7 +31,8 @@ export function filterIncidentReports(reports, { startDate, endDate, reportType 
 
     return localDate >= startDate
       && localDate <= endDate
-      && (reportType === 'all' || report.issueType === reportType);
+      && (reportType === 'all' || report.issueType === reportType)
+      && (status === 'all' || report.status === status);
   });
 }
 
