@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { listAll as listAllReports, getActions as getReportActions, executeAction as executeReportAction } from '../api/reports';
-import { formatDateTime, formatEntityIdNumeric, timeAgo } from '../utils/helpers';
+import { formatDateTime, formatEntityIdNumeric, timeAgo, userEntityPath } from '../utils/helpers';
 import { createIncidentReportCsv, filterIncidentReports } from '../utils/incidentReportExport';
 import Header from '../components/layout/Header';
 import Tabs from '../components/common/Tabs';
@@ -36,9 +37,16 @@ function formatRemaining(seconds) {
   return `${hours}h ${minutes}m`;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const attachmentSrc = (path, token) => token
+  ? `${API_BASE}/reports/attachments?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
+  : null;
+
 const issueReportColumns = [
   { key: 'reporterName', label: 'Reporter' },
-  { key: 'reportedName', label: 'Reported User', render: (row) => row.reportedName || '—' },
+  { key: 'reportedName', label: 'Reported User', render: (row) => row.reportedUserId
+    ? <Link className="cell-link" to={userEntityPath(row.reportedUserId)} onClick={(event) => event.stopPropagation()}>{row.reportedName || '—'}</Link>
+    : (row.reportedName || '—') },
   { key: 'targetType', label: 'Target Type', render: (row) => <StatusBadge status={row.targetType} /> },
   { key: 'targetId', label: 'Target ID', render: (row) => (
     <span className="text-xs text-muted font-mono" title={row.targetId}>
@@ -47,7 +55,34 @@ const issueReportColumns = [
   ) },
   { key: 'issueType', label: 'Incident Type' },
   { key: 'comment', label: 'Comment', render: (row) => <span className="truncate" style={{ maxWidth: 260, display: 'inline-block' }}>{row.comment}</span> },
-  { key: 'attachmentPaths', label: 'Attachments', render: (row) => row.attachmentPaths?.length || 0 },
+  { key: 'attachmentPaths', label: 'Attachments', render: (row) => {
+    const paths = row.attachmentPaths || [];
+    if (!paths.length) return '-';
+    return (
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {paths.slice(0, 3).map((path, index) => {
+          const fallback = (row.attachmentUrls || [])[index] || path;
+          const proxied = attachmentSrc(path, (row.attachmentTokens || [])[index]);
+          return (
+            <a key={`${path}-${index}`} href={fallback} target="_blank" rel="noopener noreferrer" title="Open report evidence" onClick={(event) => event.stopPropagation()}>
+              <img
+                src={proxied || fallback}
+                alt={`Report evidence ${index + 1}`}
+                style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }}
+                onError={(event) => {
+                  const image = event.currentTarget;
+                  if (image.dataset.fallbackApplied) return;
+                  image.dataset.fallbackApplied = '1';
+                  image.src = fallback;
+                }}
+              />
+            </a>
+          );
+        })}
+        {paths.length > 3 && <span className="text-xs text-muted">+{paths.length - 3}</span>}
+      </div>
+    );
+  } },
   { key: 'status', label: 'Status', render: (row) => <StatusBadge status={row.status} /> },
   { key: 'createdAt', label: 'Filed', render: (row) => timeAgo(row.createdAt) },
 ];
@@ -241,7 +276,11 @@ export default function Oversight() {
       );
     } catch (error) {
       const errorCode = error?.error;
-      setReportActionError(issueReportActionErrors[errorCode] || 'The action failed. Please try again.');
+      const detail = error?.message || errorCode;
+      setReportActionError(
+        issueReportActionErrors[errorCode]
+        || (detail ? `The action failed: ${detail}` : 'The action failed. Please try again.')
+      );
       setReportActionDeliveryPending(error?.warningRecorded === true);
       setReportActionSubmitting(false);
       if (error?.status === 409) {
@@ -347,6 +386,24 @@ export default function Oversight() {
     link.click();
     link.remove();
     window.setTimeout(() => window.URL.revokeObjectURL(url), 0);
+  };
+
+  const showMissingTargetResolution = !reportActionsLoading && !!reportActionTarget
+    && !reportActionTarget.exists && !reportActions.some(action => action.id === 'resolve_target_unavailable');
+
+  const handleOpenMissingTargetResolution = () => {
+    reportActionButtonRef.current = null;
+    setReportActionPrompt({
+      id: 'resolve_target_unavailable',
+      description: 'Resolve this report because its reported target no longer exists.',
+      requiresReason: true,
+      allowed: true,
+    });
+    setReportActionReason('');
+    setReportActionError('');
+    setReportActionIdempotencyKey('');
+    setReportActionDeliveryPending(false);
+    setReportActionMessage('');
   };
 
   const warningView = useMemo(() => {
@@ -462,9 +519,7 @@ export default function Oversight() {
                 <h4>Incident Report</h4>
                 <div className="detail-field"><div className="detail-label">Report ID</div><div className="detail-value text-xs text-muted font-mono">{selectedReport.id}</div></div>
                 <div className="detail-field"><div className="detail-label">Reporter</div><div className="detail-value">{selectedReport.reporterName}</div></div>
-                {selectedReport.targetType === 'profile' && (
-                  <div className="detail-field"><div className="detail-label">Reported User</div><div className="detail-value">{selectedReport.reportedName || selectedReport.targetId}</div></div>
-                )}
+                <div className="detail-field"><div className="detail-label">Reported User</div><div className="detail-value">{selectedReport.reportedName || 'Unknown user'}</div></div>
                 <div className="detail-field"><div className="detail-label">Target Type</div><div className="detail-value">{selectedReport.targetType}</div></div>
                 <div className="detail-field">
                   <div className="detail-label">Target ID</div>
@@ -481,9 +536,29 @@ export default function Oversight() {
                 <div className="detail-field">
                   <div className="detail-label">Attachments</div>
                   <div className="detail-value">
-                    {selectedReport.attachmentPaths?.length
-                      ? selectedReport.attachmentPaths.map((path, index) => <div key={`${path}-${index}`}>{path}</div>)
-                      : 'None'}
+                    {selectedReport.attachmentPaths?.length ? (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {selectedReport.attachmentPaths.map((path, index) => {
+                          const fallback = (selectedReport.attachmentUrls || [])[index] || path;
+                          const proxied = attachmentSrc(path, (selectedReport.attachmentTokens || [])[index]);
+                          return (
+                            <a key={`${path}-${index}`} href={fallback} target="_blank" rel="noopener noreferrer" title="Open report evidence">
+                              <img
+                                src={proxied || fallback}
+                                alt={`Report evidence ${index + 1}`}
+                                style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--color-border)' }}
+                                onError={(event) => {
+                                  const image = event.currentTarget;
+                                  if (image.dataset.fallbackApplied) return;
+                                  image.dataset.fallbackApplied = '1';
+                                  image.src = fallback;
+                                }}
+                              />
+                            </a>
+                          );
+                        })}
+                      </div>
+                    ) : 'None'}
                   </div>
                 </div>
               </div>
@@ -586,6 +661,16 @@ export default function Oversight() {
                   </div>
                 ) : (
                   !reportActionsError && <p className="text-muted text-sm">No actions are currently available for this report.</p>
+                )}
+                {showMissingTargetResolution && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-outline"
+                    title="Resolve this report because its reported target no longer exists."
+                    onClick={handleOpenMissingTargetResolution}
+                  >
+                    Resolve — target unavailable
+                  </button>
                 )}
                 {reportActions.map(availableAction => (
                   <p

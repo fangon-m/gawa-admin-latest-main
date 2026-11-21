@@ -10,7 +10,7 @@ import FilterBar from '../components/common/FilterBar';
 import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import StatCard from '../components/common/StatCard';
-import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, PiggyBank, Lock, Clock } from 'lucide-react';
+import { Landmark, ArrowDownToLine, ArrowUpFromLine, RotateCcw, PiggyBank, Lock, Clock, X } from 'lucide-react';
 
 const typeFilters = [
   { key: 'type', label: 'Type', placeholder: 'All Types', options: [
@@ -33,8 +33,14 @@ export default function TrustLedger() {
   const [fil, setFil] = useState({ type: '', status: '' });
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [releaseTarget, setReleaseTarget] = useState(null);
+  const [recipient, setRecipient] = useState('');
+  const [releaseReason, setReleaseReason] = useState('');
+  const [releaseError, setReleaseError] = useState('');
+  const [releasing, setReleasing] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
 
-  const { data: ledgerData, loading, error } = useApiData(async () => {
+  const { data: ledgerData, loading, error, refetch } = useApiData(async () => {
     const [summaryResponse, entriesResponse] = await Promise.all([
       get('/trust-ledger/summary'),
       get('/trust-ledger'),
@@ -103,13 +109,38 @@ export default function TrustLedger() {
     },
   ];
 
-  const handleRelease = async (id) => {
+  const openRelease = (row) => {
+    setReleaseTarget(row);
+    setRecipient(row.suggestedRecipient || '');
+    setReleaseReason('');
+    setReleaseError('');
+    setPreviewImage(null);
+  };
+
+  const closeRelease = () => {
+    if (releasing) return;
+    setReleaseTarget(null);
+    setPreviewImage(null);
+  };
+
+  const needsReason = !!releaseTarget &&
+    (!releaseTarget.suggestedRecipient || recipient !== releaseTarget.suggestedRecipient);
+
+  const handleReleaseSubmit = async (event) => {
+    event.preventDefault();
+    if (!releaseTarget || !recipient || (needsReason && !releaseReason.trim())) return;
+    setReleasing(true);
+    setReleaseError('');
     try {
-      await post(`/trust-ledger/${id}/release`);
-      window.location.reload();
+      await post(`/trust-ledger/${releaseTarget.releaseTransactionId}/release`, {
+        recipient,
+        reason: releaseReason.trim(),
+      });
+      closeRelease();
+      refetch();
     } catch (err) {
-      console.error('Failed to release funds:', err);
-      alert('Failed to release funds. Please try again.');
+      setReleaseError(err?.error || err?.message || 'Failed to release funds. Please try again.');
+      setReleasing(false);
     }
   };
 
@@ -141,13 +172,26 @@ export default function TrustLedger() {
       },
     },
     {
+      key: 'releasedTo', label: 'Released To', render: (row) => {
+        if (!row.releasedTo) return '-';
+        return (
+          <div>
+            <div style={{ fontWeight: 600 }}>{row.releasedToName || '-'}</div>
+            <div style={{ fontSize: '0.6875rem', color: 'var(--color-text-muted)' }}>
+              {row.releasedTo === 'owner' ? 'Owner' : 'Client (renter)'}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
       key: 'releaseDate', label: 'Release Date', render: (row) => {
         if (row.releaseDate) return formatDate(row.releaseDate);
         if (row.releaseTransactionId && (row.status === 'pending' || row.status === 'held')) {
           return (
             <button
               className="btn btn-sm btn-accent"
-              onClick={(e) => { e.stopPropagation(); handleRelease(row.releaseTransactionId); }}
+              onClick={(e) => { e.stopPropagation(); openRelease(row); }}
               style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
             >
               Release
@@ -191,6 +235,128 @@ export default function TrustLedger() {
           />
         </div>
       </div>
+
+      {releaseTarget && (
+        <div className="modal-overlay" onClick={closeRelease}>
+          <div className="modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 560 }}>
+            <form onSubmit={handleReleaseSubmit}>
+              <div className="modal-header">
+                <h3>Release equipment security deposit</h3>
+                <button type="button" className="modal-close" onClick={closeRelease} disabled={releasing}>
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="modal-body">
+                <div className="detail-grid" style={{ marginBottom: '1rem' }}>
+                  <div className="detail-field"><div className="detail-label">Amount</div><div className="detail-value">{formatCurrency(releaseTarget.amount)}</div></div>
+                  <div className="detail-field"><div className="detail-label">Client (renter)</div><div className="detail-value">{releaseTarget.userName}</div></div>
+                  <div className="detail-field"><div className="detail-label">Owner</div><div className="detail-value">{releaseTarget.ownerName || '-'}</div></div>
+                  <div className="detail-field">
+                    <div className="detail-label">Return condition</div>
+                    <div className="detail-value">
+                      {releaseTarget.returnCondition
+                        ? <StatusBadge
+                            status={releaseTarget.returnCondition === 'damaged' ? 'flagged' : 'active'}
+                            label={releaseTarget.returnCondition === 'damaged' ? 'Damaged' : 'No damage'}
+                          />
+                        : <span style={{ color: 'var(--color-text-muted)' }}>Not recorded</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="detail-label mb-2">Supporting return images</div>
+                {releaseTarget.returnDamageImagesUrl?.length ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: '1rem' }}>
+                    {releaseTarget.returnDamageImagesUrl.map((url, index) => (
+                      <button
+                        key={`${url}-${index}`}
+                        type="button"
+                        title="View supporting image"
+                        onClick={() => setPreviewImage(url)}
+                        style={{ padding: 0, border: '1px solid var(--color-border)', borderRadius: 6, background: 'none', cursor: 'pointer' }}
+                      >
+                        <img src={url} alt={`Return evidence ${index + 1}`} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6 }} />
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted" style={{ marginBottom: '1rem' }}>No supporting images were submitted.</p>
+                )}
+
+                <div className="detail-label mb-2">Release to</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {[
+                    { value: 'renter', label: 'Client (renter)', hint: 'Refund the deposit — the item was returned with no damage' },
+                    { value: 'owner', label: 'Owner', hint: 'Pay the owner — the item was returned damaged' },
+                  ].map((option) => (
+                    <label
+                      key={option.value}
+                      style={{
+                        display: 'flex', gap: 8, alignItems: 'flex-start', padding: 10, cursor: 'pointer',
+                        border: `1px solid ${recipient === option.value ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                        borderRadius: 8,
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="deposit-recipient"
+                        value={option.value}
+                        checked={recipient === option.value}
+                        onChange={() => setRecipient(option.value)}
+                        disabled={releasing}
+                        style={{ marginTop: 2 }}
+                      />
+                      <span>
+                        <strong>{option.label}</strong>
+                        {releaseTarget.suggestedRecipient === option.value && (
+                          <span className="status-badge status-active" style={{ marginLeft: 6, fontSize: 11 }}>Recommended</span>
+                        )}
+                        <span className="text-sm text-muted" style={{ display: 'block' }}>{option.hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+
+                <label className="form-label" htmlFor="deposit-release-reason" style={{ marginTop: '1rem' }}>
+                  Reason {needsReason && <span style={{ color: 'var(--color-error)' }}>*</span>}
+                </label>
+                <textarea
+                  id="deposit-release-reason"
+                  className="form-input"
+                  rows={2}
+                  value={releaseReason}
+                  onChange={(event) => setReleaseReason(event.target.value)}
+                  placeholder="Required when overriding the return condition"
+                  disabled={releasing}
+                  style={{ width: '100%', resize: 'vertical' }}
+                />
+                {releaseError && <div className="alert alert-error" role="alert" style={{ marginTop: 8 }}>{releaseError}</div>}
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline" onClick={closeRelease} disabled={releasing}>Cancel</button>
+                <button type="submit" className="btn btn-accent" disabled={releasing || !recipient || (needsReason && !releaseReason.trim())}>
+                  {releasing && <span className="loading-spinner loading-spinner--inline" aria-hidden="true" />}
+                  {releasing ? 'Releasing...' : 'Confirm release'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {previewImage && (
+        <div className="modal-overlay" onClick={() => setPreviewImage(null)}>
+          <div className="modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="modal-header">
+              <h3>Return evidence</h3>
+              <button type="button" className="modal-close" onClick={() => setPreviewImage(null)}><X size={16} /></button>
+            </div>
+            <div className="modal-body" style={{ textAlign: 'center' }}>
+              <img src={previewImage} alt="Return evidence" style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card mt-4">
         <div className="card-body" style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>

@@ -5,6 +5,9 @@ client/dist/
 *.log
 .agents/
 
+# Current production schema export — kept local, not deployed
+/schema.sql
+
 # Environment files
 .env
 .env.local

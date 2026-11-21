@@ -65,6 +65,8 @@ const PUBLIC_ROUTES = new Set([
   '/auth/reset-password',
   '/auth/refresh',
   '/health',
+  // Token-signed attachment proxy for <img> tags (no Authorization header).
+  '/reports/attachments',
 ]);
 
 const UUID = '11111111-1111-4111-8111-111111111111';

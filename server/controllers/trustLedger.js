@@ -1,11 +1,38 @@
 const supabase = require('../db/supabase');
-const { calculatePagination, sendError } = require('../utilities/helpers');
-const { getFullName } = require('../utilities/helpers');
+const { getFullName, calculatePagination, sendError } = require('../utilities/helpers');
 const { findEquipmentDepositEscrow, transitionEquipmentDepositEscrow } = require('../utilities/equipmentDepositEscrow');
+const { logAdminActivity } = require('../utilities/activityLogger');
 
 const CLIENT_FUND_TYPES = ['job_payment', 'rental_payment', 'deposit'];
 const UNRELEASED_STATUSES = ['pending', 'escrow', 'held'];
 const EQUIPMENT_DEPOSIT_ESCROW_TABLE = 'equipment_security_deposit_escrow';
+const RENTAL_COLUMNS = 'rental_id, request_id, renter_id, owner_id, rental_status, return_condition, return_damage_images_url';
+
+// A clean return goes back to the renter; damage compensation goes to the
+// owner. Records written before return_condition existed have no suggestion.
+function suggestedRecipient(returnCondition) {
+  if (returnCondition === 'damaged') return 'owner';
+  if (returnCondition === 'no_damage') return 'renter';
+  return null;
+}
+
+async function getRentalsForRequests(requestIds) {
+  if (!requestIds.length) return [];
+  try {
+    const { data, error } = await supabase
+      .from('equipment_rentals')
+      .select(RENTAL_COLUMNS)
+      .in('request_id', requestIds);
+    if (error) {
+      console.warn('[TrustLedger] Could not load rental return details:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.warn('[TrustLedger] Could not load rental return details:', err.message);
+    return [];
+  }
+}
 
 function roundAmount(amount) {
   return Math.round(amount * 100) / 100;
@@ -27,7 +54,8 @@ async function getEquipmentDepositEscrows() {
     .order('held_at', { ascending: false });
 }
 
-function combineLedgerEntries(transactions, escrows) {
+function combineLedgerEntries(transactions, escrows, rentals = []) {
+  const rentalsByRequest = new Map(rentals.map((rental) => [rental.request_id, rental]));
   const equipmentTransactionsByRequest = new Map(
     transactions
       .filter((transaction) => transaction.type === 'deposit' &&
@@ -61,6 +89,8 @@ function combineLedgerEntries(transactions, escrows) {
     }));
   const escrowEntries = escrows.map((escrow) => {
     const transaction = equipmentTransactionsByRequest.get(escrow.request_id);
+    const rental = rentalsByRequest.get(escrow.request_id);
+    const returnCondition = rental?.return_condition || null;
     return {
       id: transaction?.id || escrow.escrow_id,
       displayId: `ESC-${escrow.escrow_id.slice(0, 8)}`,
@@ -80,6 +110,11 @@ function combineLedgerEntries(transactions, escrows) {
       releaseDate: escrow.released_at,
       createdAt: escrow.held_at || escrow.created_at,
       isEquipmentEscrow: true,
+      rentalId: rental?.rental_id || null,
+      rentalStatus: rental?.rental_status || null,
+      returnCondition,
+      returnDamageImagesUrl: Array.isArray(rental?.return_damage_images_url) ? rental.return_damage_images_url : [],
+      suggestedRecipient: suggestedRecipient(returnCondition),
     };
   });
   return [...transactionEntries, ...escrowEntries];
@@ -139,7 +174,9 @@ async function listEntries(req, res) {
   if (transactionsResult.error) return res.status(500).json({ error: transactionsResult.error.message });
   if (escrowsResult.error) return res.status(500).json({ error: escrowsResult.error.message });
 
-  let entries = combineLedgerEntries(transactionsResult.data || [], escrowsResult.data || []);
+  const escrowRows = escrowsResult.data || [];
+  const rentals = await getRentalsForRequests([...new Set(escrowRows.map((escrow) => escrow.request_id).filter(Boolean))]);
+  let entries = combineLedgerEntries(transactionsResult.data || [], escrowRows, rentals);
   if (type) entries = entries.filter((transaction) => transaction.type === type);
   if (status) {
     entries = entries.filter((transaction) => (
@@ -167,11 +204,24 @@ async function listEntries(req, res) {
     if (users) users.forEach((user) => { userMap[user.id] = getFullName(user); });
   }
 
-  const data = pageEntries.map((entry) => ({
-    ...entry,
-    userName: userMap[entry.userId] || entry.userId,
-    ownerName: entry.ownerId ? userMap[entry.ownerId] || entry.ownerId : null,
-  }));
+  const data = pageEntries.map((entry) => {
+    // For equipment deposits the escrow outcome tells us who received the
+    // money: released → owner, refunded → renter (client).
+    const releasedTo = entry.isEquipmentEscrow
+      ? (entry.status === 'released' ? 'owner' : entry.status === 'refunded' ? 'renter' : null)
+      : null;
+    return {
+      ...entry,
+      userName: userMap[entry.userId] || entry.userId,
+      ownerName: entry.ownerId ? userMap[entry.ownerId] || entry.ownerId : null,
+      releasedTo,
+      releasedToName: releasedTo === 'owner'
+        ? (userMap[entry.ownerId] || entry.ownerId)
+        : releasedTo === 'renter'
+          ? (userMap[entry.userId] || entry.userId)
+          : null,
+    };
+  });
 
   res.json({
     data,
@@ -185,6 +235,7 @@ async function listEntries(req, res) {
 }
 
 async function releaseHeldFunds(req, res) {
+  const { recipient: requestedRecipient, reason } = req.body || {};
   const { data: transaction, error: fetchError } = await supabase
     .from('transactions')
     .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
@@ -198,21 +249,53 @@ async function releaseHeldFunds(req, res) {
   const escrowResult = await findEquipmentDepositEscrow(transaction);
   if (escrowResult.error) return res.status(409).json({ error: escrowResult.error });
   const escrow = escrowResult.escrow;
+
+  // The return condition on the rental decides who should get the deposit:
+  // an undamaged return goes back to the renter, damage compensates the owner.
+  let rental = null;
+  if (escrow) {
+    const { data: rentalData, error: rentalError } = await supabase
+      .from('equipment_rentals')
+      .select(RENTAL_COLUMNS)
+      .eq('request_id', escrow.request_id)
+      .maybeSingle();
+    if (rentalError) return sendError(res, rentalError, { status: 500 });
+    rental = rentalData;
+  }
+
+  const suggested = suggestedRecipient(rental?.return_condition);
+  const recipient = escrow ? (requestedRecipient || suggested) : null;
+  if (escrow && !['renter', 'owner'].includes(recipient)) {
+    return res.status(400).json({ error: 'Choose whether to refund the renter or release the deposit to the owner.' });
+  }
+  const note = String(reason || '').trim();
+  if (escrow && (!suggested || recipient !== suggested) && !note) {
+    return res.status(400).json({ error: 'A reason is required when the recipient differs from the return condition.' });
+  }
+  if (escrow?.status === 'released' && recipient === 'renter') {
+    return res.status(409).json({ error: 'This deposit has already been released to the owner and cannot be refunded.' });
+  }
   if (escrow && escrow.status !== 'held' && escrow.status !== 'released') {
     return res.status(409).json({ error: 'This equipment deposit has already been refunded and cannot be released' });
+  }
+  if (transaction.status === 'refunded' && (!escrow || escrow.status !== 'held')) {
+    return res.status(400).json({ error: 'Transaction already refunded' });
   }
   if (!UNRELEASED_STATUSES.includes(transaction.status) &&
       !(transaction.status === 'completed' && escrow?.status === 'held')) {
     return res.status(400).json({ error: 'Transaction must be pending or held to release' });
   }
 
+  const refundToRenter = recipient === 'renter';
+  const targetStatus = refundToRenter ? 'refunded' : 'completed';
   let data = transaction;
-  if (transaction.status !== 'completed') {
-    const { data: updatedTransaction, error } = await supabase
+  if (transaction.status !== targetStatus) {
+    let updateQuery = supabase
       .from('transactions')
-      .update({ status: 'completed' })
-      .eq('id', req.params.id)
-      .in('status', UNRELEASED_STATUSES)
+      .update({ status: targetStatus })
+      .eq('id', req.params.id);
+    if (!refundToRenter) updateQuery = updateQuery.in('status', UNRELEASED_STATUSES);
+    const { data: updatedTransaction, error } = await updateQuery
       .select('id, user_id, type, amount, status, payment_method, reference, created_at, related_id, related_type, direction')
       .single();
 
@@ -223,15 +306,31 @@ async function releaseHeldFunds(req, res) {
   }
 
   if (escrow?.status === 'held') {
-    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, 'released');
+    const escrowUpdate = await transitionEquipmentDepositEscrow(escrow, refundToRenter ? 'refunded' : 'released');
     if (escrowUpdate.error) {
       return res.status(500).json({
-        error: `Transaction was released, but its equipment deposit escrow record could not be updated. Retry release to reconcile it. ${escrowUpdate.error}`,
+        error: `Transaction was ${refundToRenter ? 'refunded' : 'released'}, but its equipment deposit escrow record could not be updated. Retry to reconcile it. ${escrowUpdate.error}`,
       });
     }
   }
 
-  res.json({ data, message: 'Funds released' });
+  if (escrow) {
+    logAdminActivity({
+      actorId: req.user?.id,
+      activityType: refundToRenter ? 'deposit_refunded' : 'deposit_paid',
+      category: 'wallet',
+      description: `Equipment security deposit ${refundToRenter ? 'refunded to renter' : 'released to owner'}${note ? ` — ${note}` : ''}`,
+      relatedUserId: refundToRenter ? (rental?.renter_id || escrow.renter_id) : (rental?.owner_id || escrow.owner_id),
+      amount: Math.abs(Number(transaction.amount) || 0),
+    });
+  }
+
+  res.json({
+    data,
+    recipient: recipient || null,
+    suggestedRecipient: suggested || null,
+    message: refundToRenter ? 'Deposit refunded to client' : 'Funds released',
+  });
 }
 
 module.exports = { getSummary, listEntries, releaseHeldFunds };

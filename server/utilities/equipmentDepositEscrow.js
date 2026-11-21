@@ -11,7 +11,7 @@ async function findEquipmentDepositEscrow(transaction) {
 
   const { data: escrow, error } = await supabase
     .from(ESCROW_TABLE)
-    .select('escrow_id, request_id, renter_id, amount, status')
+    .select('escrow_id, request_id, renter_id, owner_id, amount, status')
     .eq('request_id', transaction.related_id)
     .maybeSingle();
 

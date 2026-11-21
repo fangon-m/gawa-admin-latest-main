@@ -394,6 +394,32 @@ async function executeReportAction(req, res) {
   const { data, error } = await supabase.rpc(rpcName, rpcArgs);
 
   if (error) {
+    // Older databases may not have the resolve_issue_report_target_missing RPC
+    // migration. Resolve directly so an unavailable target can still be closed.
+    if (req.params.actionId === 'resolve_target_unavailable'
+        && /function|PGRST202|schema cache/i.test(error.message || '')) {
+      const { data: updated, error: updateError } = await supabase
+        .from('issue_reports')
+        .update({ status: 'resolved' })
+        .eq('report_id', req.params.id)
+        .in('status', ['open', 'under_review'])
+        .select('report_id, status')
+        .maybeSingle();
+      if (!updateError && updated) {
+        logAdminActivity({
+          actorId: req.user.id,
+          activityType: 'content_flagged',
+          category: 'user',
+          description: `Resolved report ${req.params.id}: reported target no longer exists. ${reason}`,
+        });
+        return res.json({
+          reportId: req.params.id,
+          action: 'resolve_target_unavailable',
+          reportStatus: 'resolved',
+          message: 'Report resolved — reported target unavailable',
+        });
+      }
+    }
     const mapped = mapActionError(error);
     if (mapped) {
       console.warn(JSON.stringify({

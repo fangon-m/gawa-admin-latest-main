@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const ctrl = require('../controllers/reports');
 const actionCtrl = require('../controllers/reportActions');
+const attachmentCtrl = require('../controllers/reportAttachments');
 const { authenticate } = require('../middleware/auth');
 const { authorize, ROLES } = require('../middleware/roles');
 const { validate, schemas } = require('../middleware/validate');
@@ -28,6 +29,9 @@ const reportActionLimiter = rateLimit({
 router.get('/', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), ctrl.listReports);
 router.get('/moderation/health', authenticate, authorize(ROLES.ADMIN), ctrl.getModerationStatus);
 router.get('/moderation/metrics', authenticate, authorize(ROLES.ADMIN), ctrl.getModerationMetrics);
+// Signed, short-lived token in the URL — browser <img> requests cannot send
+// the admin Bearer header.
+router.get('/attachments', attachmentCtrl.getAttachment);
 router.get('/:id/warning', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), actionCtrl.getReportWarning);
 router.get('/:id/actions', authenticate, authorize(ROLES.ADMIN, ROLES.CUSTOMER_SUPPORT), actionCtrl.getReportActions);
 router.post(

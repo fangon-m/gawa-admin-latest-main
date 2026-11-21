@@ -18,6 +18,7 @@ function makeQuery(result) {
     or: jest.fn((...args) => { query.calls.or = args; return query; }),
     eq: jest.fn(() => query),
     update: jest.fn(() => query),
+    insert: jest.fn(() => Promise.resolve({ data: null, error: null })),
     order: jest.fn(() => query),
     range: jest.fn(() => query),
     single: jest.fn(() => Promise.resolve(result)),
@@ -173,6 +174,18 @@ describe('transactions and trust ledger visibility', () => {
       }],
       error: null,
     });
+    const rentalsQuery = makeQuery({
+      data: [{
+        rental_id: 'rental-id',
+        request_id: 'request-id',
+        renter_id: 'renter-id',
+        owner_id: 'owner-id',
+        rental_status: 'completed',
+        return_condition: 'damaged',
+        return_damage_images_url: ['https://example.com/damage.jpg'],
+      }],
+      error: null,
+    });
     const usersQuery = makeQuery({
       data: [
         { id: 'renter-id', first_name: 'Renter', last_name: 'Name' },
@@ -183,6 +196,7 @@ describe('transactions and trust ledger visibility', () => {
     supabase.from
       .mockReturnValueOnce(transactionsQuery)
       .mockReturnValueOnce(escrowsQuery)
+      .mockReturnValueOnce(rentalsQuery)
       .mockReturnValueOnce(usersQuery);
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
 
@@ -200,8 +214,49 @@ describe('transactions and trust ledger visibility', () => {
         paymentMethod: 'gcash',
         status: 'held',
         releaseTransactionId: 'transaction-id',
+        rentalId: 'rental-id',
+        returnCondition: 'damaged',
+        returnDamageImagesUrl: ['https://example.com/damage.jpg'],
+        suggestedRecipient: 'owner',
       })],
     }));
+  });
+
+  it('names the recipient of released and refunded equipment deposits', async () => {
+    supabase.from
+      .mockReturnValueOnce(makeQuery({ data: [], error: null }))
+      .mockReturnValueOnce(makeQuery({
+        data: [
+          { escrow_id: 'escrow-1', request_id: 'request-1', renter_id: 'renter-id', owner_id: 'owner-id', amount: 100, status: 'released', held_at: '2026-11-01T10:00:00Z' },
+          { escrow_id: 'escrow-2', request_id: 'request-2', renter_id: 'renter-id', owner_id: 'owner-id', amount: 50, status: 'refunded', held_at: '2026-11-02T10:00:00Z' },
+        ],
+        error: null,
+      }))
+      .mockReturnValueOnce(makeQuery({
+        data: [
+          { rental_id: 'rental-1', request_id: 'request-1', return_condition: 'damaged' },
+          { rental_id: 'rental-2', request_id: 'request-2', return_condition: 'no_damage' },
+        ],
+        error: null,
+      }))
+      .mockReturnValueOnce(makeQuery({
+        data: [
+          { id: 'renter-id', first_name: 'Renter', last_name: 'Name' },
+          { id: 'owner-id', first_name: 'Owner', last_name: 'Name' },
+        ],
+        error: null,
+      }));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await require('../trustLedger').listEntries({ query: {} }, res);
+
+    const rows = res.json.mock.calls[0][0].data;
+    expect(rows.find((row) => row.status === 'released')).toMatchObject({
+      releasedTo: 'owner', releasedToName: 'Owner Name',
+    });
+    expect(rows.find((row) => row.status === 'refunded')).toMatchObject({
+      releasedTo: 'renter', releasedToName: 'Renter Name',
+    });
   });
 
   it('includes equipment escrow balances and completed outcomes in the ledger summary', async () => {
@@ -281,13 +336,26 @@ describe('transactions and trust ledger visibility', () => {
     };
     const fetchEntry = makeQuery({ data: transaction, error: null });
     const findEscrow = makeQuery({ data: escrow, error: null });
+    const findRental = makeQuery({
+      data: {
+        rental_id: 'rental-id',
+        request_id: 'request-id',
+        renter_id: 'renter-id',
+        owner_id: 'owner-id',
+        return_condition: 'damaged',
+        return_damage_images_url: [],
+      },
+      error: null,
+    });
     const updateTransaction = makeQuery({ data: { ...transaction, status: 'completed' }, error: null });
     const updateEscrow = makeQuery({ data: { escrow_id: 'escrow-id', status: 'released' }, error: null });
     supabase.from
       .mockReturnValueOnce(fetchEntry)
       .mockReturnValueOnce(findEscrow)
+      .mockReturnValueOnce(findRental)
       .mockReturnValueOnce(updateTransaction)
-      .mockReturnValueOnce(updateEscrow);
+      .mockReturnValueOnce(updateEscrow)
+      .mockReturnValueOnce(makeQuery({ data: null, error: null })); // activity_log
     const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
 
     await releaseHeldFunds({ params: { id: transaction.id } }, res);
@@ -299,6 +367,102 @@ describe('transactions and trust ledger visibility', () => {
     }));
     expect(updateEscrow.eq).toHaveBeenCalledWith('status', 'held');
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'Funds released' }));
+  });
+
+  it('refunds the renter by default when the item was returned with no damage', async () => {
+    const transaction = {
+      id: 'transaction-id', user_id: 'renter-id', type: 'deposit', amount: 100, status: 'held',
+      related_id: 'request-id', related_type: 'equipment_rental',
+    };
+    const escrow = {
+      escrow_id: 'escrow-id', request_id: 'request-id', renter_id: 'renter-id', owner_id: 'owner-id',
+      amount: 100, status: 'held',
+    };
+    const updateTransaction = makeQuery({ data: { ...transaction, status: 'refunded' }, error: null });
+    const updateEscrow = makeQuery({ data: { escrow_id: 'escrow-id', status: 'refunded' }, error: null });
+    supabase.from
+      .mockReturnValueOnce(makeQuery({ data: transaction, error: null }))
+      .mockReturnValueOnce(makeQuery({ data: escrow, error: null }))
+      .mockReturnValueOnce(makeQuery({
+        data: { rental_id: 'rental-id', request_id: 'request-id', return_condition: 'no_damage' },
+        error: null,
+      }))
+      .mockReturnValueOnce(updateTransaction)
+      .mockReturnValueOnce(updateEscrow)
+      .mockReturnValueOnce(makeQuery({ data: null, error: null }));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await releaseHeldFunds({ params: { id: transaction.id }, user: { id: 'admin-1' } }, res);
+
+    expect(updateTransaction.update).toHaveBeenCalledWith({ status: 'refunded' });
+    expect(updateEscrow.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'refunded' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      recipient: 'renter',
+      suggestedRecipient: 'renter',
+      message: 'Deposit refunded to client',
+    }));
+  });
+
+  it('requires a reason when the admin overrides the return condition', async () => {
+    const transaction = {
+      id: 'transaction-id', user_id: 'renter-id', type: 'deposit', amount: 100, status: 'held',
+      related_id: 'request-id', related_type: 'equipment_rental',
+    };
+    const escrow = {
+      escrow_id: 'escrow-id', request_id: 'request-id', renter_id: 'renter-id', owner_id: 'owner-id',
+      amount: 100, status: 'held',
+    };
+    supabase.from
+      .mockReturnValueOnce(makeQuery({ data: transaction, error: null }))
+      .mockReturnValueOnce(makeQuery({ data: escrow, error: null }))
+      .mockReturnValueOnce(makeQuery({
+        data: { rental_id: 'rental-id', request_id: 'request-id', return_condition: 'no_damage' },
+        error: null,
+      }));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await releaseHeldFunds({
+      params: { id: transaction.id },
+      body: { recipient: 'owner', reason: '  ' },
+    }, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({
+      error: 'A reason is required when the recipient differs from the return condition.',
+    });
+    expect(supabase.from).toHaveBeenCalledTimes(3);
+  });
+
+  it('accepts an override when a reason is supplied', async () => {
+    const transaction = {
+      id: 'transaction-id', user_id: 'renter-id', type: 'deposit', amount: 100, status: 'held',
+      related_id: 'request-id', related_type: 'equipment_rental',
+    };
+    const escrow = {
+      escrow_id: 'escrow-id', request_id: 'request-id', renter_id: 'renter-id', owner_id: 'owner-id',
+      amount: 100, status: 'held',
+    };
+    const updateEscrow = makeQuery({ data: { escrow_id: 'escrow-id', status: 'released' }, error: null });
+    supabase.from
+      .mockReturnValueOnce(makeQuery({ data: transaction, error: null }))
+      .mockReturnValueOnce(makeQuery({ data: escrow, error: null }))
+      .mockReturnValueOnce(makeQuery({
+        data: { rental_id: 'rental-id', request_id: 'request-id', return_condition: 'no_damage', owner_id: 'owner-id' },
+        error: null,
+      }))
+      .mockReturnValueOnce(makeQuery({ data: { ...transaction, status: 'completed' }, error: null }))
+      .mockReturnValueOnce(updateEscrow)
+      .mockReturnValueOnce(makeQuery({ data: null, error: null }));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+    await releaseHeldFunds({
+      params: { id: transaction.id },
+      body: { recipient: 'owner', reason: 'Damage found after return' },
+      user: { id: 'admin-1' },
+    }, res);
+
+    expect(updateEscrow.update).toHaveBeenCalledWith(expect.objectContaining({ status: 'released' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ recipient: 'owner', suggestedRecipient: 'renter' }));
   });
 
   it('marks the matching equipment deposit escrow as refunded', async () => {

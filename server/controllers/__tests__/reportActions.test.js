@@ -363,6 +363,39 @@ describe('issue report moderation actions', () => {
     });
   });
 
+  it('resolves a missing target directly when the dedicated RPC is unavailable', async () => {
+    supabase.rpc.mockResolvedValue({
+      data: null,
+      error: { code: 'PGRST202', message: 'Could not find the function resolve_issue_report_target_missing in the schema cache' },
+    });
+    const updateQuery = {
+      update: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { report_id: reportId, status: 'resolved' },
+        error: null,
+      }),
+    };
+    supabase.from.mockReturnValue(updateQuery);
+    const res = response();
+
+    await executeReportAction({
+      params: { id: reportId, actionId: 'resolve_target_unavailable' },
+      body: { reason: 'The target no longer exists' },
+      user: { id: targetId, role: 'admin' },
+      get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : undefined),
+    }, res);
+
+    expect(updateQuery.update).toHaveBeenCalledWith({ status: 'resolved' });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      reportId,
+      action: 'resolve_target_unavailable',
+      reportStatus: 'resolved',
+    }));
+  });
+
   it('uses the dedicated transactional RPC to resolve a missing target', async () => {
     supabase.rpc.mockResolvedValue({
       data: {
