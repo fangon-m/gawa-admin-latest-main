@@ -28,6 +28,7 @@
     "express": "^4.22.3",
     "express-async-errors": "^3.1.1",
     "express-rate-limit": "^8.5.2",
+    "heic2any": "^0.0.4",
     "helmet": "^7.1.0",
     "lucide-react": "^1.17.0",
     "morgan": "^1.12.1",
@@ -37,7 +38,6 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.5",
     "recharts": "^2.12.7",
-    "sharp": "^0.35.5",
     "zod": "^4.6.7"
   },
   "devDependencies": {

@@ -3,7 +3,7 @@ jest.mock('../../db/supabase', () => ({
 }));
 
 const supabase = require('../../db/supabase');
-const { flagListing, listListings } = require('../listings');
+const { flagListing, listListings, removeListing } = require('../listings');
 
 describe('flag equipment listing', () => {
   let req;
@@ -102,5 +102,72 @@ describe('flag equipment listing', () => {
       data: [],
       pagination: { total: 0, page: 1, limit: 10, totalPages: 0 },
     });
+  });
+});
+
+describe('remove equipment listing audit-trail guard', () => {
+  const req = { params: { id: 'listing-id' } };
+  let res;
+  let rentalsQuery;
+  let paymentsQuery;
+  let deleteQuery;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    rentalsQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      then: (resolve) => Promise.resolve({ data: [], error: null }).then(resolve),
+    };
+    paymentsQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      in: jest.fn().mockReturnThis(),
+      then: (resolve) => Promise.resolve({ count: 0, error: null }).then(resolve),
+    };
+    deleteQuery = {
+      delete: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      then: (resolve) => Promise.resolve({ error: null }).then(resolve),
+    };
+    supabase.from.mockImplementation(table => {
+      if (table === 'equipment_rentals') return rentalsQuery;
+      if (table === 'transactions') return paymentsQuery;
+      return deleteQuery;
+    });
+  });
+
+  it('allows removing a listing with no rental or payment history', async () => {
+    await removeListing(req, res);
+
+    expect(deleteQuery.delete).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ message: 'Equipment listing removed' });
+  });
+
+  it('blocks removing a listing with an active rental', async () => {
+    rentalsQuery.then = (resolve) => Promise.resolve({
+      data: [{ rental_id: 'rental-id', request_id: 'request-id', rental_status: 'active' }],
+      error: null,
+    }).then(resolve);
+
+    await removeListing(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(deleteQuery.delete).not.toHaveBeenCalled();
+  });
+
+  it('blocks removing a listing whose cancelled rentals still have payments', async () => {
+    rentalsQuery.then = (resolve) => Promise.resolve({
+      data: [{ rental_id: 'rental-id', request_id: 'request-id', rental_status: 'cancelled' }],
+      error: null,
+    }).then(resolve);
+    paymentsQuery.then = (resolve) => Promise.resolve({ count: 1, error: null }).then(resolve);
+
+    await removeListing(req, res);
+
+    expect(paymentsQuery.in).toHaveBeenCalledWith('related_id', ['rental-id']);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(deleteQuery.delete).not.toHaveBeenCalled();
   });
 });

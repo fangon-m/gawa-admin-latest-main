@@ -13,6 +13,8 @@ import DataTable from '../components/common/DataTable';
 import StatusBadge from '../components/common/StatusBadge';
 import DetailPanel from '../components/common/DetailPanel';
 import LoadingSpinner from '../components/common/LoadingSpinner';
+import ReportAttachment from '../components/common/ReportAttachment';
+import ImageLightbox from '../components/common/ImageLightbox';
 import { X } from 'lucide-react';
 
 const oversightTabs = [
@@ -37,10 +39,24 @@ function formatRemaining(seconds) {
   return `${hours}h ${minutes}m`;
 }
 
+let openAttachmentPreview = () => {};
+
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const attachmentSrc = (path, token) => token
   ? `${API_BASE}/reports/attachments?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
   : null;
+
+const TARGET_ID_PREFIXES = {
+  profile: 'USR-',
+  job_post: 'JOB-',
+  job_proposal: 'PRP-',
+  job_match: 'MCH-',
+  equipment_listing: 'LST-',
+  equipment_rental: 'RNT-',
+  equipment_request: 'REQ-',
+};
+
+const formatTargetId = (type, id) => formatEntityIdNumeric(id, TARGET_ID_PREFIXES[type] || '');
 
 const issueReportColumns = [
   { key: 'reporterName', label: 'Reporter' },
@@ -50,7 +66,7 @@ const issueReportColumns = [
   { key: 'targetType', label: 'Target Type', render: (row) => <StatusBadge status={row.targetType} /> },
   { key: 'targetId', label: 'Target ID', render: (row) => (
     <span className="text-xs text-muted font-mono" title={row.targetId}>
-      {row.targetType === 'profile' ? formatEntityIdNumeric(row.targetId, 'USR-') : row.targetId}
+      {formatTargetId(row.targetType, row.targetId)}
     </span>
   ) },
   { key: 'issueType', label: 'Incident Type' },
@@ -64,19 +80,15 @@ const issueReportColumns = [
           const fallback = (row.attachmentUrls || [])[index] || path;
           const proxied = attachmentSrc(path, (row.attachmentTokens || [])[index]);
           return (
-            <a key={`${path}-${index}`} href={fallback} target="_blank" rel="noopener noreferrer" title="Open report evidence" onClick={(event) => event.stopPropagation()}>
-              <img
-                src={proxied || fallback}
-                alt={`Report evidence ${index + 1}`}
-                style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }}
-                onError={(event) => {
-                  const image = event.currentTarget;
-                  if (image.dataset.fallbackApplied) return;
-                  image.dataset.fallbackApplied = '1';
-                  image.src = fallback;
-                }}
-              />
-            </a>
+            <ReportAttachment
+              key={`${path}-${index}`}
+              src={proxied || fallback}
+              alt={`Report evidence ${index + 1}`}
+              width={36}
+              height={36}
+              style={{ borderRadius: 4 }}
+              onPreview={openAttachmentPreview}
+            />
           );
         })}
         {paths.length > 3 && <span className="text-xs text-muted">+{paths.length - 3}</span>}
@@ -132,6 +144,7 @@ export default function Oversight() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [reportActions, setReportActions] = useState([]);
   const [reportActionTarget, setReportActionTarget] = useState(null);
+  const [reportActionUserTarget, setReportActionUserTarget] = useState(null);
   const [reportWarning, setReportWarning] = useState(null);
   const [moderationSettings, setModerationSettings] = useState({
     warningDays: 7,
@@ -153,7 +166,15 @@ export default function Oversight() {
   const [exportEndDate, setExportEndDate] = useState('');
   const [exportStatus, setExportStatus] = useState('all');
   const [exportError, setExportError] = useState('');
+  const [attachmentPreview, setAttachmentPreview] = useState(null);
   const reportActionButtonRef = useRef(null);
+
+  // The table column definitions live at module scope, so expose the preview
+  // setter through a small indirection instead of capturing component state.
+  useEffect(() => {
+    openAttachmentPreview = setAttachmentPreview;
+    return () => { openAttachmentPreview = () => {}; };
+  }, []);
 
   const { data: allReports, loading: reportsLoading, error: reportsError, refetch: refetchReports } = useApiData(() => listAllReports(), [], {
     defaultValue: [], transform: (r) => r?.data ?? r ?? [],
@@ -163,6 +184,7 @@ export default function Oversight() {
     if (!selectedReport) {
       setReportActions([]);
       setReportActionTarget(null);
+      setReportActionUserTarget(null);
       setReportWarning(null);
       setReportActionsError('');
       return undefined;
@@ -172,6 +194,7 @@ export default function Oversight() {
     setReportActionsLoading(true);
     setReportActions([]);
     setReportActionTarget(null);
+    setReportActionUserTarget(null);
     setReportWarning(null);
     setReportActionsError('');
     setReportActionPrompt(null);
@@ -184,6 +207,7 @@ export default function Oversight() {
         if (!current) return;
         setReportActions(result.actions || []);
         setReportActionTarget(result.target || null);
+        setReportActionUserTarget(result.userTarget || null);
         setReportWarning(result.warning || null);
         if (result.moderation) {
           setModerationSettings(previous => ({ ...previous, ...result.moderation }));
@@ -272,7 +296,7 @@ export default function Oversight() {
         actionPrompt.id,
         payload,
         idempotencyKey,
-        reportActionTarget?.version || null
+        reportActionUserTarget?.version || reportActionTarget?.version || null
       );
     } catch (error) {
       const errorCode = error?.error;
@@ -287,6 +311,7 @@ export default function Oversight() {
         getReportActions(selectedReport.id).then((latestActions) => {
           setReportActions(latestActions.actions || []);
           setReportActionTarget(latestActions.target || null);
+          setReportActionUserTarget(latestActions.userTarget || null);
           setReportWarning(latestActions.warning || null);
           setReportActionsError('');
         }).catch(() => {
@@ -524,9 +549,7 @@ export default function Oversight() {
                 <div className="detail-field">
                   <div className="detail-label">Target ID</div>
                   <div className="detail-value text-xs text-muted font-mono" title={selectedReport.targetId}>
-                    {selectedReport.targetType === 'profile'
-                      ? formatEntityIdNumeric(selectedReport.targetId, 'USR-')
-                      : selectedReport.targetId}
+                    {formatTargetId(selectedReport.targetType, selectedReport.targetId)}
                   </div>
                 </div>
                 <div className="detail-field"><div className="detail-label">Incident Type</div><div className="detail-value">{selectedReport.issueType}</div></div>
@@ -542,19 +565,15 @@ export default function Oversight() {
                           const fallback = (selectedReport.attachmentUrls || [])[index] || path;
                           const proxied = attachmentSrc(path, (selectedReport.attachmentTokens || [])[index]);
                           return (
-                            <a key={`${path}-${index}`} href={fallback} target="_blank" rel="noopener noreferrer" title="Open report evidence">
-                              <img
-                                src={proxied || fallback}
-                                alt={`Report evidence ${index + 1}`}
-                                style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--color-border)' }}
-                                onError={(event) => {
-                                  const image = event.currentTarget;
-                                  if (image.dataset.fallbackApplied) return;
-                                  image.dataset.fallbackApplied = '1';
-                                  image.src = fallback;
-                                }}
-                              />
-                            </a>
+                            <ReportAttachment
+                              key={`${path}-${index}`}
+                              src={proxied || fallback}
+                              alt={`Report evidence ${index + 1}`}
+                              width={72}
+                              height={72}
+                              style={{ borderRadius: 6, border: '1px solid var(--color-border)' }}
+                              onPreview={setAttachmentPreview}
+                            />
                           );
                         })}
                       </div>
@@ -620,7 +639,11 @@ export default function Oversight() {
               <div className="detail-panel-section">
                 <h4>Available Actions</h4>
                 {!reportActionsLoading && reportActionTarget && !reportActionTarget.exists && (
-                  <p className="text-muted text-sm" role="status">The reported target no longer exists. Resolve the report with a reason; actions on the missing target are disabled.</p>
+                  <p className="text-muted text-sm" role="status">
+                    {reportActionUserTarget
+                      ? 'The reported content no longer exists. You can still dismiss the report or moderate the reported user.'
+                      : 'The reported target no longer exists. Resolve the report with a reason; actions on the missing target are disabled.'}
+                  </p>
                 )}
                 {reportActionsError && <div className="alert alert-error" role="alert">{reportActionsError}</div>}
                 {reportActionsLoading ? (
@@ -645,8 +668,12 @@ export default function Oversight() {
                           setReportActionDeliveryPending(false);
                           setReportActionMessage(
                             availableAction.id === 'warn'
-                              ? `Automated moderation warning for report #${selectedReport.id}. Reason: ${selectedReport.issueType}. `
-                                + `If you believe this warning is mistaken, reply here to appeal within ${moderationSettings.warningDays} days. `
+                              ? `Automated moderation warning for report #${selectedReport.id}.\n\n`
+                                + `Report type: ${selectedReport.issueType || 'Not specified'}\n`
+                                + `Reported for: ${selectedReport.comment || 'No details provided'}\n`
+                                + `Target: ${String(selectedReport.targetType || 'profile').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())}\n`
+                                + `Item: ${selectedReport.targetLabel || (selectedReport.targetType === 'profile' ? 'Your profile' : 'the reported content')}\n\n`
+                                + `If you believe this warning is mistaken, reply here to appeal within ${moderationSettings.warningDays} days and tell us what happened. `
                                 + `If the warning is not resolved, your account will be automatically suspended for ${moderationSettings.autoSuspendDays} days.`
                               : ''
                           );
@@ -831,6 +858,14 @@ export default function Oversight() {
           )}
         </div>
       </div>
+
+      {attachmentPreview && (
+        <ImageLightbox
+          key={attachmentPreview}
+          items={[{ url: attachmentPreview, label: 'Report evidence' }]}
+          onClose={() => setAttachmentPreview(null)}
+        />
+      )}
     </div>
   );
 }

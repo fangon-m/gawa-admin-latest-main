@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useNotifications } from '../context/NotificationContext';
 import { usePermissions } from '../utils/permissions';
 import { useApiData } from '../utils/useApiData';
 import { list as listJobs } from '../api/jobs';
@@ -21,6 +22,7 @@ import AssessmentAttemptsTable from '../components/assessments/AssessmentAttempt
 import { focusAssessmentEditor, updateAssessmentEditHistory } from '../utils/assessmentEditor';
 import { Plus, Pencil, Trash2, X, Save, ClipboardCheck, BookOpen, ChevronLeft, Briefcase } from 'lucide-react';
 import { SkillIcon, resolveLucideIcon, isImageIcon } from '../utils/skillIcon';
+import ErrorToast from '../components/common/ErrorToast';
 import styles from './Assessments.module.css';
 
 const DIFFICULTIES = ['beginner', 'intermediate', 'advanced'];
@@ -44,6 +46,8 @@ const SKILL_ICON_OPTIONS = [
 export default function Jobs() {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
+  const { addNotification } = useNotifications();
+  const [skillDeleteError, setSkillDeleteError] = useState('');
   const { can } = usePermissions(currentUser?.role);
   const [search, setSearch] = useState('');
   const [fil, setFil] = useState({ type: '', status: '', category: '' });
@@ -248,9 +252,12 @@ export default function Jobs() {
     try {
       await skillsApi.deleteSkill(deletingCat.skillId);
       setDeletingCat(null);
+      setSkillDeleteError('');
       refetchSkills();
     } catch (err) {
-      alert('Cannot delete this skill.');
+      const message = err?.error || err?.message || 'Cannot delete this skill.';
+      setSkillDeleteError(message);
+      addNotification('verification_error', 'Cannot delete skill', message);
       setDeletingCat(null);
     }
   };
@@ -868,6 +875,7 @@ export default function Jobs() {
         )}
       </>
     )}
+    <ErrorToast message={skillDeleteError} onDismiss={() => setSkillDeleteError('')} />
   </div>
 );
 }

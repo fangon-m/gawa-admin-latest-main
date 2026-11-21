@@ -14,7 +14,7 @@ const { report } = vi.hoisted(() => ({
     reportedUserId: 'user-1',
     reportedName: 'Reported Person',
     targetType: 'job_post',
-    targetId: 'job-1',
+    targetId: '7951c34f-5b69-4fbc-a8a4-77506cee78ac',
     issueType: 'Fraud',
     comment: 'False listing',
     status: 'open',
@@ -42,6 +42,16 @@ vi.mock('../components/common/Tabs', () => ({ default: () => <div>Tabs</div> }))
 vi.mock('../components/common/StatCard', () => ({ default: ({ label }) => <div>{label}</div> }));
 vi.mock('../components/common/StatusBadge', () => ({ default: ({ label, status }) => <span>{label || status}</span> }));
 vi.mock('../components/common/LoadingSpinner', () => ({ default: ({ label }) => <div>{label}</div> }));
+vi.mock('../components/common/ReportAttachment', () => ({
+  default: ({ src, alt, onPreview }) => (
+    <button type="button" onClick={() => onPreview?.(src)}>
+      <img src={src} alt={alt} />
+    </button>
+  ),
+}));
+vi.mock('../components/common/ImageLightbox', () => ({
+  default: ({ items }) => <img src={items[0]?.url} alt="Report evidence full size" />,
+}));
 vi.mock('../components/common/DetailPanel', () => ({
   default: ({ open, children }) => <div data-testid="detail-panel">{open ? children : null}</div>,
 }));
@@ -78,10 +88,20 @@ describe('Oversight incident reports', () => {
 
     expect(screen.getByRole('link', { name: 'Reported Person' })).toHaveAttribute('href', userEntityPath(report.reportedUserId));
     expect(screen.getAllByAltText('Report evidence 1')).toHaveLength(1);
+    expect(screen.getByText('JOB-805676')).toBeInTheDocument();
+    expect(screen.queryByText(report.targetId)).not.toBeInTheDocument();
     expect(screen.getByAltText('Report evidence 1')).toHaveAttribute(
       'src',
       expect.stringContaining('/reports/attachments?path=reports%2Fa.png&token=valid-token')
     );
+  });
+
+  it('opens a full-size preview when an attachment is clicked', () => {
+    renderOversight();
+
+    fireEvent.click(screen.getAllByAltText('Report evidence 1')[0]);
+
+    expect(screen.getByAltText('Report evidence full size')).toBeInTheDocument();
   });
 
   it('shows attachment photos in the detail panel instead of raw paths', () => {

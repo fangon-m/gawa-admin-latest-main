@@ -3,8 +3,10 @@ const { getFullName, sendError } = require('../utilities/helpers');
 const { getModerationHealth } = require('../utilities/moderationWarnings');
 const { entityIdToken } = require('../utilities/entityIds');
 const { signAttachmentPath } = require('../utilities/reportAttachments');
+const { loadTargetLabels } = require('../utilities/reportTargetLabels');
 
 const REPORT_BASE_COLUMNS = 'report_id, reporter_id, target_type, target_id, issue_type, comment, attachment_paths, status, created_at';
+const REPORT_REPORTED_USER_COLUMN = 'reported_user_id';
 const REPORT_WARNING_COLUMNS = [
   'warned_at, warning_due_at, warning_window_days, warning_compliance_flag',
   'warning_complied_at, warning_closed_at, auto_suspended_at',
@@ -76,14 +78,6 @@ async function signAttachmentUrl(path) {
         // Try the next path variant.
       }
     }
-    for (const candidate of candidates) {
-      try {
-        const { data } = bucket.getPublicUrl?.(candidate) || {};
-        if (data?.publicUrl) return data.publicUrl;
-      } catch {
-        // Try the next path variant.
-      }
-    }
   }
 
   console.warn('[Reports] Could not create an attachment URL for', path);
@@ -113,13 +107,38 @@ async function getReportedUserIds(reports) {
     });
   }));
 
-  return reports.map((report) => {
+  const reportedUserIds = reports.map((report) => {
+    if (report.reported_user_id) return report.reported_user_id;
     if (report.target_type === 'profile') return report.target_id || null;
     const candidates = usersByTarget.get(report.target_id) || [];
     // The reporter is one party to a match/rental/request; the other party is
     // the account that was actually reported.
     return candidates.find(id => id !== report.reporter_id) || candidates[0] || null;
   });
+
+  // A deleted job_match leaves no row to resolve the reported user from, but
+  // job_completion keeps client_id/user_id keyed by the same job_match_id
+  // (there is no FK cascade on that column). Recover the counterparty there.
+  const unresolvedMatchIds = reports
+    .filter((report, index) => !reportedUserIds[index] && report.target_type === 'job_match' && report.target_id)
+    .map((report) => report.target_id);
+  if (unresolvedMatchIds.length) {
+    const { data: completions } = await supabase
+      .from('job_completion')
+      .select('job_match_id, client_id, user_id')
+      .in('job_match_id', unresolvedMatchIds);
+    const usersByMatch = new Map();
+    (completions || []).forEach((completion) => {
+      usersByMatch.set(completion.job_match_id, [completion.client_id, completion.user_id].filter(Boolean));
+    });
+    reports.forEach((report, index) => {
+      if (reportedUserIds[index] || report.target_type !== 'job_match') return;
+      const candidates = usersByMatch.get(report.target_id) || [];
+      reportedUserIds[index] = candidates.find(id => id !== report.reporter_id) || candidates[0] || null;
+    });
+  }
+
+  return reportedUserIds;
 }
 
 async function listReports(req, res) {
@@ -135,18 +154,26 @@ async function listReports(req, res) {
       .range(offset, offset + limit - 1);
   };
 
-  let result = await buildQuery(`${REPORT_BASE_COLUMNS}, ${REPORT_WARNING_COLUMNS}`);
+  const withAllOptional = `${REPORT_BASE_COLUMNS}, ${REPORT_REPORTED_USER_COLUMN}, ${REPORT_WARNING_COLUMNS}`;
+  const withReportedUser = `${REPORT_BASE_COLUMNS}, ${REPORT_REPORTED_USER_COLUMN}`;
+  let result = await buildQuery(withAllOptional);
   if (result.error?.code === '42703') {
     // Migration 008 not applied yet: serve the report list without warning fields.
+    result = await buildQuery(withReportedUser);
+  }
+  if (result.error?.code === '42703') {
+    // reported_user_id migration not applied yet: use target inference only.
     result = await buildQuery(REPORT_BASE_COLUMNS);
   }
   const { data, error, count } = result;
   if (error) return sendError(res, error, { status: 500 });
 
   const reports = data || [];
+  const targetLabels = await loadTargetLabels(reports);
   const reportedUserIds = await getReportedUserIds(reports);
   const userIds = [...new Set(reports.flatMap((report, index) => [
     report.reporter_id,
+    report.reported_user_id,
     // In practice target_id is often the reported account's id directly, even
     // when target_type names a job/rental. Prefer that when it resolves.
     report.target_id,
@@ -165,7 +192,10 @@ async function listReports(req, res) {
   // Some accounts exist only in Supabase Auth. Use the admin API as a last
   // resort so a legitimate reported user never shows up as "Unknown user".
   const unresolvedUserIds = [...new Set(reports.map((report, index) =>
-    userNames.get(report.target_id) ? null : (reportedUserIds[index] || report.target_id)
+    (report.reported_user_id && userNames.get(report.reported_user_id))
+      || userNames.get(report.target_id)
+      ? null
+      : (report.reported_user_id || reportedUserIds[index] || report.target_id)
   ).filter(Boolean))].slice(0, 20);
   await Promise.all(unresolvedUserIds.map(async (userId) => {
     if (userNames.has(userId) || !supabase.auth?.admin?.getUserById) return;
@@ -188,15 +218,17 @@ async function listReports(req, res) {
 
   res.json({
     data: reports.map((report, index) => {
-      const resolvedUserId = report.target_id && userNames.get(report.target_id)
-        ? report.target_id
-        : reportedUserIds[index] || null;
+      const resolvedUserId = report.reported_user_id
+        || (report.target_id && userNames.get(report.target_id)
+          ? report.target_id
+          : reportedUserIds[index] || null);
       return {
         id: report.report_id,
       reporterId: report.reporter_id,
       reporterName: userNames.get(report.reporter_id) || report.reporter_id,
       targetType: report.target_type,
       targetId: report.target_id,
+      targetLabel: targetLabels.get(report.target_id) || null,
       reportedUserId: resolvedUserId || null,
       reportedName: (resolvedUserId && userNames.get(resolvedUserId))
         || (resolvedUserId ? entityIdToken(resolvedUserId, 'USR-') : '')

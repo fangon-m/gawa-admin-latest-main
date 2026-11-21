@@ -58,10 +58,50 @@ async function updateCompletion(req, res) {
 }
 
 async function deleteCompletion(req, res) {
+  const completionId = req.params.id;
+  const { data: completion, error: fetchError } = await supabase
+    .from('job_completion')
+    .select('job_completion_id, job_match_id, confirmed_at')
+    .eq('job_completion_id', completionId)
+    .maybeSingle();
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
+  if (!completion) return res.status(404).json({ error: 'Completion record not found' });
+
+  const { data: match } = await supabase
+    .from('job_matches')
+    .select('job_post_id, status')
+    .eq('job_match_id', completion.job_match_id)
+    .maybeSingle();
+
+  const { count: reviewCount, error: reviewError } = await supabase
+    .from('reviews')
+    .select('review_id', { count: 'exact', head: true })
+    .eq('job_completion_id', completionId);
+  if (reviewError) return sendError(res, reviewError, { status: 500 });
+
+  let paymentCount = 0;
+  if (match?.job_post_id) {
+    const { count, error: paymentError } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('related_type', 'job_post')
+      .eq('related_id', match.job_post_id);
+    if (paymentError) return sendError(res, paymentError, { status: 500 });
+    paymentCount = count || 0;
+  }
+
+  const completedWork = Boolean(completion.confirmed_at)
+    || ['completed', 'verified'].includes(match?.status);
+  if (completedWork || reviewCount > 0 || paymentCount > 0) {
+    return res.status(409).json({
+      error: 'This completion has confirmed work, a review, or payment history and cannot be deleted. It is part of the job audit trail.',
+    });
+  }
+
   const { error } = await supabase
     .from('job_completion')
     .delete()
-    .eq('job_completion_id', req.params.id);
+    .eq('job_completion_id', completionId);
 
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Completion record deleted' });

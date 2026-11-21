@@ -3,6 +3,7 @@ const supabase = require('../db/supabase');
 const { logAdminActivity } = require('../utilities/activityLogger');
 const { getModerationSettings, sendModerationNotification } = require('../utilities/moderationWarnings');
 const { hasRole } = require('../utilities/permissions');
+const { loadTargetLabels } = require('../utilities/reportTargetLabels');
 
 const MESSAGE_COLUMNS = 'message_id, sender_id, receiver_id, message_text, created_at';
 const STAFF_ROLES = new Set(['admin', 'customer_support']);
@@ -53,8 +54,9 @@ async function loadReport(reportId) {
     .eq('report_id', reportId)
     .maybeSingle();
 
+  const base = 'report_id, target_type, target_id, status, issue_type';
   let { data, error } = await buildQuery([
-    'report_id, target_type, target_id, status, issue_type',
+    base, 'reported_user_id',
     'warned_at, warning_due_at, warning_reminder_at, warning_reminder_sent_at',
     'warning_window_days, warning_compliance_flag, warning_complied_at',
     'warning_closed_at, warning_issued_by',
@@ -62,8 +64,18 @@ async function loadReport(reportId) {
   ].join(', '));
 
   if (error?.code === '42703') {
+    // Migration 009 not applied yet: reported_user_id is absent.
+    ({ data, error } = await buildQuery([
+      base,
+      'warned_at, warning_due_at, warning_reminder_at, warning_reminder_sent_at',
+      'warning_window_days, warning_compliance_flag, warning_complied_at',
+      'warning_closed_at, warning_issued_by',
+      'auto_suspended_at, auto_suspension_until, auto_suspension_skipped_reason',
+    ].join(', ')));
+  }
+  if (error?.code === '42703') {
     // Migration 008 not applied yet: warning fields are absent from the schema.
-    ({ data, error } = await buildQuery('report_id, target_type, target_id, status, issue_type'));
+    ({ data, error } = await buildQuery(base));
   }
   if (error) throw error;
   return data;
@@ -129,6 +141,14 @@ async function getReportActions(req, res) {
 
   operation = `load_target:${report.target_type}`;
   const target = await loadTarget(report);
+  // Moderation actions act on the reported account, not on the reported
+  // content. reported_user_id (stored at report creation) makes this possible
+  // even when target_type is a listing/match/rental or the content was deleted.
+  const reportedUserId = report.reported_user_id
+    || (report.target_type === 'profile' ? report.target_id : null);
+  const userTarget = report.target_type === 'profile'
+    ? target
+    : await loadUserModerationTarget(reportedUserId);
   const moderation = await getModerationSettings(supabase);
   const open = ['open', 'under_review'].includes(report.status);
   const actions = [];
@@ -136,9 +156,11 @@ async function getReportActions(req, res) {
   if (open) {
     if (!target) {
       actions.push(action('resolve_target_unavailable', req));
-    } else {
+    }
+    if (target || userTarget) {
       actions.push(action('mark_irrelevant', req));
-
+    }
+    if (target) {
       if (report.target_type === 'job_post' && target.state === 'closed') {
         actions.push(action('relist', req, true));
       }
@@ -154,19 +176,19 @@ async function getReportActions(req, res) {
         if (error) throw error;
         if (!existingFlags?.length) actions.push(action('flag_job_match', req));
       }
+    }
 
-      if (report.target_type === 'profile' && target.state !== true) {
-        actions.push(action('warn', req));
-        if (hasRole(req, 'admin')) {
-          operation = 'read_profile_suspension_state';
-          const suspensionExpiry = target.suspendedUntil ? Date.parse(target.suspendedUntil) : null;
-          const suspensionIsActive = target.suspensionStatus === 'active'
-            && (suspensionExpiry === null
-              || !Number.isFinite(suspensionExpiry)
-              || suspensionExpiry > Date.now());
-          if (!suspensionIsActive) {
-            actions.push(action('suspend', req, true));
-          }
+    if (userTarget && userTarget.state !== true) {
+      actions.push(action('warn', req));
+      if (hasRole(req, 'admin')) {
+        operation = 'read_profile_suspension_state';
+        const suspensionExpiry = userTarget.suspendedUntil ? Date.parse(userTarget.suspendedUntil) : null;
+        const suspensionIsActive = userTarget.suspensionStatus === 'active'
+          && (suspensionExpiry === null
+            || !Number.isFinite(suspensionExpiry)
+            || suspensionExpiry > Date.now());
+        if (!suspensionIsActive) {
+          actions.push(action('suspend', req, true));
         }
       }
     }
@@ -174,10 +196,10 @@ async function getReportActions(req, res) {
     const warningActive = report.warning_compliance_flag !== true && !report.auto_suspended_at;
     if (warningActive) {
       actions.push(action('mark_compliant', req, true));
-      if (target && target.state !== true) {
+      if (userTarget && userTarget.state !== true) {
         operation = 'read_profile_suspension_state';
-        const suspensionExpiry = target.suspendedUntil ? Date.parse(target.suspendedUntil) : null;
-        const suspensionIsActive = target.suspensionStatus === 'active'
+        const suspensionExpiry = userTarget.suspendedUntil ? Date.parse(userTarget.suspendedUntil) : null;
+        const suspensionIsActive = userTarget.suspensionStatus === 'active'
           && (suspensionExpiry === null
             || !Number.isFinite(suspensionExpiry)
             || suspensionExpiry > Date.now());
@@ -196,6 +218,9 @@ async function getReportActions(req, res) {
       version: target?.version || null,
       state: target?.state ?? null,
     },
+    userTarget: userTarget
+      ? { id: userTarget.id, exists: true, version: userTarget.version, state: userTarget.state }
+      : null,
     warning: mapWarning(report),
     moderation: {
       warningDays: moderation.warningDays,
@@ -265,33 +290,70 @@ function mapActionError(error) {
   return null;
 }
 
+async function loadUserModerationTarget(userId) {
+  if (!userId) return null;
+  const { data, error } = await supabase
+    .from('users_table')
+    .select('id, updated_at, is_archived, suspension_status, suspended_until')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: data.id,
+    version: data.updated_at || null,
+    state: data.is_archived,
+    suspensionStatus: data.suspension_status || 'none',
+    suspendedUntil: data.suspended_until || null,
+  };
+}
+
 async function loadWarningTarget(reportId, senderId) {
   const { data: report, error: reportError } = await supabase
     .from('issue_reports')
-    .select('report_id, target_type, target_id, issue_type')
+    .select('report_id, target_type, target_id, reported_user_id, issue_type, comment')
     .eq('report_id', reportId)
     .maybeSingle();
   if (reportError) throw reportError;
-  if (!report || report.target_type !== 'profile') throw new Error('INVALID_WARNING_TARGET');
+  if (!report) throw new Error('INVALID_WARNING_TARGET');
+
+  const recipientId = report.reported_user_id
+    || (report.target_type === 'profile' ? report.target_id : null);
+  if (!recipientId) throw new Error('INVALID_WARNING_TARGET');
 
   const { data: recipient, error: recipientError } = await supabase
     .from('users_table')
     .select('id, role')
-    .eq('id', report.target_id)
+    .eq('id', recipientId)
     .maybeSingle();
   if (recipientError) throw recipientError;
   if (!recipient || STAFF_ROLES.has(recipient.role) || recipient.id === senderId) {
     throw new Error('INVALID_MESSAGE_RECIPIENT');
   }
-  return { report, recipient };
+  const targetLabels = await loadTargetLabels([report]);
+  return {
+    report: { ...report, targetLabel: targetLabels.get(report.target_id) || null },
+    recipient,
+  };
 }
 
 async function sendWarningMessage(report, recipient, senderId, messageText, moderation = {}) {
   const windowDays = moderation.warningDays || 7;
   const suspendDays = moderation.autoSuspendDays || 3;
+  const reportType = String(report.issue_type || 'Not specified').trim();
+  const reportedFor = String(report.comment || 'No details provided').trim();
+  const targetType = String(report.target_type || 'profile')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const targetLabel = report.targetLabel
+    || (report.target_type === 'profile' ? 'Your profile' : 'the reported content');
   const draftedText = messageText
-    || `Automated moderation warning for report #${report.report_id}. Reason: ${report.issue_type}. `
-      + `If you believe this warning is mistaken, reply here to appeal within ${windowDays} days. `
+    || `Automated moderation warning for report #${report.report_id}.\n\n`
+      + `Report type: ${reportType}\n`
+      + `Reported for: ${reportedFor}\n`
+      + `Target: ${targetType}\n`
+      + `Item: ${targetLabel}\n\n`
+      + `If you believe this warning is mistaken, reply here to appeal within ${windowDays} days and tell us what happened. `
       + `If the warning is not resolved, your account will be automatically suspended for ${suspendDays} days.`;
   const text = draftedText.includes(report.report_id)
     ? draftedText

@@ -163,7 +163,37 @@ async function flagEquipmentListing(req, res) {
 }
 
 async function removeEquipmentListing(req, res) {
-  const { error } = await supabase.from('equipment_listings').delete().eq('listing_id', req.params.id);
+  const listingId = req.params.id;
+
+  // A flagged listing can be removed from the detail page, but once it has
+  // rentals or payments the row is part of the audit trail — deleting it would
+  // orphan rental and escrow history. Resolve the flag instead.
+  const { data: rentals, error: rentalsError } = await supabase
+    .from('equipment_rentals')
+    .select('rental_id, request_id, rental_status')
+    .eq('listing_id', listingId);
+  if (rentalsError) return sendError(res, rentalsError, { status: 500 });
+
+  const rentalIds = (rentals || []).map(rental => rental.rental_id);
+  let hasPayments = false;
+  if (rentalIds.length) {
+    const { count, error: paymentsError } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('related_type', 'equipment_rental')
+      .in('related_id', rentalIds);
+    if (paymentsError) return sendError(res, paymentsError, { status: 500 });
+    hasPayments = (count || 0) > 0;
+  }
+
+  const hasLiveRentals = (rentals || []).some(rental => rental.rental_status !== 'cancelled');
+  if (hasLiveRentals || hasPayments) {
+    return res.status(409).json({
+      error: 'This listing has rental or payment history and cannot be removed. Resolve the flag instead to preserve the audit trail.',
+    });
+  }
+
+  const { error } = await supabase.from('equipment_listings').delete().eq('listing_id', listingId);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Equipment listing removed' });
 }

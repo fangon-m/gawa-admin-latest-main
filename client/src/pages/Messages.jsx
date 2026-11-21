@@ -10,7 +10,7 @@ import Tabs from '../components/common/Tabs';
 import MessageThread from '../components/common/MessageThread';
 import MessageComposer from '../components/common/MessageComposer';
 import LoadingSpinner from '../components/common/LoadingSpinner';
-import { Mail, SquarePen, X } from 'lucide-react';
+import { Mail, SquarePen, X, AlertTriangle } from 'lucide-react';
 import styles from './Messages.module.css';
 
 const recipientTabs = [
@@ -119,6 +119,13 @@ export default function Messages() {
     ? (thread.participants || []).find((p) => p.userId !== currentUserId)
     : null;
 
+  // Send failures show as a transient toast instead of a page-level banner.
+  useEffect(() => {
+    if (!messageError) return undefined;
+    const timer = window.setTimeout(() => setMessageError(''), 6000);
+    return () => window.clearTimeout(timer);
+  }, [messageError]);
+
   const openConversation = useCallback((id) => {
     if (!id) return;
     setMessageError('');
@@ -151,9 +158,9 @@ export default function Messages() {
   return (
     <div>
       <Header title="Messages" />
-      {(messageError || conversationsError || activeError) && (
+      {(conversationsError || activeError) && (
         <div className="alert alert-error" role="alert">
-          {messageError || conversationsError || activeError}
+          {conversationsError || activeError}
         </div>
       )}
       <div className="messages-layout">
@@ -314,6 +321,16 @@ export default function Messages() {
           )}
         </div>
       </div>
+
+      {messageError && (
+        <div className={styles.errorToast} role="alert" aria-live="assertive">
+          <AlertTriangle size={17} aria-hidden="true" />
+          <span>{messageError}</span>
+          <button type="button" aria-label="Dismiss error" onClick={() => setMessageError('')}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

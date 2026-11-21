@@ -39,6 +39,15 @@ async function updateRole(req, res) {
 }
 
 async function deleteRole(req, res) {
+  const { count, error: usageError } = await supabase
+    .from('user_roles')
+    .select('user_role_id', { count: 'exact', head: true })
+    .eq('role_id', req.params.id);
+  if (usageError) return sendError(res, usageError, { status: 500 });
+  if (count > 0) {
+    return res.status(409).json({ error: 'This role is still assigned to user accounts and cannot be deleted.' });
+  }
+
   const { error } = await supabase.from('roles').delete().eq('role_id', req.params.id);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Role deleted' });
@@ -72,6 +81,30 @@ async function assignUserRole(req, res) {
 }
 
 async function removeUserRole(req, res) {
+  const { data: assignment, error: fetchError } = await supabase
+    .from('user_roles')
+    .select('user_role_id, user_id, role_id')
+    .eq('user_role_id', req.params.id)
+    .maybeSingle();
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
+  if (!assignment) return res.status(404).json({ error: 'User role not found' });
+
+  const { data: adminRole } = await supabase
+    .from('roles')
+    .select('role_id')
+    .eq('role_name', 'admin')
+    .maybeSingle();
+  if (adminRole && assignment.role_id === adminRole.role_id) {
+    const { count, error: countError } = await supabase
+      .from('user_roles')
+      .select('user_role_id', { count: 'exact', head: true })
+      .eq('role_id', adminRole.role_id);
+    if (countError) return sendError(res, countError, { status: 500 });
+    if ((count || 0) <= 1) {
+      return res.status(409).json({ error: 'Cannot remove the last administrator role. Assign another admin first.' });
+    }
+  }
+
   const { error } = await supabase.from('user_roles').delete().eq('user_role_id', req.params.id);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'User role removed' });

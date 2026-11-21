@@ -69,7 +69,28 @@ async function updateSkillAssessment(req, res) {
 }
 
 async function deleteSkillAssessment(req, res) {
-  const { error } = await supabase.from('skill_assessments').delete().eq('assessment_id', req.params.id);
+  const assessmentId = req.params.id;
+  const references = [
+    { table: 'assessment_questions', label: 'questions' },
+    { table: 'assessment_attempts', label: 'attempts' },
+    { table: 'user_assessment_status', label: 'user progress records' },
+  ];
+  const usage = await Promise.all(references.map(async (reference) => {
+    const { count, error } = await supabase
+      .from(reference.table)
+      .select('*', { count: 'exact', head: true })
+      .eq('assessment_id', assessmentId);
+    if (error) throw error;
+    return { ...reference, count: count || 0 };
+  }));
+  const blockers = usage.filter(reference => reference.count > 0);
+  if (blockers.length) {
+    return res.status(409).json({
+      error: `This assessment has ${blockers.map(reference => `${reference.count} ${reference.label}`).join(', ')}. It cannot be deleted without losing assessment history.`,
+    });
+  }
+
+  const { error } = await supabase.from('skill_assessments').delete().eq('assessment_id', assessmentId);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Assessment deleted' });
 }

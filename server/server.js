@@ -149,6 +149,14 @@ for (const credentialPath of ['/api/auth/login', '/api/auth/request-reset', '/ap
   app.use(credentialPath, authLimiter);
 }
 
+// The admin portal must always see fresh database state (e.g. a moderator
+// backfills reported_user_id and reloads). Prevent the browser/CDN from
+// reusing a cached /api/reports response after a row changes.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 // API routes
 app.use('/api', routes);
 

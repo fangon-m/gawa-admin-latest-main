@@ -364,6 +364,30 @@ async function flagUser(req, res) {
 }
 
 async function deleteUser(req, res) {
+  const userId = req.params.id;
+  const references = [
+    { table: 'job_posts', column: 'client_id', label: 'job posts' },
+    { table: 'job_matches', column: 'user_id', label: 'job matches' },
+    { table: 'equipment_rentals', column: 'renter_id', label: 'rentals' },
+    { table: 'transactions', column: 'user_id', label: 'transactions' },
+    { table: 'messages', column: 'sender_id', label: 'messages' },
+    { table: 'assessment_attempts', column: 'user_id', label: 'assessment attempts' },
+  ];
+  const usage = await Promise.all(references.map(async (reference) => {
+    const { count, error } = await supabase
+      .from(reference.table)
+      .select('*', { count: 'exact', head: true })
+      .eq(reference.column, userId);
+    if (error) throw error;
+    return { ...reference, count: count || 0 };
+  }));
+  const blockers = usage.filter(reference => reference.count > 0);
+  if (blockers.length) {
+    return res.status(409).json({
+      error: `This account has ${blockers.map(reference => `${reference.count} ${reference.label}`).join(', ')}. Archive the account instead of deleting it to preserve its history.`,
+    });
+  }
+
   const { data: user } = await supabase
     .from('users_table')
     .select('id, first_name, last_name, email')

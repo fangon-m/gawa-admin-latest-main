@@ -41,18 +41,8 @@ async function getAttachment(req, res) {
     if (!found) return res.status(404).json({ error: 'ATTACHMENT_NOT_FOUND' });
 
     const buffer = Buffer.from(await found.data.arrayBuffer());
-    let body = buffer;
-    let contentType = contentTypeFor(path, found.data.type);
-
-    if (/\.hei[cf]$/i.test(path)) {
-      try {
-        const sharp = require('sharp');
-        body = await sharp(buffer).jpeg({ quality: 82 }).toBuffer();
-        contentType = 'image/jpeg';
-      } catch (error) {
-        console.warn('[Attachments] HEIC conversion failed, serving original:', error.message);
-      }
-    }
+    const body = buffer;
+    const contentType = contentTypeFor(path, found.data.type);
 
     cached = { body, contentType };
     if (cache.size >= MAX_CACHED) cache.delete(cache.keys().next().value);

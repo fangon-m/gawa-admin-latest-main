@@ -101,6 +101,61 @@ describe('issue report moderation actions', () => {
     }));
   });
 
+  it('offers warn and suspend for a content report using reported_user_id', async () => {
+    const reportUserId = '99999999-9999-4999-8999-999999999999';
+    const report = {
+      report_id: reportId,
+      reporter_id: '22222222-2222-4222-8222-222222222222',
+      reported_user_id: reportUserId,
+      target_type: 'equipment_listing',
+      target_id: targetId,
+      status: 'open',
+    };
+    const reports = reportQuery(report);
+    const listingQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { listing_id: targetId, updated_at: targetVersion, status: 'available' },
+        error: null,
+      }),
+    };
+    const userQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: {
+          id: reportUserId,
+          updated_at: targetVersion,
+          is_archived: false,
+          suspension_status: 'none',
+          suspended_until: null,
+        },
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation((table) => {
+      if (table === 'issue_reports') return reports;
+      if (table === 'equipment_listings') return listingQuery;
+      if (table === 'users_table') return userQuery;
+      return listingQuery;
+    });
+    const res = response();
+
+    await getReportActions({
+      params: { id: reportId },
+      user: { id: '22222222-2222-4222-8222-222222222222', roles: ['admin'] },
+    }, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      userTarget: expect.objectContaining({ id: reportUserId, exists: true }),
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: 'warn', allowed: true }),
+        expect.objectContaining({ id: 'suspend', allowed: true }),
+      ]),
+    }));
+  });
+
   it('offers only an audited unavailable-target resolution for a dangling target', async () => {
     const report = {
       report_id: reportId,
@@ -223,6 +278,62 @@ describe('issue report moderation actions', () => {
     const actions = res.json.mock.calls[0][0].actions;
     expect(actions.map(item => item.id)).toContain('warn');
     expect(actions.map(item => item.id)).not.toContain('suspend');
+  });
+
+  it('includes the report type, details and target in the default warning message', async () => {
+    const report = reportQuery({
+      report_id: reportId,
+      target_type: 'profile',
+      target_id: targetId,
+      issue_type: 'Fake or impersonating profile',
+      comment: 'Used someone else photos',
+      status: 'open',
+    });
+    const recipientQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      maybeSingle: jest.fn().mockResolvedValue({
+        data: { id: targetId, role: 'client' },
+        error: null,
+      }),
+    };
+    const messages = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockResolvedValue({ data: [], error: null }),
+      insert: jest.fn().mockReturnThis(),
+      single: jest.fn().mockResolvedValue({
+        data: {
+          message_id: 'warning-id',
+          sender_id: 'admin-1',
+          receiver_id: targetId,
+          message_text: 'stored',
+          created_at: '2026-11-21T00:00:00.000Z',
+        },
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => {
+      if (table === 'issue_reports') return report;
+      if (table === 'users_table') return recipientQuery;
+      return messages;
+    });
+    supabase.rpc.mockResolvedValue({
+      data: { result: { reportId, action: 'warn', reportStatus: 'warned' } },
+      error: null,
+    });
+
+    await executeReportAction({
+      params: { id: reportId, actionId: 'warn' },
+      body: {},
+      user: { id: 'admin-1', role: 'admin' },
+      get: jest.fn(name => name === 'Idempotency-Key' ? actionKey : targetVersion),
+    }, response());
+
+    const sentText = messages.insert.mock.calls[0][0].message_text;
+    expect(sentText).toContain('Report type: Fake or impersonating profile');
+    expect(sentText).toContain('Reported for: Used someone else photos');
+    expect(sentText).toContain('Target: Profile');
   });
 
   it('executes the audited warning and sends its message to the reported user', async () => {

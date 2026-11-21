@@ -152,7 +152,7 @@ export default function ListingDetail() {
             <div style={{ display: 'flex', gap: '0.375rem' }}>
               {can('flagListing') && <button className="btn btn-outline btn-sm" onClick={() => { setFlagReason(''); setFlagError(''); setShowFlagModal(true); }}>Flag</button>}
               {can('removeListing') && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setRemoveError(''); setShowConfirm('remove'); }}>Remove</button>}
-              <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Message</button>
+              <button className="btn btn-accent btn-sm" onClick={() => navigate(listing.ownerId ? `/messages/${listing.ownerId}` : '/messages')}>Message</button>
             </div>
           </div>
 
@@ -202,6 +202,7 @@ export default function ListingDetail() {
                         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
                           <button className="btn btn-outline btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'dismiss' }); }}>Dismiss</button>
                           <button className="btn btn-accent btn-sm" onClick={() => { setFlagActionError(''); setFlagActionNote(''); setFlagActionModal({ flag, action: 'resolve' }); }}>Resolve</button>
+                          {can('removeListing') && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setRemoveError(''); setShowConfirm('remove'); }}>Remove content</button>}
                         </div>
                       )}
                     </div>

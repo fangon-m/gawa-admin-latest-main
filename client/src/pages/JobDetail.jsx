@@ -30,6 +30,7 @@ export default function JobDetail() {
   const [showRemoveModal, setShowRemoveModal] = useState(false);
   const [removeConfirmText, setRemoveConfirmText] = useState('');
   const [removeSubmitting, setRemoveSubmitting] = useState(false);
+  const [removeError, setRemoveError] = useState('');
   const [flagActionModal, setFlagActionModal] = useState(null); // { flag, action: 'dismiss'|'resolve'|'remove' }
   const [flagActionNote, setFlagActionNote] = useState('');
   const [flagActionSubmitting, setFlagActionSubmitting] = useState(false);
@@ -224,6 +225,7 @@ export default function JobDetail() {
   const handleRemoveJob = async () => {
     if (removeConfirmText !== job?.jobTitle || removeSubmitting) return;
     setRemoveSubmitting(true);
+    setRemoveError('');
     try {
       await removeJob(jobId);
       setShowRemoveModal(false);
@@ -231,6 +233,7 @@ export default function JobDetail() {
       addNotification('moderation_decision', 'Job Removed', `Job "${job.jobTitle}" was removed`, '/jobs');
       navigate('/jobs');
     } catch (err) {
+      setRemoveError(err?.error || err?.message || 'Failed to remove job post.');
       console.error('Job remove failed:', err);
     } finally {
       setRemoveSubmitting(false);
@@ -293,7 +296,7 @@ export default function JobDetail() {
                   {isCompletedJob ? 'Report issue' : 'Flag'}
                 </button>
               )}
-              {can('removeJob') && !isCompletedJob && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setShowRemoveModal(true); }}>Remove</button>}
+              {can('removeJob') && !isCompletedJob && <button className="btn btn-danger btn-sm" onClick={() => { setRemoveConfirmText(''); setRemoveError(''); setShowRemoveModal(true); }}>Remove</button>}
               <button className="btn btn-accent btn-sm" onClick={() => navigate('/messages')}>Message</button>
             </div>
           </div>
@@ -569,6 +572,7 @@ export default function JobDetail() {
               <button type="button" className="modal-close" onClick={() => { if (!removeSubmitting) { setShowRemoveModal(false); setRemoveConfirmText(''); } }}>×</button>
             </div>
             <div className="modal-body">
+              {removeError && <div className="alert alert-error" role="alert" style={{ marginBottom: '0.75rem' }}>{removeError}</div>}
               <div style={{ padding: '0.75rem', background: 'var(--color-error-subtle, #fee2e2)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--color-error)', color: 'var(--color-error)' }}>
                 <strong>This action cannot be undone.</strong> The job post and all its matches will be removed.
               </div>

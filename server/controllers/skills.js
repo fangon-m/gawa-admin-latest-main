@@ -59,8 +59,35 @@ async function updateSkill(req, res) {
   res.json({ data: toCamelCase(data), message: 'Skill updated' });
 }
 
+const SKILL_REFERENCES = [
+  { table: 'job_skills', label: 'job posts', singular: 'job post' },
+  { table: 'equipment_listing_skills', label: 'listings', singular: 'listing' },
+  { table: 'user_skills', label: 'profiles', singular: 'profile' },
+  { table: 'skill_assessments', label: 'assessments', singular: 'assessment' },
+  { table: 'assessment_attempts', label: 'assessment attempts', singular: 'assessment attempt' },
+];
+
 async function deleteSkill(req, res) {
-  const { error } = await supabase.from('skills').delete().eq('skill_id', req.params.id);
+  const skillId = req.params.id;
+  const usage = await Promise.all(SKILL_REFERENCES.map(async (reference) => {
+    const { count, error } = await supabase
+      .from(reference.table)
+      .select('*', { count: 'exact', head: true })
+      .eq('skill_id', skillId);
+    if (error) throw error;
+    return { ...reference, count: count || 0 };
+  }));
+  const blockers = usage.filter(reference => reference.count > 0);
+  if (blockers.length) {
+    const details = blockers
+      .map(reference => `${reference.count} ${reference.count === 1 ? reference.singular : reference.label}`)
+      .join(', ');
+    return res.status(409).json({
+      error: `This skill is used by ${details}. Remove those references or rename the skill instead.`,
+    });
+  }
+
+  const { error } = await supabase.from('skills').delete().eq('skill_id', skillId);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Skill deleted' });
 }

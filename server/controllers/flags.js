@@ -44,6 +44,17 @@ async function createFlag(req, res) {
 }
 
 async function removeFlag(req, res) {
+  const { data: flag, error: fetchError } = await supabase
+    .from('entity_flags')
+    .select('flag_id, status')
+    .eq('flag_id', req.params.id)
+    .maybeSingle();
+  if (fetchError) return sendError(res, fetchError, { status: 500 });
+  if (!flag) return res.status(404).json({ error: 'Flag not found' });
+  if (!flag.status || flag.status === 'open') {
+    return res.status(409).json({ error: 'Resolve or dismiss this flag before removing it.' });
+  }
+
   const { error } = await supabase.from('entity_flags').delete().eq('flag_id', req.params.id);
   if (error) return sendError(res, error, { status: 500 });
   res.json({ message: 'Flag removed' });

@@ -39,7 +39,7 @@ describe('report attachment serving', () => {
     expect(downloadReportAttachment).not.toHaveBeenCalled();
   });
 
-  it('converts HEIC uploads to JPEG for the browser', async () => {
+  it('serves the original HEIC bytes for the browser to convert', async () => {
     downloadReportAttachment.mockResolvedValue({
       bucket: 'issue-reports',
       data: {
@@ -51,8 +51,8 @@ describe('report attachment serving', () => {
 
     await getAttachment({ query: { token: 'valid-token' } }, res);
 
-    expect(res.set).toHaveBeenCalledWith('Content-Type', 'image/jpeg');
-    expect(res.send).toHaveBeenCalledWith(Buffer.from('converted-jpeg'));
+    expect(res.set).toHaveBeenCalledWith('Content-Type', 'image/heic');
+    expect(res.send).toHaveBeenCalledWith(Buffer.from('heic-bytes'));
   });
 
   it('returns 404 when the object cannot be found', async () => {

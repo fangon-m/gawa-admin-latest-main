@@ -146,6 +146,115 @@ describe('list issue reports', () => {
     }));
   });
 
+  it('uses the stored reported_user_id when the target entity is gone', async () => {
+    const report = {
+      report_id: 'report-8',
+      reporter_id: '22222222-2222-4222-8222-222222222222',
+      reported_user_id: '99999999-9999-4999-8999-999999999999',
+      target_type: 'job_match',
+      target_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      issue_type: 'Harassment',
+      comment: 'Deleted match',
+      attachment_paths: [],
+      status: 'open',
+      created_at: '2026-11-08T00:00:00.000Z',
+    };
+    const reportsQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      range: jest.fn().mockResolvedValue({ data: [report], count: 1, error: null }),
+    };
+    const missingTargetQuery = {
+      select: jest.fn().mockReturnThis(),
+      in: jest.fn().mockResolvedValue({ data: [], error: null }),
+    };
+    const usersQuery = {
+      select: jest.fn().mockReturnThis(),
+      in: jest.fn().mockResolvedValue({
+        data: [
+          { id: report.reporter_id, first_name: 'Taylor', last_name: 'User' },
+          { id: report.reported_user_id, first_name: 'Stored', last_name: 'Target' },
+        ],
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => {
+      if (table === 'issue_reports') return reportsQuery;
+      if (table === 'job_matches') return missingTargetQuery;
+      return usersQuery;
+    });
+
+    await listReports(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        reportedUserId: report.reported_user_id,
+        reportedName: 'Stored Target',
+      })],
+    }));
+  });
+
+  it('recovers a deleted job match reported user from job_completion', async () => {
+    const report = {
+      report_id: 'report-9',
+      reporter_id: '22222222-2222-4222-8222-222222222222',
+      target_type: 'job_match',
+      target_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      issue_type: 'Payment dispute',
+      comment: 'match deleted',
+      attachment_paths: [],
+      status: 'open',
+      created_at: '2026-11-09T00:00:00.000Z',
+    };
+    const reportsQuery = {
+      select: jest.fn().mockReturnThis(),
+      eq: jest.fn().mockReturnThis(),
+      order: jest.fn().mockReturnThis(),
+      range: jest.fn().mockResolvedValue({ data: [report], count: 1, error: null }),
+    };
+    const emptyQuery = {
+      select: jest.fn().mockReturnThis(),
+      in: jest.fn().mockResolvedValue({ data: [], error: null }),
+    };
+    const completionQuery = {
+      select: jest.fn().mockReturnThis(),
+      in: jest.fn().mockResolvedValue({
+        data: [{
+          job_match_id: report.target_id,
+          client_id: report.reporter_id,
+          user_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        }],
+        error: null,
+      }),
+    };
+    const usersQuery = {
+      select: jest.fn().mockReturnThis(),
+      in: jest.fn().mockResolvedValue({
+        data: [
+          { id: report.reporter_id, first_name: 'Taylor', last_name: 'User' },
+          { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', first_name: 'Completed', last_name: 'Worker' },
+        ],
+        error: null,
+      }),
+    };
+    supabase.from.mockImplementation(table => {
+      if (table === 'issue_reports') return reportsQuery;
+      if (table === 'job_matches') return emptyQuery;
+      if (table === 'job_completion') return completionQuery;
+      return usersQuery;
+    });
+
+    await listReports(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      data: [expect.objectContaining({
+        reportedUserId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        reportedName: 'Completed Worker',
+      })],
+    }));
+  });
+
   it('prefers target_id as the reported user when it resolves in users_table', async () => {
     const report = {
       report_id: 'report-5',
@@ -386,7 +495,7 @@ describe('list issue reports', () => {
     }));
   });
 
-  it('falls back to a public URL when attachments cannot be signed', async () => {
+  it('keeps the raw path when attachments cannot be signed', async () => {
     const report = {
       report_id: 'report-4',
       reporter_id: '22222222-2222-4222-8222-222222222222',
@@ -411,14 +520,14 @@ describe('list issue reports', () => {
     supabase.from.mockImplementation(table => table === 'issue_reports' ? reportsQuery : usersQuery);
     supabase.storage.from.mockImplementation(() => ({
       createSignedUrl: jest.fn().mockResolvedValue({ data: null, error: new Error('not found') }),
-      getPublicUrl: jest.fn(path => ({ data: { publicUrl: `https://public.example.com/${path}` } })),
+      getPublicUrl: jest.fn(() => ({ data: { publicUrl: null } })),
     }));
 
     await listReports(req, res);
 
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       data: [expect.objectContaining({
-        attachmentUrls: ['https://public.example.com/issue-reports/photo.png'],
+        attachmentUrls: ['issue-reports/photo.png'],
       })],
     }));
   });
